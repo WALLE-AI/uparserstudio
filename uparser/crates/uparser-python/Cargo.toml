@@ -1,0 +1,16 @@
+[package]
+name = "uparser-python"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Python bindings for uparser"
+
+[lib]
+name = "_uparser"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+uparser-core = { path = "../uparser-core", default-features = false }
+pyo3 = { version = "0.29", features = ["extension-module"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }

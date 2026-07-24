@@ -1,0 +1,5 @@
+---
+source: crates/uparser-core/src/render/mod.rs
+expression: to_markdown(&sample_result())
+---
+Hello world

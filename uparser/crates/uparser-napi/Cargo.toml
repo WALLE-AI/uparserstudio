@@ -1,0 +1,19 @@
+[package]
+name = "uparser-napi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Node.js bindings for uparser"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+uparser-core = { path = "../uparser-core", default-features = false }
+napi = { version = "2", features = ["async", "napi9"] }
+napi-derive = "2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[build-dependencies]
+napi-build = "2"

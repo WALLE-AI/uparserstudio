@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/uparser-core",
+    "crates/uparser-napi",
+    "crates/uparser-python",
+]
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
