@@ -13,7 +13,7 @@
 
 use super::{
     ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat, RemoteEndpointSpec,
-    ResourceHint, StageBackend,
+    ResourceHint, StageBackend, extract_chat_content,
 };
 use crate::category_map::{self, MINERU_VLM_CATEGORIES};
 use crate::formula_repair;
@@ -141,21 +141,6 @@ impl MineruVlmAdapter {
     }
 }
 
-/// Pull the assistant message's text content out of an OpenAI-style
-/// chat-completion response.
-fn extract_content(resp: &Value) -> Option<&str> {
-    resp["choices"][0]["message"]["content"].as_str()
-}
-
-fn wrap_display_math(latex: &str) -> String {
-    let trimmed = latex.trim();
-    if trimmed.starts_with("\\[") || trimmed.starts_with("$$") {
-        trimmed.to_string()
-    } else {
-        format!("\\[\n{trimmed}\n\\]")
-    }
-}
-
 struct PendingBlock {
     bbox_px: [i32; 4],
     category_raw: String,
@@ -231,10 +216,14 @@ impl ProtocolAdapter for MineruVlmAdapter {
             message: e.to_string(),
             stage: Some("layout".into()),
         })?;
-        let layout_content = extract_content(&layout_resp).unwrap_or("");
+        let layout_content = extract_chat_content(&layout_resp).map_err(|e| PageError {
+            page_num: page.page_num,
+            message: e,
+            stage: Some("layout".into()),
+        })?;
         let (layout_boxes, warnings) = output_parse::parse_custom_tokens(layout_content);
         for w in &warnings {
-            eprintln!("mineru-vlm page {}: {w}", page.page_num);
+            ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
         }
 
         // Denormalize + category-map, then dedupe near-identical boxes.
@@ -243,7 +232,7 @@ impl ProtocolAdapter for MineruVlmAdapter {
             let bbox_px = geometry::denormalize_0to1000_bbox(lb.bbox_1000, page.width, page.height);
             let (category, warning) = category_map::map_mineru_vlm_category(&lb.category_raw);
             if let Some(w) = warning {
-                eprintln!("mineru-vlm page {}: {w}", page.page_num);
+                ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
             }
             pending.push(PendingBlock {
                 bbox_px,
@@ -278,7 +267,14 @@ impl ProtocolAdapter for MineruVlmAdapter {
                     return (index, Ok(None));
                 }
 
-                let _permit = ctx.acquire_permit().await;
+                // Crop/rotate/resize/encode first (CPU-bound, no
+                // network) — the permit is meant to bound concurrent
+                // *network dispatches*, not this work; acquiring it
+                // before this point would let this page's block-level
+                // image processing consume the document-level
+                // concurrency budget without a single request in
+                // flight, silently reducing real request concurrency
+                // below `--max-concurrency`.
                 let crop_img = match ctx.crop(page, p.bbox_px) {
                     Ok(img) => img,
                     Err(e) => return (index, Err(e)),
@@ -295,11 +291,12 @@ impl ProtocolAdapter for MineruVlmAdapter {
 
                 let (prompt, sampling) = Self::stage2_prompt_and_sampling(&p.category_raw);
                 let req = self.request(self.stage2_endpoint(index), prompt, &data_url, sampling);
+                let _permit = ctx.acquire_permit().await;
                 match ctx.dispatch(req).await {
-                    Ok(resp) => {
-                        let content = extract_content(&resp).unwrap_or("").to_string();
-                        (index, Ok(Some(content)))
-                    }
+                    Ok(resp) => match extract_chat_content(&resp) {
+                        Ok(content) => (index, Ok(Some(content.to_string()))),
+                        Err(e) => (index, Err(e)),
+                    },
                     Err(e) => (index, Err(e.to_string())),
                 }
             }
@@ -315,11 +312,22 @@ impl ProtocolAdapter for MineruVlmAdapter {
             let (text, html, latex, error) = match outcome {
                 Ok(None) => (None, None, None, None),
                 Ok(Some(content)) => match p.category_raw.as_str() {
-                    "table" => (None, Some(otsl::to_html(&content)), None, None),
+                    "table" => {
+                        let (html, warnings) = otsl::to_html(&content);
+                        for w in &warnings {
+                            ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
+                        }
+                        (None, Some(html), None, None)
+                    }
                     "equation" => {
                         let repaired =
                             formula_repair::repair_chain(formula_repair::DEFAULT_CHAIN, &content);
-                        (None, None, Some(wrap_display_math(&repaired)), None)
+                        (
+                            None,
+                            None,
+                            Some(formula_repair::wrap_display_math(&repaired)),
+                            None,
+                        )
                     }
                     _ => (Some(content), None, None, None),
                 },

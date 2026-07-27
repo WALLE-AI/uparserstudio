@@ -15,7 +15,7 @@
 
 use super::{
     ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat, RemoteEndpointSpec,
-    ResourceHint, StageBackend,
+    ResourceHint, StageBackend, extract_chat_content,
 };
 use crate::category_map::{self, MONKEYOCR_V2_CATEGORIES};
 use crate::formula_repair;
@@ -28,7 +28,6 @@ use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
 use futures::future::join_all;
-use serde_json::Value;
 use std::time::Duration;
 
 const TARGET_PIXELS: u32 = 1_003_520;
@@ -109,12 +108,19 @@ impl MonkeyOcrV2Adapter {
     }
 }
 
-fn extract_content(resp: &Value) -> Option<&str> {
-    resp["choices"][0]["message"]["content"].as_str()
-}
-
+/// Wrap in `$$...$$`, matching the real vendored `core_runner.py`'s own
+/// convention exactly — including its idempotency check
+/// (`not content.lstrip().startswith("$$")`), which this port previously
+/// lacked: without it, formula content the model already wrapped itself
+/// would get double-wrapped into `$$\n$$\n...\n$$\n$$` (D.10-adjacent —
+/// found while unifying formula-wrapping behavior across protocols).
 fn wrap_display_math(latex: &str) -> String {
-    format!("$$\n{}\n$$", latex.trim())
+    let trimmed = latex.trim();
+    if trimmed.starts_with("$$") {
+        trimmed.to_string()
+    } else {
+        format!("$$\n{trimmed}\n$$")
+    }
 }
 
 struct PendingBlock {
@@ -190,10 +196,14 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             message: e.to_string(),
             stage: Some("layout".into()),
         })?;
-        let layout_content = extract_content(&layout_resp).unwrap_or("");
+        let layout_content = extract_chat_content(&layout_resp).map_err(|e| PageError {
+            page_num: page.page_num,
+            message: e,
+            stage: Some("layout".into()),
+        })?;
         let (cells, warnings) = output_parse::parse_python_literal_list(layout_content);
         for w in &warnings {
-            eprintln!("monkeyocr-v2 page {}: {w}", page.page_num);
+            ctx.warn(format!("monkeyocr-v2 page {}: {w}", page.page_num));
         }
 
         let pending: Vec<PendingBlock> = cells
@@ -203,7 +213,7 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                     geometry::map_bbox_0to1000_clamped(cell.bbox, page.width, page.height);
                 let (category, warning) = category_map::map_monkeyocrv2_category(&cell.label);
                 if let Some(w) = warning {
-                    eprintln!("monkeyocr-v2 page {}: {w}", page.page_num);
+                    ctx.warn(format!("monkeyocr-v2 page {}: {w}", page.page_num));
                 }
                 PendingBlock {
                     bbox_px,
@@ -222,7 +232,12 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                     return (index, Ok(None));
                 };
 
-                let _permit = ctx.acquire_permit().await;
+                // Crop/resize/encode first (CPU-bound, no network) —
+                // acquiring the permit before this point would let this
+                // page's image processing consume the document-level
+                // concurrency budget without a request in flight,
+                // silently reducing real request concurrency below
+                // `--max-concurrency`.
                 let crop_img = match ctx.crop(page, p.bbox_px) {
                     Ok(img) => img,
                     Err(e) => return (index, Err(e)),
@@ -235,11 +250,12 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 };
 
                 let req = self.request(self.stage2_endpoint(index), prompt, &data_url, 10000);
+                let _permit = ctx.acquire_permit().await;
                 match ctx.dispatch(req).await {
-                    Ok(resp) => {
-                        let content = extract_content(&resp).unwrap_or("").to_string();
-                        (index, Ok(Some(content)))
-                    }
+                    Ok(resp) => match extract_chat_content(&resp) {
+                        Ok(content) => (index, Ok(Some(content.to_string()))),
+                        Err(e) => (index, Err(e)),
+                    },
                     Err(e) => (index, Err(e.to_string())),
                 }
             }
@@ -255,7 +271,13 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             let (text, html, latex, error) = match outcome {
                 Ok(None) => (None, None, None, None),
                 Ok(Some(content)) => match p.label.as_str() {
-                    "Table" => (None, Some(otsl::to_html(&content)), None, None),
+                    "Table" => {
+                        let (html, warnings) = otsl::to_html(&content);
+                        for w in &warnings {
+                            ctx.warn(format!("monkeyocr-v2 page {}: {w}", page.page_num));
+                        }
+                        (None, Some(html), None, None)
+                    }
                     "Formula" => {
                         let repaired =
                             formula_repair::repair_chain(formula_repair::DEFAULT_CHAIN, &content);
@@ -294,6 +316,7 @@ mod tests {
     use super::*;
     use crate::testing::MockDispatch;
     use image::{Rgb, RgbImage};
+    use serde_json::Value;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
@@ -301,6 +324,21 @@ mod tests {
         serde_json::json!({
             "choices": [{"message": {"content": content}}]
         })
+    }
+
+    #[test]
+    fn wrap_display_math_wraps_bare_latex() {
+        assert_eq!(wrap_display_math(r"\frac{1}{2}"), "$$\n\\frac{1}{2}\n$$");
+    }
+
+    #[test]
+    fn wrap_display_math_is_idempotent_when_already_dollar_wrapped() {
+        // Real vendored `core_runner.py` has the same idempotency check
+        // (`not content.lstrip().startswith("$$")`) — without it, formula
+        // content the model already wrapped itself would get
+        // double-wrapped.
+        let s = "$$\n\\frac{1}{2}\n$$";
+        assert_eq!(wrap_display_math(s), s);
     }
 
     fn fake_page(width: u32, height: u32) -> RenderedPage {

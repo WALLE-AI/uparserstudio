@@ -63,19 +63,54 @@ pub fn map_bbox_0to1000_clamped(bbox_1000: [f32; 4], width: u32, height: u32) ->
 /// whose model output is plain absolute pixels of its own resized input
 /// image, not a normalized fraction (see the P2 plan's "Coordinate
 /// system" deviation note).
+///
+/// Returns `None` if `original_wh` has a zero dimension (a degenerate
+/// rasterized page) — dividing by a zero-derived scale factor previously
+/// produced `inf`/`NaN`, which `as i32` then silently saturated to `0`,
+/// collapsing every bbox on the page to `[0,0,0,0]` with no warning.
 pub fn rescale_bbox_to_original(
     bbox_resized: [f32; 4],
     resized_wh: (u32, u32),
     original_wh: (u32, u32),
-) -> [i32; 4] {
+) -> Option<[i32; 4]> {
+    if original_wh.0 == 0 || original_wh.1 == 0 {
+        return None;
+    }
     let scale_x = resized_wh.0 as f32 / original_wh.0 as f32;
     let scale_y = resized_wh.1 as f32 / original_wh.1 as f32;
-    [
+    Some([
         (bbox_resized[0] / scale_x).round() as i32,
         (bbox_resized[1] / scale_y).round() as i32,
         (bbox_resized[2] / scale_x).round() as i32,
         (bbox_resized[3] / scale_y).round() as i32,
-    ]
+    ])
+}
+
+/// Clamp an already-pixel-space bbox to `[0, width] x [0, height]`,
+/// swapping any inverted axis and enforcing a minimum 1px width/height —
+/// the same defensive shape `map_bbox_0to1000_clamped` already applies
+/// for MonkeyOCRv2, factored out so every adapter can apply it uniformly
+/// regardless of how the bbox got into pixel space. dots-ocr was the one
+/// protocol with no bbox validation anywhere in its pipeline (see D.4 in
+/// `CLI_ENHANCEMENT_PROPOSAL.md`) — a model that occasionally emits an
+/// out-of-page or inverted box would previously flow straight through to
+/// `Block::bbox_px` unchecked.
+pub fn sanitize_bbox_px(bbox: [i32; 4], width: u32, height: u32) -> [i32; 4] {
+    let [mut x0, mut y0, mut x1, mut y1] = bbox;
+    if x0 > x1 {
+        std::mem::swap(&mut x0, &mut x1);
+    }
+    if y0 > y1 {
+        std::mem::swap(&mut y0, &mut y1);
+    }
+
+    let max_x0 = if width > 0 { width as i32 - 1 } else { 0 };
+    let max_y0 = if height > 0 { height as i32 - 1 } else { 0 };
+    let cx0 = x0.clamp(0, max_x0);
+    let cy0 = y0.clamp(0, max_y0);
+    let cx1 = x1.clamp(cx0 + 1, width as i32);
+    let cy1 = y1.clamp(cy0 + 1, height as i32);
+    [cx0, cy0, cx1, cy1]
 }
 
 /// Intersection-over-union of two axis-aligned pixel rects.
@@ -164,14 +199,32 @@ mod tests {
         // Resized image is half the original's dimensions; a bbox at
         // (50,100)-(150,200) in the resized image should land at
         // (100,200)-(300,400) in the original.
-        let px = rescale_bbox_to_original([50.0, 100.0, 150.0, 200.0], (500, 800), (1000, 1600));
+        let px = rescale_bbox_to_original([50.0, 100.0, 150.0, 200.0], (500, 800), (1000, 1600))
+            .unwrap();
         assert_eq!(px, [100, 200, 300, 400]);
     }
 
     #[test]
     fn rescale_bbox_to_original_identity_when_dims_match() {
-        let px = rescale_bbox_to_original([10.0, 20.0, 30.0, 40.0], (1000, 1000), (1000, 1000));
+        let px =
+            rescale_bbox_to_original([10.0, 20.0, 30.0, 40.0], (1000, 1000), (1000, 1000)).unwrap();
         assert_eq!(px, [10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn rescale_bbox_to_original_returns_none_for_zero_width_original() {
+        assert_eq!(
+            rescale_bbox_to_original([10.0, 20.0, 30.0, 40.0], (1000, 1000), (0, 1600)),
+            None
+        );
+    }
+
+    #[test]
+    fn rescale_bbox_to_original_returns_none_for_zero_height_original() {
+        assert_eq!(
+            rescale_bbox_to_original([10.0, 20.0, 30.0, 40.0], (1000, 1000), (1000, 0)),
+            None
+        );
     }
 
     #[test]
@@ -255,5 +308,36 @@ mod tests {
     fn geometry_bounds_polygon_computes_envelope() {
         let p = Geometry::Polygon(vec![[1.0, 5.0], [3.0, 1.0], [0.0, 2.0]]);
         assert_eq!(geometry_bounds(&p), [0.0, 1.0, 3.0, 5.0]);
+    }
+
+    #[test]
+    fn sanitize_bbox_px_passes_through_a_normal_box() {
+        assert_eq!(
+            sanitize_bbox_px([10, 20, 100, 200], 1000, 1000),
+            [10, 20, 100, 200]
+        );
+    }
+
+    #[test]
+    fn sanitize_bbox_px_swaps_an_inverted_box() {
+        assert_eq!(
+            sanitize_bbox_px([100, 200, 10, 20], 1000, 1000),
+            [10, 20, 100, 200]
+        );
+    }
+
+    #[test]
+    fn sanitize_bbox_px_clamps_an_out_of_page_box() {
+        assert_eq!(
+            sanitize_bbox_px([-50, -50, 5000, 5000], 1000, 800),
+            [0, 0, 1000, 800]
+        );
+    }
+
+    #[test]
+    fn sanitize_bbox_px_enforces_a_minimum_1px_size() {
+        let [x0, y0, x1, y1] = sanitize_bbox_px([500, 500, 500, 500], 1000, 1000);
+        assert!(x1 > x0);
+        assert!(y1 > y0);
     }
 }

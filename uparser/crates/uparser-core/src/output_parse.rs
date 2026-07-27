@@ -57,10 +57,18 @@ pub fn parse_custom_tokens(raw: &str) -> (Vec<LayoutBox>, Vec<String>) {
             continue;
         };
 
-        if [x1, y1, x2, y2].iter().any(|&c| c > 1000) {
-            warnings.push(format!("coordinate out of [0,1000]: {line:?}"));
-            continue;
+        // VLM quantization error nudging a coordinate 1-5 units past
+        // 1000 at a page edge is common and recoverable — clamp rather
+        // than discarding the whole box (see D.2 in
+        // `CLI_ENHANCEMENT_PROPOSAL.md`). Only warn if a coordinate
+        // actually needed clamping, so well-formed lines stay silent.
+        let clamped = [x1.min(1000), y1.min(1000), x2.min(1000), y2.min(1000)];
+        if clamped != [x1, y1, x2, y2] {
+            warnings.push(format!(
+                "clamped out-of-range coordinate(s) to [0,1000]: {line:?}"
+            ));
         }
+        let [x1, y1, x2, y2] = clamped;
 
         let (xa, xb) = (x1.min(x2), x1.max(x2));
         let (ya, yb) = (y1.min(y2), y1.max(y2));
@@ -422,12 +430,28 @@ impl LiteralParser {
                     .peek()
                     .ok_or_else(|| "unterminated escape sequence".to_string())?;
                 self.pos += 1;
-                out.push(match esc {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    other => other,
-                });
+                match esc {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    '\\' => out.push('\\'),
+                    '\'' => out.push('\''),
+                    '"' => out.push('"'),
+                    'u' => self.decode_hex_escape('u', 4, &mut out),
+                    'x' => self.decode_hex_escape('x', 2, &mut out),
+                    // An escape sequence this parser doesn't recognize
+                    // (e.g. a Chinese-punctuation-adjacent `\，` from a
+                    // model that over-escapes, or any other unknown
+                    // letter) — previously this silently dropped the
+                    // backslash, which for `\u`/`\x` corrupted real
+                    // text into raw hex digits (see D.3). Preserving
+                    // the backslash keeps the sequence recognizable
+                    // instead of fabricating a different character.
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
             } else if c == quote {
                 break;
             } else {
@@ -435,6 +459,33 @@ impl LiteralParser {
             }
         }
         Ok(out)
+    }
+
+    /// Decode a `\uXXXX` (`digits == 4`) or `\xHH` (`digits == 2`) escape
+    /// starting right after the already-consumed `\u`/`\x` marker. On any
+    /// failure (too few hex digits, invalid hex, or a value that isn't a
+    /// valid Unicode scalar — e.g. an unpaired surrogate half) falls back
+    /// to emitting the marker literally (`\u`/`\x`) rather than silently
+    /// dropping or mis-decoding it, and does not consume the trailing
+    /// characters so they're re-parsed as plain text.
+    fn decode_hex_escape(&mut self, marker: char, digits: usize, out: &mut String) {
+        let end = (self.pos + digits).min(self.chars.len());
+        let hex: String = self.chars[self.pos..end].iter().collect();
+        let decoded = if hex.len() == digits {
+            u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+        } else {
+            None
+        };
+        match decoded {
+            Some(ch) => {
+                out.push(ch);
+                self.pos = end;
+            }
+            None => {
+                out.push('\\');
+                out.push(marker);
+            }
+        }
     }
 
     fn parse_number(&mut self) -> Result<Value, String> {
@@ -768,11 +819,23 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_coordinate_is_skipped_with_warning() {
+    fn out_of_range_coordinate_is_clamped_with_warning_not_dropped() {
+        // A coordinate a little past 1000 (VLM quantization error at a
+        // page edge) is recoverable — clamp it rather than discarding
+        // the whole box (D.2).
         let raw = "<|box_start|>0 0 1500 10<|box_end|><|ref_start|>text<|ref_end|>";
         let (boxes, warnings) = parse_custom_tokens(raw);
-        assert!(boxes.is_empty());
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].bbox_1000, [0, 0, 1000, 10]);
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn well_formed_coordinates_produce_no_clamp_warning() {
+        let raw = "<|box_start|>100 200 300 400<|box_end|><|ref_start|>text<|ref_end|>";
+        let (boxes, warnings) = parse_custom_tokens(raw);
+        assert_eq!(boxes.len(), 1);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -925,6 +988,36 @@ mod tests {
         let cells = normalize_monkey_list(&v);
         assert_eq!(cells[0].label, "Table");
         assert_eq!(cells[0].content.as_deref(), Some("it's ok"));
+    }
+
+    #[test]
+    fn py_literal_decodes_unicode_escape_sequences() {
+        // 中文 is "中文" ("Chinese text"); previously the parser
+        // dropped the backslash for unrecognized escapes, which for `\u`
+        // corrupted this into the literal characters "u4e2du6587".
+        let v = parse_py_literal(r#"'中文'"#).unwrap();
+        assert_eq!(v, Value::String("中文".to_string()));
+    }
+
+    #[test]
+    fn py_literal_decodes_hex_escape_sequences() {
+        let v = parse_py_literal(r#"'\x41\x42'"#).unwrap();
+        assert_eq!(v, Value::String("AB".to_string()));
+    }
+
+    #[test]
+    fn py_literal_preserves_backslash_for_unknown_escapes() {
+        let v = parse_py_literal(r#"'\p{L}'"#).unwrap();
+        assert_eq!(v, Value::String("\\p{L}".to_string()));
+    }
+
+    #[test]
+    fn py_literal_falls_back_to_literal_marker_on_truncated_unicode_escape() {
+        // Only 2 hex digits follow \u instead of the required 4 — should
+        // emit the literal `\u` marker rather than misdecoding or
+        // consuming characters that aren't actually part of the escape.
+        let v = parse_py_literal(r#"'\u4eX'"#).unwrap();
+        assert_eq!(v, Value::String("\\u4eX".to_string()));
     }
 
     #[test]

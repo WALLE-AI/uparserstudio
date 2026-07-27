@@ -22,13 +22,23 @@ pub fn hard_resize(img: &RgbImage, width: u32, height: u32) -> RgbImage {
 }
 
 /// Crop `img` to a pixel bbox `[x0, y0, x1, y1]`, clamped to image bounds.
-pub fn crop(img: &RgbImage, bbox_px: [i32; 4]) -> RgbImage {
+///
+/// Returns `None` if the bbox doesn't overlap the image at all (e.g. an
+/// upstream coordinate-system bug placing it entirely off-page) — this
+/// previously silently fabricated a 1x1 placeholder image (via
+/// `.max(1)` on a zero-width/height clamp result) and sent that to the
+/// model as if it were real content, with no signal that the crop
+/// region was bogus (see D.5 in `CLI_ENHANCEMENT_PROPOSAL.md`).
+pub fn crop(img: &RgbImage, bbox_px: [i32; 4]) -> Option<RgbImage> {
     let (w, h) = img.dimensions();
     let x0 = bbox_px[0].clamp(0, w as i32) as u32;
     let y0 = bbox_px[1].clamp(0, h as i32) as u32;
     let x1 = bbox_px[2].clamp(x0 as i32, w as i32) as u32;
     let y1 = bbox_px[3].clamp(y0 as i32, h as i32) as u32;
-    image::imageops::crop_imm(img, x0, y0, (x1 - x0).max(1), (y1 - y0).max(1)).to_image()
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0).to_image())
 }
 
 /// Rotate by a multiple of 90 degrees (0/90/180/270), matching
@@ -200,15 +210,29 @@ mod tests {
     #[test]
     fn crop_clamps_to_bounds() {
         let img = solid(100, 100);
-        let cropped = crop(&img, [-10, -10, 200, 200]);
+        let cropped = crop(&img, [-10, -10, 200, 200]).unwrap();
         assert_eq!(cropped.dimensions(), (100, 100));
     }
 
     #[test]
     fn crop_extracts_requested_region() {
         let img = solid(100, 100);
-        let cropped = crop(&img, [10, 20, 60, 70]);
+        let cropped = crop(&img, [10, 20, 60, 70]).unwrap();
         assert_eq!(cropped.dimensions(), (50, 50));
+    }
+
+    #[test]
+    fn crop_returns_none_when_bbox_is_entirely_off_page() {
+        let img = solid(100, 100);
+        // Entirely to the right of the image — clamping x0/x1 both to
+        // 100 previously fabricated a bogus 1x1 image via `.max(1)`.
+        assert!(crop(&img, [150, 10, 200, 60]).is_none());
+    }
+
+    #[test]
+    fn crop_returns_none_for_a_degenerate_zero_size_bbox() {
+        let img = solid(100, 100);
+        assert!(crop(&img, [50, 50, 50, 50]).is_none());
     }
 
     #[test]

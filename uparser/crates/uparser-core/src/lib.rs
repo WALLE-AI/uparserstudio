@@ -9,6 +9,7 @@ pub mod imaging;
 pub mod ingest;
 pub mod otsl;
 pub mod output_parse;
+pub mod page_range;
 pub mod postprocess;
 pub mod profiler;
 pub mod reading_order;

@@ -575,3 +575,286 @@ fn protocols_lists_every_builtin_adapter() {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
 }
+
+/// Proves `postprocess.rs` is genuinely wired into the real CLI `parse`
+/// path (not just its own unit tests) — mock emits 2 raw mergeable
+/// blocks per page; `--no-postprocess` should return them unmerged.
+#[test]
+fn postprocess_merges_by_default_and_no_postprocess_bypasses_it() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(b"fake pdf bytes for postprocess cli test")
+        .unwrap();
+
+    let merged_cache = isolated_cache_dir();
+    let merged_output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", merged_cache.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let merged: serde_json::Value = serde_json::from_slice(&merged_output).unwrap();
+    assert_eq!(merged["pages"][0]["blocks"].as_array().unwrap().len(), 1);
+
+    let raw_cache = isolated_cache_dir();
+    let raw_output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", raw_cache.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+            "--no-postprocess",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let raw: serde_json::Value = serde_json::from_slice(&raw_output).unwrap();
+    assert_eq!(raw["pages"][0]["blocks"].as_array().unwrap().len(), 2);
+}
+
+/// Proves `structured_bypass` is genuinely wired into the real CLI
+/// `parse` path (previously: never called from any real code path — a
+/// `.csv` file would silently degrade to a 1x1 placeholder image fed to
+/// a protocol adapter). `--protocol mock` is passed deliberately to
+/// prove the bypass takes priority over whatever protocol was
+/// requested, per ARCHITECTURE.md §13.1a.
+#[test]
+fn csv_input_bypasses_to_structured_result_regardless_of_protocol() {
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    file.write_all(b"Name,Age\nAlice,30\n").unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["protocol"], "structured_bypass:csv");
+    let html = parsed["pages"][0]["blocks"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Alice"));
+}
+
+/// A minimal real ZIP archive containing a `word/` entry — the
+/// `file-format` crate's OOXML sniffing needs a genuinely parseable
+/// zip, not just a `PK` magic-byte prefix, to classify this as DOCX.
+fn minimal_docx_bytes() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("word/document.xml", options).unwrap();
+        writer.write_all(b"<document/>").unwrap();
+        writer.finish().unwrap();
+    }
+    buf
+}
+
+/// Proves adapter-level warnings (previously only ever reaching a bare
+/// `eprintln!`) genuinely surface into `ParseResult.warnings` through
+/// the real CLI `parse` path — a real (wiremock-backed) mineru-vlm
+/// endpoint returns a layout box with a category not in
+/// `category_map.rs`'s vocab, which should show up both as a page
+/// succeeding (the block still gets extracted, just falls back to
+/// `"unknown"`) and as a warning string in the JSON output, not just on
+/// stderr.
+#[tokio::test]
+async fn unrecognized_category_warning_surfaces_in_parse_result_warnings() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content":
+                "<|box_start|>0 0 500 200<|box_end|><|ref_start|>sidebar_note<|ref_end|>"
+            }}]
+        })))
+        .mount(&server)
+        .await;
+
+    let png_bytes = {
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([255, 255, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&png_bytes).unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    let output = tokio::task::spawn_blocking({
+        let path = file.path().to_str().unwrap().to_string();
+        let cache_dir = cache_dir.path().to_path_buf();
+        let endpoint = format!("{}/v1/chat/completions", server.uri());
+        move || {
+            Command::cargo_bin("uparser")
+                .unwrap()
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args([
+                    "parse",
+                    &path,
+                    "--protocol",
+                    "mineru-vlm",
+                    "--endpoint",
+                    &endpoint,
+                    "--format",
+                    "json",
+                ])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone()
+        }
+    })
+    .await
+    .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let warnings = parsed["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("sidebar_note")),
+        "expected a category-fallback warning mentioning sidebar_note, got {warnings:?}"
+    );
+}
+
+/// Proves DOCX input reaches real `normalize_format` conversion logic
+/// through the CLI (previously: silently degraded to the 1x1 placeholder
+/// and got fed to a protocol adapter as a blank image, exit 0, no
+/// error). LibreOffice isn't installed in this sandbox, so the expected
+/// outcome is a clean dependency-error exit, not a panic or a silently
+/// wrong success.
+#[test]
+fn docx_input_without_libreoffice_is_a_clean_dependency_error() {
+    let mut file = tempfile::Builder::new().suffix(".docx").tempfile().unwrap();
+    file.write_all(&minimal_docx_bytes()).unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::contains("\"error\""));
+}
+
+/// `--pages` on a single-page fallback input: page 1 is kept, an
+/// out-of-range page number filters everything out — proving the flag
+/// is genuinely applied, not silently ignored.
+#[test]
+fn pages_filter_keeps_only_requested_pages() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(b"fake pdf bytes for pages filter cli test")
+        .unwrap();
+
+    let keep_cache = isolated_cache_dir();
+    let keep_output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", keep_cache.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+            "--pages",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let keep: serde_json::Value = serde_json::from_slice(&keep_output).unwrap();
+    assert_eq!(keep["pages"].as_array().unwrap().len(), 1);
+
+    let exclude_cache = isolated_cache_dir();
+    let exclude_output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", exclude_cache.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+            "--pages",
+            "999",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let exclude: serde_json::Value = serde_json::from_slice(&exclude_output).unwrap();
+    assert!(exclude["pages"].as_array().unwrap().is_empty());
+}
+
+/// A malformed `--pages` value is a usage error, not a panic or a
+/// silently-empty result.
+#[test]
+fn invalid_pages_value_is_a_usage_error() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(b"fake pdf bytes for invalid pages test")
+        .unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--pages",
+            "5-2",
+        ])
+        .assert()
+        .failure()
+        .code(1);
+}

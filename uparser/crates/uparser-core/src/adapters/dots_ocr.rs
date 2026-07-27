@@ -12,7 +12,7 @@
 
 use super::{
     ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat, RemoteEndpointSpec,
-    ResourceHint, StageBackend,
+    ResourceHint, StageBackend, extract_chat_content,
 };
 use crate::category_map::{self, DOTS_OCR_CATEGORIES};
 use crate::formula_repair;
@@ -24,7 +24,6 @@ use crate::output_parse;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
-use serde_json::Value;
 use std::time::Duration;
 
 const RESIZE_FACTOR: u32 = 28;
@@ -102,10 +101,6 @@ impl DotsOcrAdapter {
     }
 }
 
-fn extract_content(resp: &Value) -> Option<&str> {
-    resp["choices"][0]["message"]["content"].as_str()
-}
-
 #[async_trait]
 impl ProtocolAdapter for DotsOcrAdapter {
     fn name(&self) -> &'static str {
@@ -181,38 +176,55 @@ impl ProtocolAdapter for DotsOcrAdapter {
             message: e.to_string(),
             stage: Some("layout".into()),
         })?;
-        let content = extract_content(&resp).unwrap_or("");
+        let content = extract_chat_content(&resp).map_err(|e| PageError {
+            page_num: page.page_num,
+            message: e,
+            stage: Some("layout".into()),
+        })?;
 
         let (cells, warnings) = output_parse::parse_strict_json(content);
         for w in &warnings {
-            eprintln!("dots-ocr page {}: {w}", page.page_num);
+            ctx.warn(format!("dots-ocr page {}: {w}", page.page_num));
         }
 
         let mut blocks = Vec::with_capacity(cells.len());
         for (index, cell) in cells.into_iter().enumerate() {
-            let bbox_px = geometry::rescale_bbox_to_original(
+            let Some(bbox_px) = geometry::rescale_bbox_to_original(
                 cell.bbox,
                 (resized_w, resized_h),
                 (orig_w, orig_h),
-            );
+            ) else {
+                ctx.warn(format!(
+                    "dots-ocr page {}: skipped a cell with a degenerate page size (0x0)",
+                    page.page_num
+                ));
+                continue;
+            };
+            let bbox_px = geometry::sanitize_bbox_px(bbox_px, orig_w, orig_h);
             let (category, warning) = category_map::map_dots_ocr_category(&cell.category_raw);
             if let Some(w) = warning {
-                eprintln!("dots-ocr page {}: {w}", page.page_num);
+                ctx.warn(format!("dots-ocr page {}: {w}", page.page_num));
             }
 
             let (text, html, latex) = match cell.category_raw.as_str() {
                 "Picture" => (None, None, None),
-                "Table" => (
-                    None,
-                    Some(otsl::to_html(cell.text.as_deref().unwrap_or(""))),
-                    None,
-                ),
+                "Table" => {
+                    let (html, warnings) = otsl::to_html(cell.text.as_deref().unwrap_or(""));
+                    for w in &warnings {
+                        ctx.warn(format!("dots-ocr page {}: {w}", page.page_num));
+                    }
+                    (None, Some(html), None)
+                }
                 "Formula" => {
                     let repaired = formula_repair::repair_chain(
                         formula_repair::DEFAULT_CHAIN,
                         cell.text.as_deref().unwrap_or(""),
                     );
-                    (None, None, Some(repaired))
+                    (
+                        None,
+                        None,
+                        Some(formula_repair::wrap_display_math(&repaired)),
+                    )
                 }
                 _ => (cell.text.clone(), None, None),
             };
@@ -245,6 +257,7 @@ mod tests {
     use super::*;
     use crate::testing::MockDispatch;
     use image::{Rgb, RgbImage};
+    use serde_json::Value;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
@@ -303,7 +316,11 @@ mod tests {
         );
 
         assert_eq!(blocks[2].category.as_deref(), Some("equation"));
-        assert_eq!(blocks[2].latex.as_deref(), Some("\\frac{1}{2}"));
+        // D.10: dots-ocr's formula output is now wrapped in `\[...\]`
+        // like mineru-vlm's, instead of emitting bare unwrapped LaTeX
+        // that `render.rs`'s Markdown renderer would print as plain
+        // text rather than display math.
+        assert_eq!(blocks[2].latex.as_deref(), Some("\\[\n\\frac{1}{2}\n\\]"));
 
         let picture_block = &blocks[3];
         assert_eq!(picture_block.category.as_deref(), Some("image"));

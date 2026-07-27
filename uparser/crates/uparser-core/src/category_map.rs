@@ -8,6 +8,13 @@
 //! vendored `opensource/MonkeyOCRv2/parsing/core_runner.py`) — all three
 //! map into the same normalized vocabulary, demonstrating this module is
 //! a per-protocol function registry, not single-protocol logic.
+//!
+//! `"list_item"` was added to mineru-vlm's vocab post-P1, confirmed via
+//! a live run against a real `MinerU2.5-2604-1.2B` vLLM endpoint (not
+//! present in the v0.1.14 `mineru_vl_utils` vocab this module was
+//! originally reverse-engineered from — the served checkpoint is newer
+//! than that package version, same version-drift caveat noted in
+//! `adapters/mineru_vlm.rs`'s module doc).
 
 /// mineru-vlm's native category vocabulary (lowercased, per the wire
 /// format's own lowercasing in `output_parse::parse_custom_tokens`).
@@ -27,6 +34,7 @@ pub const MINERU_VLM_CATEGORIES: &[&str] = &[
     "equation_block",
     "ref_text",
     "list",
+    "list_item",
     "phonetic",
     "table_caption",
     "image_caption",
@@ -36,24 +44,44 @@ pub const MINERU_VLM_CATEGORIES: &[&str] = &[
     "unknown",
 ];
 
+/// Normalize a raw category label before matching: lowercase and strip
+/// hyphens/underscores/whitespace, so vocabulary drift like `"Text"` vs
+/// `"text"` or `"List-item"` vs `"list_item"` still resolves instead of
+/// silently falling into the `"unknown"` branch. Previously only
+/// `map_mineru_vlm_category` was effectively normalized (because its
+/// caller, `output_parse::parse_custom_tokens`, already lowercases the
+/// raw category upstream) while `map_dots_ocr_category`/
+/// `map_monkeyocrv2_category`/`map_pipeline_category` matched the exact
+/// native spelling with no defense at all — `list_item`'s real vocab
+/// drift on mineru-vlm was only caught because it happened to land in
+/// the one mapper with any normalization; the other three protocols had
+/// no equivalent safety net (see D.8 in `CLI_ENHANCEMENT_PROPOSAL.md`).
+fn normalize_key(raw: &str) -> String {
+    raw.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect()
+}
+
 /// Map a mineru-vlm native category to this project's normalized
 /// category string. Unrecognized input falls back to `"unknown"` with a
 /// warning rather than failing.
 pub fn map_mineru_vlm_category(raw: &str) -> (String, Option<String>) {
-    let normalized = match raw {
-        "text" | "aside_text" | "phonetic" => "text",
+    let normalized = match normalize_key(raw).as_str() {
+        "text" | "asidetext" | "phonetic" => "text",
         "title" => "title",
         "table" => "table",
         "image" => "image",
         "code" | "algorithm" => "code",
         "header" => "header",
         "footer" => "footer",
-        "page_number" => "page_number",
-        "page_footnote" | "table_footnote" | "image_footnote" => "footnote",
-        "equation" | "equation_block" => "equation",
-        "ref_text" => "reference",
-        "list" => "list",
-        "table_caption" | "image_caption" | "code_caption" => "caption",
+        "pagenumber" => "page_number",
+        "pagefootnote" | "tablefootnote" | "imagefootnote" => "footnote",
+        "equation" | "equationblock" => "equation",
+        "reftext" => "reference",
+        "list" | "listitem" => "list",
+        "tablecaption" | "imagecaption" | "codecaption" => "caption",
         "unknown" => "unknown",
         _ => {
             return (
@@ -84,18 +112,18 @@ pub const DOTS_OCR_CATEGORIES: &[&str] = &[
 /// Map a dots.ocr native category to this project's normalized category
 /// string. Unrecognized input falls back to `"unknown"` with a warning.
 pub fn map_dots_ocr_category(raw: &str) -> (String, Option<String>) {
-    let normalized = match raw {
-        "Caption" => "caption",
-        "Footnote" => "footnote",
-        "Formula" => "equation",
-        "List-item" => "list",
-        "Page-footer" => "footer",
-        "Page-header" => "header",
-        "Picture" => "image",
-        "Section-header" => "title",
-        "Table" => "table",
-        "Text" => "text",
-        "Title" => "title",
+    let normalized = match normalize_key(raw).as_str() {
+        "caption" => "caption",
+        "footnote" => "footnote",
+        "formula" => "equation",
+        "listitem" => "list",
+        "pagefooter" => "footer",
+        "pageheader" => "header",
+        "picture" => "image",
+        "sectionheader" => "title",
+        "table" => "table",
+        "text" => "text",
+        "title" => "title",
         _ => {
             return (
                 "unknown".to_string(),
@@ -126,17 +154,17 @@ pub const MONKEYOCR_V2_CATEGORIES: &[&str] = &[
 /// category string. Unrecognized input falls back to `"unknown"` with a
 /// warning.
 pub fn map_monkeyocrv2_category(raw: &str) -> (String, Option<String>) {
-    let normalized = match raw {
-        "Caption" => "caption",
-        "List-item" => "list",
-        "Page-footer" => "footer",
-        "Page-header" => "header",
-        "Section-header" => "title",
-        "Text" => "text",
-        "Title" => "title",
-        "Formula" => "equation",
-        "Table" => "table",
-        "Picture" => "image",
+    let normalized = match normalize_key(raw).as_str() {
+        "caption" => "caption",
+        "listitem" => "list",
+        "pagefooter" => "footer",
+        "pageheader" => "header",
+        "sectionheader" => "title",
+        "text" => "text",
+        "title" => "title",
+        "formula" => "equation",
+        "table" => "table",
+        "picture" => "image",
         _ => {
             return (
                 "unknown".to_string(),
@@ -174,18 +202,18 @@ pub const PIPELINE_LAYOUT_CATEGORIES: &[&str] = &[
 /// category string. Unrecognized input falls back to `"unknown"` with a
 /// warning.
 pub fn map_pipeline_category(raw: &str) -> (String, Option<String>) {
-    let normalized = match raw {
-        "doc_title" | "paragraph_title" | "vertical_text" => "title",
+    let normalized = match normalize_key(raw).as_str() {
+        "doctitle" | "paragraphtitle" | "verticaltext" => "title",
         "text" | "abstract" => "text",
         "image" => "image",
         "table" => "table",
         "chart" => "chart",
-        "interline_equation" => "equation",
+        "interlineequation" => "equation",
         "list" => "list",
         "index" => "index",
         "header" => "header",
         "footer" => "footer",
-        "page_number" => "page_number",
+        "pagenumber" => "page_number",
         "footnote" => "footnote",
         "discarded" => "discarded",
         _ => {
@@ -266,10 +294,47 @@ mod tests {
         assert_eq!(map_mineru_vlm_category("code_caption").0, "caption");
     }
 
+    /// Confirmed via a live run against a real `MinerU2.5-2604-1.2B`
+    /// endpoint — this checkpoint emits `list_item` (not in the v0.1.14
+    /// `mineru_vl_utils` vocab this module was originally built against).
+    #[test]
+    fn list_item_maps_to_list_same_as_list() {
+        assert_eq!(map_mineru_vlm_category("list_item").0, "list");
+        assert_eq!(
+            map_mineru_vlm_category("list_item").0,
+            map_mineru_vlm_category("list").0
+        );
+    }
+
     #[test]
     fn equation_and_equation_block_both_map_to_equation() {
         assert_eq!(map_mineru_vlm_category("equation").0, "equation");
         assert_eq!(map_mineru_vlm_category("equation_block").0, "equation");
+    }
+
+    #[test]
+    fn dots_ocr_category_matching_is_case_and_hyphen_insensitive() {
+        // Simulates the kind of vocabulary drift a model update could
+        // introduce (e.g. lowercase or underscore instead of the
+        // documented Title-Case/hyphen spelling) — previously only
+        // mineru-vlm's mapper had any normalization defense (see D.8).
+        assert_eq!(map_dots_ocr_category("text").0, "text");
+        assert_eq!(map_dots_ocr_category("TEXT").0, "text");
+        assert_eq!(map_dots_ocr_category("list_item").0, "list");
+        assert_eq!(map_dots_ocr_category("List Item").0, "list");
+    }
+
+    #[test]
+    fn monkeyocrv2_category_matching_is_case_and_hyphen_insensitive() {
+        assert_eq!(map_monkeyocrv2_category("text").0, "text");
+        assert_eq!(map_monkeyocrv2_category("LIST-ITEM").0, "list");
+        assert_eq!(map_monkeyocrv2_category("List_Item").0, "list");
+    }
+
+    #[test]
+    fn pipeline_category_matching_is_case_and_hyphen_insensitive() {
+        assert_eq!(map_pipeline_category("PAGE_NUMBER").0, "page_number");
+        assert_eq!(map_pipeline_category("Interline-Equation").0, "equation");
     }
 
     #[test]

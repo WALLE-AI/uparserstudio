@@ -219,7 +219,7 @@ impl ProtocolAdapter for PipelineAdapter {
             .map(|b| {
                 let (category, warning) = category_map::map_pipeline_category(&b.category);
                 if let Some(w) = warning {
-                    eprintln!("pipeline page {}: {w}", page.page_num);
+                    ctx.warn(format!("pipeline page {}: {w}", page.page_num));
                 }
                 PendingBlock {
                     bbox_px: b.bbox_px,
@@ -239,14 +239,22 @@ impl ProtocolAdapter for PipelineAdapter {
                     return (index, Ok(None));
                 }
 
-                let _permit = ctx.acquire_permit().await;
+                // No permit acquired here: cropping is cheap CPU work,
+                // and the actual permit-guarded network dispatch happens
+                // inside each `recognize_*` call below, right before its
+                // own `ctx.dispatch_rest()` (or not at all, for the
+                // Local table backend, which has no network request to
+                // bound).
                 let crop_img = match ctx.crop(page, p.bbox_px) {
                     Ok(img) => img,
                     Err(e) => return (index, Err(e)),
                 };
 
                 if p.category == "table" {
-                    return (index, self.recognize_table(&crop_img, ctx).await);
+                    return (
+                        index,
+                        self.recognize_table(&crop_img, page.page_num, ctx).await,
+                    );
                 }
                 if p.category == "equation" {
                     return (index, self.recognize_formula(&crop_img, index, ctx).await);
@@ -323,6 +331,7 @@ impl PipelineAdapter {
         })
         .expect("OcrStageRequest always serializable");
         let endpoint = self.stage_endpoint(&self.ocr_endpoint, "ocr", Some(index));
+        let _permit = ctx.acquire_permit().await;
         let resp = ctx
             .dispatch_rest(&endpoint, req)
             .await
@@ -344,6 +353,7 @@ impl PipelineAdapter {
         })
         .expect("FormulaStageRequest always serializable");
         let endpoint = self.stage_endpoint(&self.formula_endpoint, "formula", Some(index));
+        let _permit = ctx.acquire_permit().await;
         let resp = ctx
             .dispatch_rest(&endpoint, req)
             .await
@@ -361,6 +371,7 @@ impl PipelineAdapter {
     async fn recognize_table(
         &self,
         crop: &image::RgbImage,
+        page_num: u32,
         ctx: &ParseCtx,
     ) -> Result<Option<RecognizedContent>, String> {
         match self.table_backend {
@@ -371,13 +382,18 @@ impl PipelineAdapter {
                 })
                 .expect("TableStageRequest always serializable");
                 let endpoint = self.stage_endpoint(&self.table_endpoint, "table", None);
+                let _permit = ctx.acquire_permit().await;
                 let resp = ctx
                     .dispatch_rest(&endpoint, req)
                     .await
                     .map_err(|e| e.to_string())?;
                 let parsed: TableStageResponse = serde_json::from_value(resp)
                     .map_err(|e| format!("malformed table stage response: {e}"))?;
-                Ok(Some(RecognizedContent::Html(otsl::to_html(&parsed.otsl))))
+                let (html, warnings) = otsl::to_html(&parsed.otsl);
+                for w in &warnings {
+                    ctx.warn(format!("pipeline page {page_num}: {w}"));
+                }
+                Ok(Some(RecognizedContent::Html(html)))
             }
             StageBackendChoice::Local => self.recognize_table_local(crop),
         }

@@ -28,12 +28,26 @@ struct Cell {
     max_col: usize,
 }
 
-/// Convert OTSL tokens (or a passthrough literal `<table>...`) to an
-/// HTML `<table>` string.
-pub fn to_html(raw: &str) -> String {
+/// Convert OTSL tokens (or a passthrough literal `<table>...</table>`) to
+/// an HTML `<table>` string. Returns any non-fatal recovery/conflict
+/// warnings alongside the HTML — see D.6/D.7 in
+/// `CLI_ENHANCEMENT_PROPOSAL.md`.
+pub fn to_html(raw: &str) -> (String, Vec<String>) {
+    let mut warnings = Vec::new();
     let trimmed = raw.trim();
-    if trimmed.to_lowercase().starts_with("<table") {
-        return trimmed.to_string();
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("<table") {
+        if lower.ends_with("</table>") {
+            return (trimmed.to_string(), warnings);
+        }
+        // Starts with `<table` but doesn't actually close — previously
+        // this was trusted as complete HTML and passed through verbatim
+        // regardless (D.7). Fall through to OTSL tokenization instead;
+        // if that also fails to find any tags below, at least warn
+        // rather than silently emitting truncated/unclosed HTML.
+        warnings.push(
+            "input starts with `<table` but doesn't end with `</table>` — not trusting it as complete HTML passthrough".to_string(),
+        );
     }
 
     let mut cells: Vec<Cell> = Vec::new();
@@ -45,7 +59,7 @@ pub fn to_html(raw: &str) -> String {
 
     let matches: Vec<_> = TAG_RE.captures_iter(trimmed).collect();
     if matches.is_empty() {
-        return "<table></table>".to_string();
+        return ("<table></table>".to_string(), warnings);
     }
     for (i, caps) in matches.iter().enumerate() {
         let tag = &caps[1];
@@ -103,13 +117,40 @@ pub fn to_html(raw: &str) -> String {
                 col += 1;
             }
             "xcel" => {
-                let referent = (if row == 0 {
+                // `xcel` extends both up and left, so it can have a
+                // referent on either side. When both exist and disagree
+                // (a genuinely ambiguous span), previously this silently
+                // picked "up" with no consistency check or warning at
+                // all — the exact spot this module's own doc comment
+                // calls out as most likely to break on real irregular
+                // table headers (see D.6 in `CLI_ENHANCEMENT_PROPOSAL.md`).
+                // Now: prefer whichever neighbor already covers the
+                // larger span (a reasonable tie-break — the bigger
+                // existing merge is more likely the "real" origin cell),
+                // and warn on the conflict rather than deciding silently.
+                let referent_up = if row == 0 {
                     None
                 } else {
                     grid.get(&(row - 1, col)).copied()
-                })
-                .or_else(|| grid.get(&(row, col.wrapping_sub(1))).copied());
-                let idx = referent.unwrap_or_else(|| new_fallback_cell(&mut cells, row, col));
+                };
+                let referent_left = grid.get(&(row, col.wrapping_sub(1))).copied();
+                let idx = match (referent_up, referent_left) {
+                    (Some(up), Some(left)) if up != left => {
+                        let span = |i: usize| {
+                            (cells[i].max_row - cells[i].row + 1)
+                                * (cells[i].max_col - cells[i].col + 1)
+                        };
+                        let chosen = if span(left) > span(up) { left } else { up };
+                        warnings.push(format!(
+                            "xcel span conflict at row {row} col {col}: up-neighbor and left-neighbor cells disagree, picked the {} span",
+                            if chosen == left { "left" } else { "up" }
+                        ));
+                        chosen
+                    }
+                    (Some(up), _) => up,
+                    (None, Some(left)) => left,
+                    (None, None) => new_fallback_cell(&mut cells, row, col),
+                };
                 cells[idx].max_row = cells[idx].max_row.max(row);
                 cells[idx].max_col = cells[idx].max_col.max(col);
                 grid.insert((row, col), idx);
@@ -121,7 +162,8 @@ pub fn to_html(raw: &str) -> String {
         }
     }
 
-    render_html(&cells, &grid, max_row_seen, max_col_seen)
+    let html = render_html(&cells, &grid, max_row_seen, max_col_seen);
+    (html, warnings)
 }
 
 fn new_fallback_cell(cells: &mut Vec<Cell>, row: usize, col: usize) -> usize {
@@ -185,23 +227,26 @@ mod tests {
     #[test]
     fn passthrough_literal_html() {
         let raw = "<table><tr><td>a</td></tr></table>";
-        assert_eq!(to_html(raw), raw);
+        let (html, warnings) = to_html(raw);
+        assert_eq!(html, raw);
+        assert!(warnings.is_empty());
     }
 
     #[test]
     fn simple_2x2_grid() {
         let raw = "<fcel>a<fcel>b<nl><fcel>c<fcel>d";
-        let html = to_html(raw);
+        let (html, warnings) = to_html(raw);
         assert_eq!(
             html,
             "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>"
         );
+        assert!(warnings.is_empty());
     }
 
     #[test]
     fn empty_cell_renders_blank_td() {
         let raw = "<fcel>a<ecel><nl><fcel>c<fcel>d";
-        let html = to_html(raw);
+        let (html, _) = to_html(raw);
         assert!(html.contains("<td></td>"));
     }
 
@@ -209,7 +254,7 @@ mod tests {
     fn colspan_via_lcel() {
         // row: one filled cell spanning two columns
         let raw = "<fcel>a<lcel><nl><fcel>c<fcel>d";
-        let html = to_html(raw);
+        let (html, _) = to_html(raw);
         assert!(html.contains("colspan=\"2\""));
         assert!(!html.contains("rowspan"));
     }
@@ -217,7 +262,7 @@ mod tests {
     #[test]
     fn rowspan_via_ucel() {
         let raw = "<fcel>a<fcel>b<nl><ucel><fcel>d";
-        let html = to_html(raw);
+        let (html, _) = to_html(raw);
         assert!(html.contains("rowspan=\"2\""));
     }
 
@@ -225,15 +270,36 @@ mod tests {
     fn two_d_span_via_xcel() {
         // 2x2 block all merged into a single cell via lcel/ucel/xcel
         let raw = "<fcel>a<lcel><nl><ucel><xcel>";
-        let html = to_html(raw);
+        let (html, warnings) = to_html(raw);
         assert!(html.contains("rowspan=\"2\""));
         assert!(html.contains("colspan=\"2\""));
+        // The up-neighbor and left-neighbor here are the same cell (the
+        // 2x2 block has already been fully merged by the time xcel
+        // runs), so this isn't a genuine conflict — no warning expected.
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn xcel_span_conflict_between_distinct_up_and_left_cells_is_resolved_and_warned() {
+        // Row 0: three independent single cells "a", "b", "c".
+        // Row 1: "d", then an lcel (extends "d" rightward to col 1),
+        // then an xcel at col 2 — its left-neighbor is the lcel-extended
+        // "d" cell, and its up-neighbor is the independent "c" cell
+        // (row0, col2). Those are two genuinely distinct cells, so this
+        // is a real conflict rather than the same cell reached two ways.
+        let raw = "<fcel>a<fcel>b<fcel>c<nl><fcel>d<lcel><xcel>";
+        let (html, warnings) = to_html(raw);
+        // Some resolution must have happened without panicking, and the
+        // conflict must have been reported rather than silently decided.
+        assert!(!warnings.is_empty(), "expected a span-conflict warning");
+        assert!(warnings[0].contains("xcel span conflict"));
+        assert!(html.starts_with("<table>"));
     }
 
     #[test]
     fn cell_text_is_html_escaped() {
         let raw = "<fcel>1 < 2 & 3 > 0";
-        let html = to_html(raw);
+        let (html, _) = to_html(raw);
         assert!(html.contains("1 &lt; 2 &amp; 3 &gt; 0"));
     }
 
@@ -245,7 +311,34 @@ mod tests {
 
     #[test]
     fn empty_input_yields_empty_table() {
-        assert_eq!(to_html(""), "<table></table>");
+        let (html, warnings) = to_html("");
+        assert_eq!(html, "<table></table>");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn unclosed_table_like_prefix_is_not_trusted_as_passthrough() {
+        // Starts with `<table` but never closes — previously this was
+        // blindly trusted as complete HTML and passed through as-is
+        // (D.7). It should fall through to OTSL tokenization (which
+        // finds no OTSL tags here either) and warn, rather than
+        // silently emitting truncated HTML.
+        let raw = "<table><tr><td>a</td></tr>";
+        let (html, warnings) = to_html(raw);
+        assert_ne!(html, raw);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("doesn't end with `</table>`"))
+        );
+    }
+
+    #[test]
+    fn properly_closed_table_passthrough_is_still_trusted() {
+        let raw = "<TABLE><tr><td>a</td></tr></TABLE>";
+        let (html, warnings) = to_html(raw);
+        assert_eq!(html, raw);
+        assert!(warnings.is_empty());
     }
 
     proptest::proptest! {

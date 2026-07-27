@@ -19,7 +19,7 @@ use crate::types::{Block, PageError};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 /// How an adapter's raw model output is encoded, before `output_parse.rs`
@@ -102,6 +102,7 @@ enum Dispatcher {
 pub struct ParseCtx {
     dispatcher: Dispatcher,
     pub permits: Arc<Semaphore>,
+    warnings: Arc<Mutex<Vec<String>>>,
 }
 
 impl ParseCtx {
@@ -109,6 +110,7 @@ impl ParseCtx {
         Self {
             dispatcher: Dispatcher::Real(transport),
             permits,
+            warnings: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -118,7 +120,50 @@ impl ParseCtx {
         Self {
             dispatcher: Dispatcher::Mock(mock),
             permits,
+            warnings: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Same as `new`, but sharing an externally-owned warnings collector
+    /// instead of each `ParseCtx` getting its own (used by `scheduler.rs`
+    /// so every page's adapter accumulates into one document-level sink
+    /// that survives past any single page's `ParseCtx` being dropped).
+    pub fn new_with_shared_warnings(
+        transport: Arc<Transport>,
+        permits: Arc<Semaphore>,
+        warnings: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
+        Self {
+            dispatcher: Dispatcher::Real(transport),
+            permits,
+            warnings,
+        }
+    }
+
+    /// Record a non-fatal recovery/degradation warning: printed to
+    /// stderr immediately (so a live CLI run stays informative) and also
+    /// collected so `ParseResult.warnings` can carry it to callers that
+    /// aren't watching stderr — e.g. the `api.rs`/Node/Python binding
+    /// path, which previously had no channel for this at all (every
+    /// adapter's category-mapping/output-recovery warning only ever
+    /// reached a bare `eprintln!`, invisible to non-interactive callers).
+    pub fn warn(&self, message: impl Into<String>) {
+        let message = message.into();
+        eprintln!("{message}");
+        self.warnings
+            .lock()
+            .expect("warnings mutex not poisoned")
+            .push(message);
+    }
+
+    /// Everything recorded via `warn()` on this `ParseCtx` so far (or,
+    /// when constructed via `new_with_shared_warnings`, on every
+    /// `ParseCtx` sharing the same collector).
+    pub fn warnings_snapshot(&self) -> Vec<String> {
+        self.warnings
+            .lock()
+            .expect("warnings mutex not poisoned")
+            .clone()
     }
 
     /// Acquire a slot from the document-level concurrency budget.
@@ -164,7 +209,8 @@ impl ParseCtx {
     /// buffer ready for `imaging::resize_by_need`/re-encoding.
     pub fn crop(&self, page: &RenderedPage, bbox_px: [i32; 4]) -> Result<image::RgbImage, String> {
         let img = image::load_from_memory(&page.png_bytes).map_err(|e| e.to_string())?;
-        Ok(crate::imaging::crop(&crate::imaging::to_rgb(&img), bbox_px))
+        crate::imaging::crop(&crate::imaging::to_rgb(&img), bbox_px)
+            .ok_or_else(|| format!("crop region {bbox_px:?} does not overlap the page at all"))
     }
 }
 
@@ -322,6 +368,42 @@ impl Registry {
     }
 }
 
+/// Extract `choices[0].message.content` from an OpenAI-chat-completions-shaped
+/// response, the shape shared by `mineru-vlm`/`dots-ocr`/`monkeyocr-v2`.
+///
+/// Unlike a plain `.as_str().unwrap_or("")`, a missing/null content field is
+/// treated as an error rather than silently coerced into "the model
+/// legitimately returned an empty string" — a malformed envelope, a content
+/// filter refusal, or a `finish_reason` other than `"stop"` all land here,
+/// and coercing to `""` previously made layout detection quietly produce
+/// zero blocks for the whole page instead of surfacing the real cause.
+pub fn extract_chat_content(resp: &Value) -> Result<&str, String> {
+    if let Some(content) = resp["choices"][0]["message"]["content"].as_str() {
+        return Ok(content);
+    }
+    if let Some(err) = resp.get("error") {
+        return Err(format!("backend returned an error: {err}"));
+    }
+    let Some(choice) = resp.get("choices").and_then(|c| c.get(0)) else {
+        return Err(format!(
+            "response is missing choices[0].message.content: {resp}"
+        ));
+    };
+    if let Some(finish_reason) = choice["finish_reason"].as_str()
+        && finish_reason != "stop"
+    {
+        return Err(format!(
+            "response has no message content (finish_reason: {finish_reason:?})"
+        ));
+    }
+    if choice["message"]["content"].is_null() {
+        return Err("response message content is null".to_string());
+    }
+    Err(format!(
+        "response is missing choices[0].message.content: {resp}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,6 +426,48 @@ mod tests {
         };
 
         let blocks = adapter.parse_page(&page, &ctx).await.unwrap();
-        assert_eq!(blocks.len(), 1);
+        // Raw (unmerged) mock output is 2 blocks — see mock.rs's doc
+        // comment; postprocess.rs merges them back to 1 downstream.
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn extract_chat_content_returns_the_message_content() {
+        let resp = serde_json::json!({
+            "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]
+        });
+        assert_eq!(extract_chat_content(&resp).unwrap(), "hello");
+    }
+
+    #[test]
+    fn extract_chat_content_surfaces_backend_error_object() {
+        let resp = serde_json::json!({"error": {"message": "content filter triggered"}});
+        let err = extract_chat_content(&resp).unwrap_err();
+        assert!(err.contains("content filter triggered"), "{err}");
+    }
+
+    #[test]
+    fn extract_chat_content_surfaces_non_stop_finish_reason() {
+        let resp = serde_json::json!({
+            "choices": [{"message": {}, "finish_reason": "content_filter"}]
+        });
+        let err = extract_chat_content(&resp).unwrap_err();
+        assert!(err.contains("content_filter"), "{err}");
+    }
+
+    #[test]
+    fn extract_chat_content_surfaces_null_content() {
+        let resp = serde_json::json!({
+            "choices": [{"message": {"content": null}, "finish_reason": "stop"}]
+        });
+        let err = extract_chat_content(&resp).unwrap_err();
+        assert!(err.contains("null"), "{err}");
+    }
+
+    #[test]
+    fn extract_chat_content_surfaces_missing_field_with_diagnostic() {
+        let resp = serde_json::json!({"unexpected": "shape"});
+        let err = extract_chat_content(&resp).unwrap_err();
+        assert!(err.contains("missing"), "{err}");
     }
 }

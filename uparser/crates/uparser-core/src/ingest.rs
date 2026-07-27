@@ -305,12 +305,23 @@ async fn convert_via_libreoffice(
         .await
         .map_err(|e| conversion_failed(tool, e))?;
 
+    // A unique `-env:UserInstallation` profile dir per invocation: headless
+    // LibreOffice otherwise serializes on a shared per-user profile lock,
+    // so a second concurrent conversion (a realistic batch-processing
+    // scenario) hangs or fails waiting on the first instance's lock —
+    // surfacing as a misleading `ConversionTimedOut` unrelated to the
+    // actual document being converted.
+    let profile_dir = dir.path().join("profile");
     let mut cmd = tokio::process::Command::new(tool);
     cmd.arg("--headless")
         .arg("--convert-to")
         .arg("pdf")
         .arg("--outdir")
         .arg(dir.path())
+        .arg(format!(
+            "-env:UserInstallation=file://{}",
+            profile_dir.display()
+        ))
         .arg(&input_path);
     let output = run_with_timeout(cmd, tool, timeout).await?;
     if !output.status.success() {
@@ -372,6 +383,14 @@ async fn run_with_timeout(
     tool: &'static str,
     timeout: Duration,
 ) -> Result<std::process::Output, IngestError> {
+    // Without this, a timed-out conversion leaves the real `soffice`/
+    // `magick` process running as an orphan: `tokio::time::timeout`
+    // dropping the `cmd.output()` future only abandons *our* handle to
+    // the child, it doesn't kill it by default. Under sustained load
+    // (repeated timeouts) this leaks OS processes/memory/file
+    // descriptors indefinitely. Centralized here (rather than set at
+    // each call site) so no future caller of this helper can forget it.
+    cmd.kill_on_drop(true);
     match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -460,6 +479,32 @@ fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, IngestErr
 #[cfg(not(feature = "pdfium"))]
 pub fn rasterize(_path: &str, _dpi: f32) -> Result<Vec<RenderedPage>, IngestError> {
     Err(IngestError::PdfiumFeatureDisabled)
+}
+
+/// Rasterize already-in-memory PDF bytes (e.g. `normalize_format`'s
+/// LibreOffice-converted output) — `rasterize()` only accepts a file
+/// path (pdfium's `Library::load_document` reads from disk), so this
+/// writes to a temp file first. Used by the DOCX/PPTX ingestion path,
+/// where there's no original on-disk PDF to point `rasterize()` at.
+pub fn rasterize_pdf_bytes(pdf_bytes: &[u8], dpi: f32) -> Result<Vec<RenderedPage>, IngestError> {
+    #[cfg(feature = "pdfium")]
+    {
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".pdf")
+            .tempfile()
+            .map_err(|e| IngestError::Rasterize(format!("failed to create temp file: {e}")))?;
+        std::io::Write::write_all(&mut tmp, pdf_bytes)
+            .map_err(|e| IngestError::Rasterize(format!("failed to write temp file: {e}")))?;
+        let path = tmp.path().to_str().ok_or_else(|| {
+            IngestError::Rasterize("temp file path is not valid UTF-8".to_string())
+        })?;
+        rasterize(path, dpi)
+    }
+    #[cfg(not(feature = "pdfium"))]
+    {
+        let _ = (pdf_bytes, dpi);
+        Err(IngestError::PdfiumFeatureDisabled)
+    }
 }
 
 #[cfg(all(test, feature = "pdfium"))]
@@ -632,6 +677,35 @@ mod tests {
             result,
             Err(IngestError::ConversionTimedOut { .. })
         ));
+    }
+
+    /// Confirms the exact mechanism `run_with_timeout`'s `kill_on_drop`
+    /// fix relies on: dropping a timed-out child future for a
+    /// `kill_on_drop(true)` process actually terminates the OS process,
+    /// not just abandons tokio's handle to it. Before this fix, a timed-
+    /// out `soffice`/`magick` conversion left the real subprocess running
+    /// as an orphan indefinitely (confirmed by this same test failing —
+    /// process still alive — when `kill_on_drop(true)` is removed).
+    #[tokio::test]
+    async fn kill_on_drop_actually_terminates_the_child_on_timeout() {
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("5");
+        cmd.kill_on_drop(true);
+        let mut child = cmd.spawn().expect("failed to spawn sleep");
+        let pid = child.id().expect("spawned child has a pid");
+
+        let result = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
+        assert!(result.is_err(), "expected the wait to time out");
+        drop(child);
+
+        // Give the OS a brief moment to actually reap the process after
+        // the kill signal fires.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let still_alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+        assert!(
+            !still_alive,
+            "process {pid} should have been killed on drop, but /proc/{pid} still exists"
+        );
     }
 
     // --- ingest_document ---

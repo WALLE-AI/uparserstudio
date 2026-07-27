@@ -5,6 +5,7 @@
 use crate::adapters::{AdapterOverrides, PipelineConfig, Registry, StageBackendChoice};
 use crate::cache::{self, ParamFingerprint};
 use crate::ingest::RenderedPage;
+use crate::postprocess;
 use crate::render;
 use crate::scheduler::Scheduler;
 use crate::transport::Transport;
@@ -12,9 +13,24 @@ use crate::types::{ParseResult, RoutedBy};
 use clap::{Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+
+/// Minimum gap between progress lines printed to stderr for a
+/// non-streaming `parse` — avoids flooding stderr for a document with
+/// hundreds of pages while still updating at a human-readable cadence.
+/// The very last page always prints regardless of this gap.
+const PROGRESS_PRINT_MIN_INTERVAL: Duration = Duration::from_millis(900);
+/// How long with no page completing before the stall watchdog warns.
+/// Chosen from this session's own real deadlock: the process hung for
+/// 20+ minutes with zero signal before being diagnosed by hand — 30s is
+/// short enough to catch a stall quickly without false-positiving on a
+/// single slow-but-healthy page (a real VLM call on a dense page can
+/// legitimately take several seconds).
+const STALL_WARNING_THRESHOLD: Duration = Duration::from_secs(30);
+/// How often the watchdog re-checks for a stall.
+const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Default cache freshness window (T-9.1): 24h. Chosen as a reasonable
 /// default for "Agent re-reads the same document within a session" —
@@ -93,6 +109,19 @@ pub enum Command {
         /// is `{"window_pages": [...], "window_errors": [...]}`.
         #[arg(long)]
         stream: bool,
+        /// Skip `postprocess::merge_paragraphs_by_geometry` and return
+        /// each adapter's raw per-block output unmerged — mainly for
+        /// diffing "raw protocol output" against post-processed output
+        /// when debugging a merge decision.
+        #[arg(long)]
+        no_postprocess: bool,
+        /// Only parse these 1-indexed page numbers, e.g. `1-5`, `3`, or
+        /// `1,5,10-12`. Applied after ingestion, before dispatching to
+        /// the scheduler — lets you validate a protocol/endpoint against
+        /// one page of a large document without waiting for every
+        /// earlier page first. Omit to parse every page.
+        #[arg(long)]
+        pages: Option<String>,
     },
     /// Run the Profiler only (no protocol adapter, no full parse) and
     /// print the resulting DocumentProfile as JSON. Per ARCHITECTURE.md
@@ -157,7 +186,24 @@ pub fn run(cli: Cli) -> i32 {
             table_model_path,
             no_cache,
             stream,
+            no_postprocess,
+            pages,
         } => {
+            let wanted_pages = match pages.as_deref().map(crate::page_range::parse_page_range) {
+                Some(Ok(pages)) => Some(pages),
+                Some(Err(e)) => {
+                    return emit_error(
+                        format,
+                        EXIT_USAGE,
+                        "invalid_pages",
+                        &e,
+                        &protocol,
+                        Some("pages"),
+                    );
+                }
+                None => None,
+            };
+
             for (stage, backend) in [
                 ("layout", layout_backend),
                 ("ocr", ocr_backend),
@@ -200,6 +246,8 @@ pub fn run(cli: Cli) -> i32 {
                 pipeline_config,
                 no_cache,
                 stream,
+                no_postprocess,
+                wanted_pages,
             )
         }
         Command::Classify { path } => run_classify(path),
@@ -221,6 +269,8 @@ fn run_parse(
     pipeline_config: PipelineConfig,
     no_cache: bool,
     stream: bool,
+    no_postprocess: bool,
+    wanted_pages: Option<Vec<u32>>,
 ) -> i32 {
     if !Path::new(&path).exists() {
         return emit_error(
@@ -246,6 +296,40 @@ fn run_parse(
             );
         }
     };
+
+    // XLSX/CSV short-circuit unconditionally (§13.1a) — genuinely no
+    // model call, no rasterization, regardless of `--protocol`. Must run
+    // before the `auto`/`native` branches below, which would otherwise
+    // treat these formats like anything else and silently degrade them
+    // (previously: fail `image::load_from_memory`, fall to the 1x1
+    // placeholder, get fed to a protocol adapter as a blank image —
+    // exit 0, no error, but a completely wrong result).
+    let detected_format = crate::ingest::detect_format(&file_bytes, Some(&path));
+    if let Some(bypass) = crate::ingest::structured_bypass(&file_bytes, detected_format, &path) {
+        return match bypass {
+            Ok(result) => {
+                let has_errors = !result.page_errors.is_empty();
+                let output = match format {
+                    OutputFormat::Json => render::to_json(&result),
+                    OutputFormat::Markdown => render::to_markdown(&result),
+                };
+                println!("{output}");
+                if has_errors {
+                    EXIT_PARTIAL
+                } else {
+                    EXIT_SUCCESS
+                }
+            }
+            Err(e) => emit_error(
+                format,
+                EXIT_DEPENDENCY,
+                "ingest_failed",
+                &e.to_string(),
+                &protocol,
+                Some("structured_bypass"),
+            ),
+        };
+    }
 
     // `--protocol auto`: run Profiler+Router first (per ARCHITECTURE.md
     // §13.1a/§13.5) and substitute the recommended protocol name into the
@@ -311,7 +395,6 @@ fn run_parse(
         hasher.update(&file_bytes);
         format!("{:x}", hasher.finalize())
     };
-    let pages = rasterize_or_fallback(&path, &file_bytes);
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -327,20 +410,54 @@ fn run_parse(
         }
     };
 
+    let pages = match runtime.block_on(ingest_pages(&path, &file_bytes, detected_format)) {
+        Ok(pages) => pages,
+        Err(e) => {
+            return emit_error(
+                format,
+                EXIT_DEPENDENCY,
+                "ingest_failed",
+                &e.to_string(),
+                &effective_protocol,
+                Some("ingest"),
+            );
+        }
+    };
+    let pages = match &wanted_pages {
+        Some(wanted) => pages
+            .into_iter()
+            .filter(|p| wanted.contains(&p.page_num))
+            .collect(),
+        None => pages,
+    };
+
     let transport = Arc::new(Transport::new());
     let permits = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let scheduler = Scheduler::new(window_size.max(1));
 
-    let (result_pages, page_errors) = if stream {
+    let (result_pages, page_errors, warnings) = if stream {
         runtime.block_on(scheduler.run_streaming(
             adapter,
             transport,
             permits,
             pages,
-            |window_pages, window_errors| {
+            |window_pages, window_errors, window_warnings| {
+                let printed_pages: Vec<crate::types::Page> = if no_postprocess {
+                    window_pages.to_vec()
+                } else {
+                    window_pages
+                        .iter()
+                        .cloned()
+                        .map(|page| crate::types::Page {
+                            blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
+                            ..page
+                        })
+                        .collect()
+                };
                 let line = serde_json::json!({
-                    "window_pages": window_pages,
+                    "window_pages": printed_pages,
                     "window_errors": window_errors,
+                    "window_warnings": window_warnings,
                 });
                 println!(
                     "{}",
@@ -349,7 +466,91 @@ fn run_parse(
             },
         ))
     } else {
-        runtime.block_on(scheduler.run(adapter, transport, permits, pages))
+        let total_pages = pages.len();
+        runtime.block_on(async {
+            // Watchdog: warn on stderr if no page has completed
+            // recently, including the current permit occupancy — this
+            // exact combination (elapsed time + permits in use) is what
+            // would have made this session's real scheduler deadlock
+            // (see `scheduler.rs::run`'s doc comment) obvious in seconds
+            // instead of requiring manual `ps`/`ss` investigation.
+            // Skipped for single-page documents, where "no progress
+            // yet" is just normal startup latency, not a stall signal.
+            let last_progress = Arc::new(Mutex::new(Instant::now()));
+            let watchdog = if total_pages > 1 {
+                let last_progress = Arc::clone(&last_progress);
+                let permits_for_watchdog = Arc::clone(&permits);
+                Some(tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(STALL_CHECK_INTERVAL).await;
+                        let elapsed = last_progress
+                            .lock()
+                            .expect("progress mutex not poisoned")
+                            .elapsed();
+                        if elapsed >= STALL_WARNING_THRESHOLD {
+                            eprintln!(
+                                "warning: no page has completed in {}s ({} of the concurrency \
+                                 budget's permits currently available) — this may indicate a \
+                                 stalled request or a scheduling issue",
+                                elapsed.as_secs(),
+                                permits_for_watchdog.available_permits(),
+                            );
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
+            let last_print = Arc::new(Mutex::new(
+                Instant::now()
+                    .checked_sub(PROGRESS_PRINT_MIN_INTERVAL)
+                    .unwrap_or_else(Instant::now),
+            ));
+            let result = scheduler
+                .run_with_progress(adapter, transport, permits, pages, move |event| {
+                    *last_progress.lock().expect("progress mutex not poisoned") = Instant::now();
+                    if total_pages <= 1 {
+                        return;
+                    }
+                    let is_last = event.completed == event.total;
+                    let should_print = is_last || {
+                        let mut last = last_print.lock().expect("progress mutex not poisoned");
+                        if last.elapsed() >= PROGRESS_PRINT_MIN_INTERVAL {
+                            *last = Instant::now();
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if should_print {
+                        eprintln!(
+                            "progress: {}/{} pages (page {} {})",
+                            event.completed,
+                            event.total,
+                            event.page_num,
+                            if event.ok { "ok" } else { "error" }
+                        );
+                    }
+                })
+                .await;
+
+            if let Some(watchdog) = watchdog {
+                watchdog.abort();
+            }
+            result
+        })
+    };
+    let result_pages = if no_postprocess {
+        result_pages
+    } else {
+        result_pages
+            .into_iter()
+            .map(|page| crate::types::Page {
+                blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
+                ..page
+            })
+            .collect()
     };
     let has_errors = !page_errors.is_empty();
 
@@ -368,7 +569,7 @@ fn run_parse(
         pages: result_pages,
         page_errors,
         capability_notes: vec![],
-        warnings: vec![],
+        warnings,
         timing: Default::default(),
     };
 
@@ -433,6 +634,29 @@ fn rasterize_or_fallback(path: &str, file_bytes: &[u8]) -> Vec<RenderedPage> {
         height: 1,
         png_bytes: file_bytes.to_vec(),
     }]
+}
+
+/// Format-aware page ingestion (T-7.1-7.4's `ingest_document`, finally
+/// wired into a real call path): DOCX/PPTX are converted to PDF via
+/// LibreOffice first (§13.1a's `normalize_format` step) and rasterized
+/// from the converted bytes; every other format goes through the
+/// existing `rasterize_or_fallback` ladder unchanged (no behavior change
+/// for PDF/PNG/JPEG/unknown input). XLSX/CSV never reach this function —
+/// `run_parse` checks `structured_bypass()` first and returns before
+/// this is called.
+async fn ingest_pages(
+    path: &str,
+    file_bytes: &[u8],
+    format: crate::ingest::DocumentFormat,
+) -> Result<Vec<RenderedPage>, crate::ingest::IngestError> {
+    use crate::ingest::DocumentFormat;
+    match format {
+        DocumentFormat::Docx | DocumentFormat::Pptx => {
+            let pdf_bytes = crate::ingest::normalize_format(file_bytes, format).await?;
+            crate::ingest::rasterize_pdf_bytes(&pdf_bytes, 150.0)
+        }
+        _ => Ok(rasterize_or_fallback(path, file_bytes)),
+    }
 }
 
 /// `native`'s real entry point is the whole-document `parse_document()`,
