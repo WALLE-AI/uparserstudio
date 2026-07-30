@@ -199,7 +199,7 @@ impl ProtocolAdapter for PipelineAdapter {
         .expect("LayoutStageRequest always serializable");
         let layout_endpoint = self.stage_endpoint(&self.layout_endpoint, "layout", None);
         let layout_resp = ctx
-            .dispatch_rest(&layout_endpoint, layout_req)
+            .dispatch_rest(&layout_endpoint, layout_req, self.timeout, self.max_retries)
             .await
             .map_err(|e| PageError {
                 page_num: page.page_num,
@@ -333,7 +333,7 @@ impl PipelineAdapter {
         let endpoint = self.stage_endpoint(&self.ocr_endpoint, "ocr", Some(index));
         let _permit = ctx.acquire_permit().await;
         let resp = ctx
-            .dispatch_rest(&endpoint, req)
+            .dispatch_rest(&endpoint, req, self.timeout, self.max_retries)
             .await
             .map_err(|e| e.to_string())?;
         let parsed: OcrStageResponse = serde_json::from_value(resp)
@@ -355,7 +355,7 @@ impl PipelineAdapter {
         let endpoint = self.stage_endpoint(&self.formula_endpoint, "formula", Some(index));
         let _permit = ctx.acquire_permit().await;
         let resp = ctx
-            .dispatch_rest(&endpoint, req)
+            .dispatch_rest(&endpoint, req, self.timeout, self.max_retries)
             .await
             .map_err(|e| e.to_string())?;
         let parsed: FormulaStageResponse = serde_json::from_value(resp)
@@ -384,7 +384,7 @@ impl PipelineAdapter {
                 let endpoint = self.stage_endpoint(&self.table_endpoint, "table", None);
                 let _permit = ctx.acquire_permit().await;
                 let resp = ctx
-                    .dispatch_rest(&endpoint, req)
+                    .dispatch_rest(&endpoint, req, self.timeout, self.max_retries)
                     .await
                     .map_err(|e| e.to_string())?;
                 let parsed: TableStageResponse = serde_json::from_value(resp)

@@ -22,6 +22,7 @@ use crate::imaging;
 use crate::ingest::RenderedPage;
 use crate::otsl;
 use crate::output_parse;
+use crate::robustness;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
@@ -290,15 +291,68 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 };
 
                 let (prompt, sampling) = Self::stage2_prompt_and_sampling(&p.category_raw);
-                let req = self.request(self.stage2_endpoint(index), prompt, &data_url, sampling);
+                let req = self.request(self.stage2_endpoint(index), prompt, &data_url, sampling.clone());
                 let _permit = ctx.acquire_permit().await;
-                match ctx.dispatch(req).await {
+                let content = match ctx.dispatch(req).await {
                     Ok(resp) => match extract_chat_content(&resp) {
-                        Ok(content) => (index, Ok(Some(content.to_string()))),
-                        Err(e) => (index, Err(e)),
+                        Ok(content) => content.to_string(),
+                        Err(e) => return (index, Err(e)),
                     },
-                    Err(e) => (index, Err(e.to_string())),
-                }
+                    Err(e) => return (index, Err(e.to_string())),
+                };
+
+                // Robustness: a "the model gets stuck looping a phrase"
+                // degenerate response is a real, known VLM failure mode
+                // this project's own `robustness.rs` was built to catch
+                // (per T-1.7) but had never been wired into any adapter
+                // since P1 — only applied to plain free-text content,
+                // not table/equation, which need structural fidelity
+                // rather than a "looks repetitive" heuristic, and only
+                // *after* a real successful dispatch (a connectivity
+                // failure is never masked as "degenerate empty content"
+                // — it already returned above via the `Err` arms).
+                let is_plain_text = !matches!(p.category_raw.as_str(), "table" | "equation");
+                let content = if is_plain_text && robustness::is_degenerate(&content) {
+                    ctx.warn(format!(
+                        "mineru-vlm page {}: stage-2 content for block {index} ({}) looks degenerate (repetitive loop) — retrying with escalating temperature",
+                        page.page_num, p.category_raw
+                    ));
+                    let policy = robustness::RetryPolicy::default();
+                    let base_temp = sampling["temperature"].as_f64().unwrap_or(0.0) as f32;
+                    let first_content = content.clone();
+                    let attempt_no = std::sync::atomic::AtomicU32::new(0);
+                    robustness::retry_with_temperature(&policy, base_temp, |temp| {
+                        let n = attempt_no.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let seed = if n == 0 {
+                            Some(first_content.clone())
+                        } else {
+                            None
+                        };
+                        let mut s = sampling.clone();
+                        if let Value::Object(m) = &mut s {
+                            m.insert("temperature".to_string(), serde_json::json!(temp));
+                        }
+                        let req = self.request(self.stage2_endpoint(index), prompt, &data_url, s);
+                        let fallback = first_content.clone();
+                        async move {
+                            if let Some(seed) = seed {
+                                return seed;
+                            }
+                            let _permit = ctx.acquire_permit().await;
+                            match ctx.dispatch(req).await {
+                                Ok(resp) => extract_chat_content(&resp)
+                                    .map(|c| c.to_string())
+                                    .unwrap_or(fallback),
+                                Err(_) => fallback,
+                            }
+                        }
+                    })
+                    .await
+                } else {
+                    content
+                };
+
+                (index, Ok(Some(content)))
             }
         });
         let stage2_results = join_all(futures_iter).await;
@@ -442,6 +496,70 @@ mod tests {
             "image category must skip stage 2 entirely, not dispatch-and-fail"
         );
         assert_eq!(image_block.bbox_px, Some([0, 700, 80, 900]));
+    }
+
+    #[tokio::test]
+    async fn degenerate_stage2_content_retries_with_escalating_temperature() {
+        // Wires `robustness.rs` (T-1.7, never exercised by any adapter
+        // before this) into real use: a stage-2 response that loops a
+        // short phrase should trigger a retry at a higher temperature
+        // rather than being accepted as-is.
+        let adapter = MineruVlmAdapter::default();
+        let mock = Arc::new(MockDispatch::new());
+
+        let layout = "<|box_start|>0 0 200 100<|box_end|><|ref_start|>text<|ref_end|>".to_string();
+        mock.seed(&adapter.stage1_endpoint(), chat_response(&layout));
+        // First stage-2 attempt: degenerate (repetitive loop).
+        mock.seed(
+            &adapter.stage2_endpoint(0),
+            chat_response("loop loop loop loop loop loop loop loop loop loop "),
+        );
+        // Second attempt (after escalating temperature): a real result.
+        mock.seed(
+            &adapter.stage2_endpoint(0),
+            chat_response("a well formed sentence"),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let page = fake_page(400, 1000);
+
+        let blocks = adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page succeeds");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text.as_deref(), Some("a well formed sentence"));
+
+        let warnings = ctx.warnings_snapshot();
+        assert!(
+            warnings.iter().any(|w| w.contains("degenerate")),
+            "{warnings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_degenerate_stage2_content_dispatches_exactly_once() {
+        // The common case: a normal response must not trigger any
+        // extra dispatch — proves the robustness wiring doesn't add
+        // overhead/latency to the already-working path.
+        let adapter = MineruVlmAdapter::default();
+        let mock = Arc::new(MockDispatch::new());
+
+        let layout = "<|box_start|>0 0 200 100<|box_end|><|ref_start|>text<|ref_end|>".to_string();
+        mock.seed(&adapter.stage1_endpoint(), chat_response(&layout));
+        mock.seed(&adapter.stage2_endpoint(0), chat_response("Hello world"));
+        // Deliberately only one seed — a second dispatch attempt would
+        // find no seed and fail the mock lookup, failing this test.
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let page = fake_page(400, 1000);
+
+        let blocks = adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page succeeds");
+        assert_eq!(blocks[0].text.as_deref(), Some("Hello world"));
+        assert!(ctx.warnings_snapshot().is_empty());
     }
 
     #[tokio::test]

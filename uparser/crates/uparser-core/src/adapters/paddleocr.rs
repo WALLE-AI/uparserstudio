@@ -136,6 +136,8 @@ impl ProtocolAdapter for PaddleOcrAdapter {
             .dispatch_rest(
                 &endpoint,
                 serde_json::to_value(req).expect("always serializable"),
+                self.timeout,
+                self.max_retries,
             )
             .await
             .map_err(|e| PageError {

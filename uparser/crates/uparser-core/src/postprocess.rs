@@ -20,7 +20,17 @@ const HORIZONTAL_ALIGN_TOLERANCE_PX: i32 = 20;
 pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
     let mut merged: Vec<Block> = Vec::with_capacity(blocks.len());
 
-    for block in blocks {
+    for mut block in blocks {
+        // Normalize model-generated text (halfwidth/fullwidth punctuation
+        // consistency, collapsed whitespace) before merging — merging
+        // itself doesn't depend on punctuation, but doing this first
+        // means the merged, user-facing output is consistently
+        // normalized rather than only the pieces that happened to
+        // survive unmerged (see `content_normalize.rs`'s module doc).
+        if let Some(text) = &block.text {
+            block.text = Some(crate::content_normalize::normalize(text));
+        }
+
         if block.category.as_deref() == Some("text")
             && let Some(last) = merged.last_mut()
             && last.category.as_deref() == Some("text")
@@ -111,6 +121,31 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].text.as_deref(), Some("First line. Second line."));
         assert_eq!(merged[0].bbox_px, Some([10, 0, 200, 45]));
+    }
+
+    #[test]
+    fn normalizes_punctuation_before_merging() {
+        // The real case content_normalize.rs exists for: adjacent
+        // blocks with inconsistent halfwidth/fullwidth punctuation
+        // should come out normalized after this pass, not just merged
+        // as-is (D.10-adjacent — see the "P0：后处理模块强化" section
+        // of CLI_ENHANCEMENT_PROPOSAL.md).
+        let blocks = vec![text_block([10, 0, 200, 20], "安全投入符合安全生产要求;")];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("安全投入符合安全生产要求；")
+        );
+    }
+
+    #[test]
+    fn does_not_normalize_punctuation_in_non_cjk_text() {
+        let blocks = vec![text_block([10, 0, 200, 20], "Hello, world; how are you?")];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("Hello, world; how are you?")
+        );
     }
 
     #[test]

@@ -189,14 +189,27 @@ impl ParseCtx {
     /// contract). In `Dispatcher::Mock` mode, `endpoint` is used as the
     /// seed key — same mechanism as `dispatch`, no changes needed to
     /// `MockDispatch` itself.
-    pub async fn dispatch_rest(&self, endpoint: &str, body: Value) -> Result<Value, DispatchError> {
+    ///
+    /// `timeout`/`max_retries` are the *caller's own* declared values
+    /// (e.g. `PipelineAdapter.timeout`/`PaddleOcrAdapter.max_retries`) —
+    /// previously this hardcoded `60s`/`2` regardless of what an adapter
+    /// struct actually declared, silently making those two fields dead
+    /// code no configuration attempt could ever affect (see C.4 in
+    /// `CLI_ENHANCEMENT_PROPOSAL.md`).
+    pub async fn dispatch_rest(
+        &self,
+        endpoint: &str,
+        body: Value,
+        timeout: std::time::Duration,
+        max_retries: u32,
+    ) -> Result<Value, DispatchError> {
         match &self.dispatcher {
             Dispatcher::Real(transport) => Ok(transport
                 .dispatch_rest(RestRequest {
                     endpoint: endpoint.to_string(),
                     body,
-                    timeout: std::time::Duration::from_secs(60),
-                    max_retries: 2,
+                    timeout,
+                    max_retries,
                 })
                 .await?),
             Dispatcher::Mock(mock) => mock
@@ -404,6 +417,23 @@ pub fn extract_chat_content(resp: &Value) -> Result<&str, String> {
     ))
 }
 
+/// True if a chat-completions response's `finish_reason` is `"length"`
+/// — the model hit its `max_tokens` budget and the returned content is a
+/// truncated prefix, not a complete response. Distinct from
+/// `extract_chat_content`'s error path: content is still present and
+/// usable (the fault-tolerant `output_parse.rs` parsers can often
+/// recover a valid prefix from it), so this is a warning-level signal
+/// for the caller to surface, not a `PageError`. Previously nothing
+/// checked this at all for content-bearing responses — a
+/// version/document combination that reliably truncates would fail
+/// silently, with the tolerant parser quietly returning whatever
+/// partial structure it could recover from the cut-off text and no
+/// indication that truncation (not malformed output) was the cause (see
+/// D.12 in `CLI_ENHANCEMENT_PROPOSAL.md`).
+pub fn is_truncated_response(resp: &Value) -> bool {
+    resp["choices"][0]["finish_reason"].as_str() == Some("length")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +499,62 @@ mod tests {
         let resp = serde_json::json!({"unexpected": "shape"});
         let err = extract_chat_content(&resp).unwrap_err();
         assert!(err.contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn is_truncated_response_detects_length_finish_reason() {
+        let resp = serde_json::json!({
+            "choices": [{"message": {"content": "partial..."}, "finish_reason": "length"}]
+        });
+        assert!(is_truncated_response(&resp));
+    }
+
+    #[test]
+    fn is_truncated_response_false_for_stop() {
+        let resp = serde_json::json!({
+            "choices": [{"message": {"content": "done"}, "finish_reason": "stop"}]
+        });
+        assert!(!is_truncated_response(&resp));
+    }
+
+    #[test]
+    fn is_truncated_response_false_for_missing_finish_reason() {
+        let resp = serde_json::json!({"choices": [{"message": {"content": "x"}}]});
+        assert!(!is_truncated_response(&resp));
+    }
+
+    #[tokio::test]
+    async fn dispatch_rest_honors_the_callers_own_timeout_not_a_hardcoded_one() {
+        // C.4: `dispatch_rest` previously hardcoded `timeout: 60s`
+        // regardless of what was passed in — a caller-supplied short
+        // timeout would have been silently ignored and this test would
+        // hang for 60s waiting on the slow response instead of failing
+        // fast. Proves the parameter genuinely reaches `Transport`.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+
+        let ctx = ParseCtx::new(Arc::new(Transport::new()), Arc::new(Semaphore::new(1)));
+        let start = std::time::Instant::now();
+        let result = ctx
+            .dispatch_rest(
+                &format!("{}/slow", server.uri()),
+                serde_json::json!({}),
+                std::time::Duration::from_millis(100),
+                0,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "expected the 100ms timeout to be honored, took {:?}",
+            start.elapsed()
+        );
     }
 }

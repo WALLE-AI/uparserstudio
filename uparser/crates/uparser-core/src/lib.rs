@@ -3,6 +3,7 @@ pub mod api;
 pub mod cache;
 pub mod category_map;
 pub mod cli;
+pub mod content_normalize;
 pub mod formula_repair;
 pub mod geometry;
 pub mod imaging;

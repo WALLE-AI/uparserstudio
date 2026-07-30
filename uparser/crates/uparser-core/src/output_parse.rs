@@ -26,6 +26,31 @@ static LAYOUT_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static regex is valid")
 });
 
+/// Fallback for a line that doesn't fit `LAYOUT_LINE_RE`'s exact,
+/// anchored shape but still plausibly contains a real box: no `^...$`
+/// anchor (so leading/trailing junk around the tag sequence doesn't
+/// reject the whole line), and `<|ref_end|>` is optional (a truncated
+/// generation can cut off exactly at the closing tag while everything
+/// needed to build a valid box — coordinates, category — is still
+/// intact). Previously `custom_token` had **zero** rescue levels (unlike
+/// `strict_json`'s 5 and `python_literal`'s 2) — one unparseable line
+/// meant that box was gone, even when most of it was salvageable (see
+/// D.11 in `CLI_ENHANCEMENT_PROPOSAL.md`).
+static LAYOUT_LINE_RELAXED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        // Category is greedy (`\w+`, not `\w+?`) here — with the
+        // trailing `<|ref_end|>` made optional, a lazy quantifier could
+        // satisfy the whole pattern by capturing just one character of
+        // the category and letting the rest fall into the trailing
+        // `(.*)`, since matching zero `<|ref_end|>` occurrences is
+        // always valid. The strict regex avoids this because `<|ref_end|>`
+        // is mandatory there, forcing the lazy category match to expand
+        // until it's found.
+        r"<\|box_start\|>\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*<\|box_end\|>\s*<\|ref_start\|>\s*(\w+)\s*(?:<\|ref_end\|>)?(.*)",
+    )
+    .expect("static regex is valid")
+});
+
 /// Parse mineru-vlm's stage-1 `custom_token` output: one candidate block
 /// per line. Malformed lines, out-of-range/degenerate boxes are skipped
 /// (recorded as warnings) rather than failing the whole page — mirrors
@@ -39,10 +64,21 @@ pub fn parse_custom_tokens(raw: &str) -> (Vec<LayoutBox>, Vec<String>) {
         if line.is_empty() {
             continue;
         }
-        let Some(caps) = LAYOUT_LINE_RE.captures(line) else {
-            warnings.push(format!("unparseable layout line: {line:?}"));
-            continue;
+        let (caps, rescued) = match LAYOUT_LINE_RE.captures(line) {
+            Some(caps) => (caps, false),
+            None => match LAYOUT_LINE_RELAXED_RE.captures(line) {
+                Some(caps) => (caps, true),
+                None => {
+                    warnings.push(format!("unparseable layout line: {line:?}"));
+                    continue;
+                }
+            },
         };
+        if rescued {
+            warnings.push(format!(
+                "rescued a malformed layout line via relaxed matching: {line:?}"
+            ));
+        }
 
         let coords: Option<[u32; 4]> = (|| {
             Some([
@@ -852,6 +888,44 @@ mod tests {
         let (boxes, warnings) = parse_custom_tokens(raw);
         assert!(boxes.is_empty());
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn line_missing_ref_end_is_rescued_via_relaxed_matching() {
+        // Truncated exactly at the closing tag — everything needed to
+        // build a valid box is present, but the strict regex's `$`
+        // anchor after `<|ref_end|>` fails to match at all (D.11).
+        let raw = "<|box_start|>100 200 300 400<|box_end|><|ref_start|>text";
+        let (boxes, warnings) = parse_custom_tokens(raw);
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].category_raw, "text");
+        assert!(
+            warnings.iter().any(|w| w.contains("rescued")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn line_with_leading_garbage_before_tags_is_rescued() {
+        // Some prefix junk before the actual box tag sequence — the
+        // strict regex's `^` anchor rejects this outright even though
+        // the box itself is well-formed.
+        let raw = "garbage<|box_start|>0 0 10 10<|box_end|><|ref_start|>title<|ref_end|>";
+        let (boxes, warnings) = parse_custom_tokens(raw);
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].category_raw, "title");
+        assert!(
+            warnings.iter().any(|w| w.contains("rescued")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn well_formed_line_is_not_flagged_as_rescued() {
+        let raw = "<|box_start|>100 200 300 400<|box_end|><|ref_start|>text<|ref_end|>";
+        let (boxes, warnings) = parse_custom_tokens(raw);
+        assert_eq!(boxes.len(), 1);
+        assert!(warnings.is_empty());
     }
 
     #[test]

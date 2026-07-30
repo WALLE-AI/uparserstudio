@@ -152,7 +152,9 @@ let result_pages: Vec<Page> = result_pages
 
 **注意**：这一步只做 per-page 合并（`merge_paragraphs_by_geometry` 目前的语义就是页内 block 列表），**不是**跨页合并——2.3 节单独设计。先接入这一步已经能让"文档级后处理"这五个字第一次对真实解析生效，且改动小、风险低、Gate G2 已经验证过正确性。
 
-#### 2.2 VLM 输出文本规范化（`content_normalize.rs`，新模块）
+#### 2.2 VLM 输出文本规范化（`content_normalize.rs`，新模块）✅ 已完成（见 `CLAUDE.md` "Post-P10 continued" 第十一批实现记录）
+
+> 实现与设计基本一致，一处加强：`.` 的半角转全角额外加了"前后都是 ASCII 数字则不转换"的保护（避免把 `3.14` 这种小数点误判成中文句号），这是设计草案没提到但真实存在的风险点。调用点也按设计放在 `postprocess::merge_paragraphs_by_geometry` 循环内、合并判断之前，对每个 `text` 非空的 block 生效（不限定 category=="text"）。已用真实案例在真实 vLLM 端点上验证：`（二）安全投入符合安全生产要求；`/`（三）设置安全生产管理机构...；` 两个相邻列表项现在都是全角分号，之前是半角/全角混用。
 
 新增一个纯文本处理模块，专门处理"模型生成文本"层面的常见问题（不涉及版面/结构，只处理 `Block.text`/`Block.html` 里的字符串内容）：
 
@@ -232,15 +234,15 @@ pub fn merge_paragraphs_across_pages(pages: Vec<Page>) -> Vec<Page> { ... }
 
 | # | 位置 | 问题 | 建议 |
 |---|---|---|---|
-| C.1 | `transport.rs::post_with_retry` | 只对 5xx 重试，**429（限流）完全不重试**，也不看 `Retry-After` | 429 是真实 LLM/OCR 后端负载下最常见的失败模式，必须单独处理 |
-| C.2 | 同上 | 退避 `50ms * 2^n` **无上限、无抖动**，第 10 次重试就要睡 ~25.6s，且所有并发失败任务按相同确定性节奏退避，容易在后端恢复瞬间集中撞车 | 加封顶 + 抖动（decorrelated jitter） |
-| C.3 | 同上 | 200 响应但 body 不是合法 JSON（网关截断/返回错误页但状态码仍是 200）**直接失败不重试** | 和网络错误一样应该计入重试预算 |
-| C.4 | `adapters/mod.rs::ParseCtx::dispatch_rest` | 硬编码 `timeout: 60s, max_retries: 2`，完全无视 `PipelineAdapter`/`PaddleOcrAdapter` 结构体上公开的 `timeout`/`max_retries` 字段——**这两个字段被声明了但从未被读取过** | 未来任何"给 pipeline/paddleocr 配置更长超时"的尝试都会看似生效、实际被忽略；应该把这两个字段真正传进 `dispatch_rest` |
-| C.5 | `transport.rs` | 单次调用最坏情况耗时 = `timeout × (max_retries+1) + Σ退避`，**没有外层总耗时上限**，一个大 `timeout` + 大 `max_retries` 组合可以让一页请求无限期拖住整个批次 | 加一层外层 `tokio::time::timeout` 兜底 |
+| C.1 | `transport.rs::post_with_retry` ✅ | 只对 5xx 重试，**429（限流）完全不重试**，也不看 `Retry-After` | 429 是真实 LLM/OCR 后端负载下最常见的失败模式，必须单独处理（实际实现：429 与 5xx 同等重试；新增 `retry_after_from_headers` 解析数字秒形式的 `Retry-After`（HTTP-date 形式回退到计算退避），并加了 30s 兜底上限防止后端返回异常大值） |
+| C.2 | 同上 ✅ | 退避 `50ms * 2^n` **无上限、无抖动**，第 10 次重试就要睡 ~25.6s，且所有并发失败任务按相同确定性节奏退避，容易在后端恢复瞬间集中撞车 | 加封顶 + 抖动（decorrelated jitter）（实际实现：`jittered_backoff` 用 AWS "full jitter" 策略——`[0, min(cap, base))` 内随机，cap=5s；未引入 `rand` crate，用墙钟纳秒作为廉价熵源，仅用于调度抖动非安全敏感场景） |
+| C.3 | 同上 ✅ | 200 响应但 body 不是合法 JSON（网关截断/返回错误页但状态码仍是 200）**直接失败不重试** | 和网络错误一样应该计入重试预算（实际实现：`resp.json()` 解析失败时不再直接 `?` 冒泡，而是计入同一个重试循环，指数退避+抖动后重新发起完整请求） |
+| C.4 | `adapters/mod.rs::ParseCtx::dispatch_rest` ✅ | 硬编码 `timeout: 60s, max_retries: 2`，完全无视 `PipelineAdapter`/`PaddleOcrAdapter` 结构体上公开的 `timeout`/`max_retries` 字段——**这两个字段被声明了但从未被读取过** | 未来任何"给 pipeline/paddleocr 配置更长超时"的尝试都会看似生效、实际被忽略；应该把这两个字段真正传进 `dispatch_rest`（实际实现：`dispatch_rest` 签名新增 `timeout`/`max_retries` 参数，`pipeline.rs`（4 处调用点）/`paddleocr.rs`（1 处）全部改为传入 `self.timeout`/`self.max_retries`；新增测试直接证明短 timeout 真的被 `Transport` 采用而不是被忽略） |
+| C.5 | `transport.rs` ✅ | 单次调用最坏情况耗时 = `timeout × (max_retries+1) + Σ退避`，**没有外层总耗时上限**，一个大 `timeout` + 大 `max_retries` 组合可以让一页请求无限期拖住整个批次 | 加一层外层 `tokio::time::timeout` 兜底（实际实现：新增 `OVERALL_DISPATCH_TIMEOUT`=600s 常量，`post_with_retry` 用 `tokio::time::timeout` 包裹整个重试循环，超时时返回新增的 `TransportError::OverallTimeout`） |
 
 ### D. VLM/OCR 输出内容与结构正确性（和"后处理模块强化"直接相关）
 
-> D.1/D.3/D.4/D.13 ✅ 第四批、D.2/D.5/D.8 ✅ 第五批、D.6/D.7 ✅ 第六批、D.9/D.10 ✅ 第七批均已完成（均见 `CLAUDE.md` "Post-P10 continued" 对应实现记录）；仅 D.11/D.12 仍待实施。
+> D.1-D.13 全部完成（分七批，均见 `CLAUDE.md` "Post-P10 continued" 对应实现记录）——本节审阅出的全部 13 项 D 类发现均已落地。
 
 | # | 位置 | 问题 | 建议 |
 |---|---|---|---|
@@ -254,8 +256,8 @@ pub fn merge_paragraphs_across_pages(pages: Vec<Page>) -> Vec<Page> { ... }
 | D.8 | `category_map.rs` ✅ | 只有 `map_mineru_vlm_category` 在匹配前做了大小写规范化（因为上游已经统一转小写），`map_dots_ocr_category`/`map_monkeyocrv2_category` 都是精确 Title-Case 匹配——`list_item` 这次能在 mineru-vlm 上被发现纯粹是因为它落到了"未知类别"分支并打了警告；dots-ocr/MonkeyOCRv2 如果发生类似的词表漂移（比如某次模型更新把 `"Text"` 吐成 `"text"`），**同样会静默落进 unknown，没有任何一致的防线** | 三个 mapper 统一加大小写/连字符规范化，而不是只有一个有（实际实现：新增共享 `normalize_key`（小写化 + 剔除 `-`/`_`/空格），`map_mineru_vlm_category`/`map_dots_ocr_category`/`map_monkeyocrv2_category`/`map_pipeline_category` 四个 mapper 统一在匹配前调用） |
 | D.9 | `formula_repair.rs::balance_brackets` ✅ | `{`/`}` 和 `\left`/`\right` 各自独立计数，不追踪配对顺序/类型——像 `\left[ \frac{a}{b} \right)` 这种数量配平但语义错配的情况修复不了 | 改成单一有序栈，同时追踪 delimiter 类型（实际实现：经核实 `\left[a,b\right)` 是合法 LaTeX（半开区间记号），不应"修复"成类型匹配——改为修复一个真实存在的不对称缺口：之前只处理"开多于闭"方向，"闭多于开"（如多出的 `}` 或孤立的 `\right`）完全没有处理，现已对称支持双向补齐） |
 | D.10 | `dots_ocr.rs` vs `mineru_vlm.rs`/`monkeyocr_v2.rs` ✅ | dots-ocr 的公式输出**没有包一层 `\[...\]`/`$$...$$`**，另外两个协议都包了——同一个 `Block.latex` 字段，不同协议产出的内容形态不一致，下游渲染消费的时候会不一致 | 在 adapter 边界统一，或者交给（P0 新增的）`content_normalize.rs` 统一处理（实际实现：新增共享 `formula_repair::wrap_display_math`（`\[...\]`，与 `render.rs` 直接透传 `Block.latex` 的行为兼容），dots-ocr 接入；MonkeyOCRv2 保留自己真实上游确认过的 `$$...$$` 包装，未强行统一，但补上了上游本身就有、这次移植时遗漏的幂等检查，避免二次包装） |
-| D.11 | `output_parse.rs` 三个解析器（custom_token/strict_json/python_literal） | 容错层级不对称：`strict_json` 有 5 级修复、`python_literal` 有 2 级，**`custom_token`（mineru-vlm 用，也是本次真实验证中唯一发现过词表漂移的格式）反而是 0 级**，一行解析失败就整行跳过 | 至少给 custom_token 补一级"能抢救的先抢救、坐标 clamp、发警告"，而不是整行作废 |
-| D.12 | `monkeyocr_v2.rs` 布局调用 | `max_tokens: 4096` 固定值，dots-ocr 同类调用用的是 `32768`——版面密集的页面（比如表格多的财报）容易在 4096 就被截断，且**没有任何截断信号**，容错解析器会默默返回截断后能解析的前缀 | 提高默认值到接近 dots-ocr 的量级，并检测 `finish_reason == "length"` 时发出警告 |
+| D.11 | `output_parse.rs` 三个解析器（custom_token/strict_json/python_literal） ✅ | 容错层级不对称：`strict_json` 有 5 级修复、`python_literal` 有 2 级，**`custom_token`（mineru-vlm 用，也是本次真实验证中唯一发现过词表漂移的格式）反而是 0 级**，一行解析失败就整行跳过 | 至少给 custom_token 补一级"能抢救的先抢救、坐标 clamp、发警告"，而不是整行作废（实际实现：新增 `LAYOUT_LINE_RELAXED_RE` 作为一级回退——去掉行首尾锚定、`<\|ref_end\|>` 变可选，salvage 截断/带垃圾前缀但核心 box 信息完整的行，并发"rescued"警告） |
+| D.12 | `monkeyocr_v2.rs` 布局调用 ✅ | `max_tokens: 4096` 固定值，dots-ocr 同类调用用的是 `32768`——版面密集的页面（比如表格多的财报）容易在 4096 就被截断，且**没有任何截断信号**，容错解析器会默默返回截断后能解析的前缀 | 提高默认值到接近 dots-ocr 的量级，并检测 `finish_reason == "length"` 时发出警告（实际实现：核实真实上游 `core_runner.py::get_layout()` 本身就固定用 `max_tokens=4096`——这是协议本身的真实限制，不是移植错误，调高数值反而会偏离真实协议保真度，因此**未改动数值**；只做了建议里真正有价值、无风险的部分——新增共享 `adapters::is_truncated_response` 检测 `finish_reason == "length"`，接入 monkeyocr-v2 布局调用点并发警告） |
 | D.13 | `mineru_vlm.rs`/`dots_ocr.rs`/`monkeyocr_v2.rs` 的 `extract_content()` ✅ | 模型返回错误信封/内容审核拒绝/`content: null` 等任何非纯字符串场景，`.unwrap_or("")` 一律当成"模型合法返回了空字符串"——版面检测阶段会静默产出 0 个 block（整页看起来是空白页，不报错）。对比 `pipeline.rs`/`paddleocr.rs` 用 `serde_json::from_value` 对同类"响应形状不对"场景会正确抛 `PageError` | 三个 chat 类 adapter 应该检查 content 字段确实存在，不存在时带上原始响应的 `error`/`finish_reason` 抛错，而不是静默降级成空（实际实现：新增共享 `adapters::extract_chat_content`，区分「choices[0]缺失」/「backend error」/「非stop的finish_reason」/「content显式为null」四种情况，返回可读诊断信息；stage1/单轮调用失败即整页 `PageError`，stage2 每 block 调用失败仅该 block 标记 `error`） |
 
 ### E. 阅读顺序算法（`reading_order.rs`）
@@ -284,7 +286,9 @@ pub fn merge_paragraphs_across_pages(pages: Vec<Page>) -> Vec<Page> { ... }
 
 ---
 
-## P1：`robustness.rs` 接入真实 adapter 调用链
+## P1：`robustness.rs` 接入真实 adapter 调用链 ✅ 已完成（见 `CLAUDE.md` "Post-P10 continued" 第十批实现记录）
+
+> 实现与设计有一处关键差异，是本节自己"注意边界"提醒之后又踩了一次的坑：下面示例代码里 `Err(_) => String::new()` 会把网络错误伪装成"合法的空字符串"，而 `is_degenerate` 对短字符串（<12 字符）直接返回 `false`——这会导致真实的网络/解析失败被静默当成"这次请求成功且没有退化"，是这次 D.13 刚修过的同一类 bug。实际实现改为：只有在**已经拿到一次真实成功响应**之后才进入 robustness 重试路径（第一次 dispatch 的错误处理完全不变，仍然正常传播为 `PageError`/block `error`）；重试路径本身的失败会回退到"上一次已知内容"而不是空字符串，保证 `is_degenerate` 检查始终看到有意义的输入。范围也从"先只接 mineru_vlm.rs"扩大到 mineru-vlm + monkeyocr-v2（两者结构相同，改动量相近）；dots-ocr 因为是单轮整页调用（不是逐 block），不适合套用同一个"per-block 重试"模式，留待以后单独设计。
 
 ### 问题
 
@@ -427,9 +431,11 @@ else if let Some(text) = &block.text { out.push_str(text); }
 4. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第四批实现记录）—— P0：VLM 输出正确性收敛（深度审阅 D 类，优先项）**——D.1（`rescale_bbox_to_original` 除零静默饱和，两路审阅独立发现）、D.3（MonkeyOCRv2 `\u`/`\x` 转义静默丢字/损坏文本）、D.4（dots-ocr 完全没有 bbox 校验，新增共享 `geometry::sanitize_bbox_px`）、D.13（chat 类 adapter 把畸形响应当空字符串，新增共享 `adapters::extract_chat_content`）均已完成并通过真实端点回归验证（249 unit + 24 CLI + 2 contract 测试全绿，`--features native`）。
 4b. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第五批实现记录）—— P0：VLM 输出正确性收敛第二批**——D.2（mineru-vlm 坐标越界改 clamp 而不是丢弃整块）、D.5（`imaging::crop` 越界不再硬造 1×1 占位图，改 `Option<RgbImage>`）、D.8（四个 `category_map.rs` mapper 统一加大小写/连字符规范化）均已完成并通过真实端点回归验证（255 unit + 24 CLI + 2 contract 测试全绿，`--features native`）。
 4c. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第六批实现记录）—— P0：表格解析正确性收敛**——D.6（`otsl.rs` xcel span 冲突改为按更大 span 决策并发警告，而不是静默选边）、D.7（`otsl::to_html` 只有 `</table>` 结尾校验通过才信任 HTML 透传，否则退回 OTSL 分词）均已完成并通过真实端点回归验证（258 unit + 24 CLI + 2 contract 测试全绿，`--features native`）。
-4d. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第七批实现记录）—— P0：公式/LaTeX 处理收敛**——D.9（`balance_brackets` 补齐"闭多于开"方向的对称处理，同时确认 `\left[...\right)` 类型不匹配是合法 LaTeX 不应"修复"）、D.10（新增共享 `formula_repair::wrap_display_math`，dots-ocr 接入统一 `\[...\]` 包装；MonkeyOCRv2 保留真实上游确认过的 `$$...$$`，但补上遗漏的幂等检查）均已完成并通过真实端点回归验证（259 unit + 25 CLI + 2 contract 测试全绿）。仅 D.11/D.12 仍待实施。
-5. **P0：`content_normalize.rs`（标点规范化）+ D.10（LaTeX 包裹不一致）**：范围小、有真实案例可以直接写测试，建议紧跟在 postprocess 接入之后一起做（同属"后处理"这条主干）。跨页合并（2.3）风险稍高（要碰 IR），可以单独放一个迭代。
-6. **P1 三项按需**：`robustness.rs` 接入建议做（补齐一个"设计了但没用上"的模块，和后处理属于同一类"真实模型输出质量"问题）；网络重试鲁棒性（C 类：429 重试、backoff 上限+抖动、`dispatch_rest` 超时配置生效）建议和 `robustness.rs` 一起做，同属"应对真实后端不稳定"这条主线；配置文件和 CLI 瘦身可以等参数列表继续增长到确实难用时再做。
+4d. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第七批实现记录）—— P0：公式/LaTeX 处理收敛**——D.9（`balance_brackets` 补齐"闭多于开"方向的对称处理，同时确认 `\left[...\right)` 类型不匹配是合法 LaTeX 不应"修复"）、D.10（新增共享 `formula_repair::wrap_display_math`，dots-ocr 接入统一 `\[...\]` 包装；MonkeyOCRv2 保留真实上游确认过的 `$$...$$`，但补上遗漏的幂等检查）均已完成并通过真实端点回归验证（259 unit + 25 CLI + 2 contract 测试全绿）。
+4e. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第八批实现记录）—— P0：D 类收尾**——D.11（`custom_token` 解析器补齐一级 relaxed-match 回退，与 strict_json/python_literal 的容错层级对齐）、D.12（核实真实上游 `max_tokens=4096` 本身就是协议真实限制而非移植缺陷，未强改数值；新增共享 `is_truncated_response` 检测 `finish_reason: length` 并接入 monkeyocr-v2 布局调用点）均已完成并通过真实端点回归验证（266 unit + 25 CLI + 2 contract 测试全绿，`--features native` 273 unit）。**深度审阅 D 类全部 13 项发现均已实施完毕**，剩余待办转向 C/F/G/H 类及 `content_normalize.rs`/`robustness.rs` 接入等结构性项目。
+5. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第十一批实现记录）—— P0：`content_normalize.rs`（标点规范化）**——新模块 `normalize_punctuation`（CJK 占比阈值门控 + 小数点保护）+ `collapse_whitespace`，接入 `postprocess::merge_paragraphs_by_geometry`，对每个 `text` 非空 block 在合并前生效。已用真实案例在真实端点验证（291 unit + 25 CLI + 2 contract 测试全绿，`--features native` 298 unit）。D.10（LaTeX 包裹不一致）已在更早批次完成（见 D 类记录）。跨页合并（2.3）风险较高（要碰 IR），仍单独留待后续迭代。
+6. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第九批实现记录）—— P1：网络重试鲁棒性（C 类）**——C.1（429 与 5xx 同等重试，解析 `Retry-After`）、C.2（`jittered_backoff` full-jitter 策略，5s 封顶）、C.3（200+非法 JSON body 计入重试预算）、C.4（`dispatch_rest` 真正读取调用方 `timeout`/`max_retries`，`pipeline.rs`/`paddleocr.rs` 5 处调用点全部接入）、C.5（`OVERALL_DISPATCH_TIMEOUT`=600s 外层兜底）均已完成并通过真实端点回归验证（275 unit + 25 CLI + 2 contract 测试全绿，`--features native` 282 unit）。
+6b. ✅ **已完成（见 `CLAUDE.md` "Post-P10 continued" 第十批实现记录）—— P1：`robustness.rs` 接入**——mineru-vlm 与 monkeyocr-v2 的 stage-2 单 block 内容识别循环均已接入 `is_degenerate`/`retry_with_temperature`，只对纯文本类别生效（table/equation 需要结构保真，不套用"看起来在循环"的启发式），且只在已经拿到一次真实成功响应之后才触发，避免把网络错误伪装成"空内容"。dots-ocr（单轮整页调用，不是逐 block）不适用同一模式，留待以后单独设计。已完成并通过真实端点回归验证（278 unit + 25 CLI + 2 contract 测试全绿，`--features native` 285 unit）。配置文件和 CLI 瘦身可以等参数列表继续增长到确实难用时再做。
 7. **P2 Markdown 增强 + F 类 CLI 一致性小修**：先做"剔除 page_number"这一个低风险子项，顺带把 F.1（pipeline 后端 flag 静默丢弃）、F.2（`--max-concurrency 0` 该报错却被静默夹到 1）这类"参数校验不一致"的小问题一起清掉，改动都很小。
 8. **P3 留档不动**：`cli.rs`/`api.rs` 统一、npm/pip 打包脚手架、E 类阅读顺序算法增强（窄装订线/旋转感知）、G 类 SSRF 加固（等真的有服务化计划再做）、H 类 IR/Schema 细节，记录在案，不在这轮排期。
 

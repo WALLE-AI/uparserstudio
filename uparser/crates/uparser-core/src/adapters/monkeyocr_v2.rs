@@ -24,10 +24,12 @@ use crate::imaging;
 use crate::ingest::RenderedPage;
 use crate::otsl;
 use crate::output_parse;
+use crate::robustness;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
 use futures::future::join_all;
+use serde_json::Value;
 use std::time::Duration;
 
 const TARGET_PIXELS: u32 = 1_003_520;
@@ -201,6 +203,12 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             message: e,
             stage: Some("layout".into()),
         })?;
+        if super::is_truncated_response(&layout_resp) {
+            ctx.warn(format!(
+                "monkeyocr-v2 page {}: layout response was truncated (finish_reason: length) — the real MonkeyOCRv2 protocol's own `get_layout()` uses a fixed max_tokens=4096 budget (confirmed in core_runner.py), so a dense/table-heavy page can legitimately exceed it; recovered content below may be an incomplete prefix",
+                page.page_num
+            ));
+        }
         let (cells, warnings) = output_parse::parse_python_literal_list(layout_content);
         for w in &warnings {
             ctx.warn(format!("monkeyocr-v2 page {}: {w}", page.page_num));
@@ -251,13 +259,62 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
 
                 let req = self.request(self.stage2_endpoint(index), prompt, &data_url, 10000);
                 let _permit = ctx.acquire_permit().await;
-                match ctx.dispatch(req).await {
+                let content = match ctx.dispatch(req).await {
                     Ok(resp) => match extract_chat_content(&resp) {
-                        Ok(content) => (index, Ok(Some(content.to_string()))),
-                        Err(e) => (index, Err(e)),
+                        Ok(content) => content.to_string(),
+                        Err(e) => return (index, Err(e)),
                     },
-                    Err(e) => (index, Err(e.to_string())),
-                }
+                    Err(e) => return (index, Err(e.to_string())),
+                };
+
+                // Robustness: wiring `robustness.rs` (T-1.7, designed
+                // but never used by any adapter since P1) in for this
+                // protocol too — same shape as mineru-vlm's: only for
+                // plain free-text content (not table/formula, which need
+                // structural fidelity), and only *after* a real
+                // successful dispatch, so a connectivity failure is
+                // never masked as "degenerate empty content" (it already
+                // returned above via the `Err` arms).
+                let is_plain_text = !matches!(p.label.as_str(), "Table" | "Formula");
+                let content = if is_plain_text && robustness::is_degenerate(&content) {
+                    ctx.warn(format!(
+                        "monkeyocr-v2 page {}: stage-2 content for block {index} ({}) looks degenerate (repetitive loop) — retrying with escalating temperature",
+                        page.page_num, p.label
+                    ));
+                    let policy = robustness::RetryPolicy::default();
+                    let first_content = content.clone();
+                    let attempt_no = std::sync::atomic::AtomicU32::new(0);
+                    robustness::retry_with_temperature(&policy, 0.0, |temp| {
+                        let n = attempt_no.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let seed = if n == 0 {
+                            Some(first_content.clone())
+                        } else {
+                            None
+                        };
+                        let mut req = self.request(self.stage2_endpoint(index), prompt, &data_url, 10000);
+                        if let Value::Object(m) = &mut req.sampling {
+                            m.insert("temperature".to_string(), serde_json::json!(temp));
+                        }
+                        let fallback = first_content.clone();
+                        async move {
+                            if let Some(seed) = seed {
+                                return seed;
+                            }
+                            let _permit = ctx.acquire_permit().await;
+                            match ctx.dispatch(req).await {
+                                Ok(resp) => extract_chat_content(&resp)
+                                    .map(|c| c.to_string())
+                                    .unwrap_or(fallback),
+                                Err(_) => fallback,
+                            }
+                        }
+                    })
+                    .await
+                } else {
+                    content
+                };
+
+                (index, Ok(Some(content)))
             }
         });
         let stage2_results = join_all(futures_iter).await;
@@ -316,7 +373,6 @@ mod tests {
     use super::*;
     use crate::testing::MockDispatch;
     use image::{Rgb, RgbImage};
-    use serde_json::Value;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
@@ -411,6 +467,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn degenerate_stage2_content_retries_with_escalating_temperature() {
+        let adapter = MonkeyOcrV2Adapter::default();
+        let mock = Arc::new(MockDispatch::new());
+
+        let layout = r#"[{'bbox': [0, 0, 200, 100], 'label': 'Text'}]"#;
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        mock.seed(
+            &adapter.stage2_endpoint(0),
+            chat_response("loop loop loop loop loop loop loop loop loop loop "),
+        );
+        mock.seed(
+            &adapter.stage2_endpoint(0),
+            chat_response("a well formed sentence"),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let page = fake_page(400, 1000);
+
+        let blocks = adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page succeeds");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text.as_deref(), Some("a well formed sentence"));
+
+        let warnings = ctx.warnings_snapshot();
+        assert!(
+            warnings.iter().any(|w| w.contains("degenerate")),
+            "{warnings:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn missing_stage1_seed_yields_page_error() {
         let adapter = MonkeyOcrV2Adapter::default();
         let mock = Arc::new(MockDispatch::new());
@@ -440,6 +529,40 @@ mod tests {
             .expect("parse_page succeeds");
         assert!(!blocks.is_empty());
         assert_eq!(blocks[0].category.as_deref(), Some("text"));
+    }
+
+    #[tokio::test]
+    async fn truncated_layout_response_surfaces_a_warning_but_still_recovers_content() {
+        // A dense/table-heavy page can legitimately exceed the real
+        // protocol's fixed 4096-token layout budget (confirmed in
+        // core_runner.py) — `finish_reason: "length"` on a
+        // content-bearing response should surface a warning (D.12), not
+        // silently return whatever partial structure the tolerant
+        // parser could recover with zero indication the cause was
+        // truncation rather than malformed output.
+        let adapter = MonkeyOcrV2Adapter::default();
+        let mock = Arc::new(MockDispatch::new());
+        let truncated = serde_json::json!({
+            "choices": [{
+                "message": {"content": r#"[{"bbox": [0, 0, 200, 100], "label": "Text"}"#},
+                "finish_reason": "length",
+            }]
+        });
+        mock.seed(&adapter.stage1_endpoint(), truncated);
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(1)));
+        let page = fake_page(400, 1000);
+
+        let blocks = adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page still recovers a partial result");
+        assert!(!blocks.is_empty());
+        let warnings = ctx.warnings_snapshot();
+        assert!(
+            warnings.iter().any(|w| w.contains("truncated")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
