@@ -77,9 +77,26 @@ pub enum Command {
         /// `--endpoint`).
         #[arg(long)]
         model: Option<String>,
-        #[arg(long, default_value_t = 16)]
+        /// Number of pages rasterized+processed together before the
+        /// window's page buffers are dropped and the next window begins
+        /// (bounds peak memory to ~O(window) page images, not O(total)).
+        /// Default 64 so any document up to 64 pages runs as a single
+        /// barrier-free window — the inter-window barrier drains
+        /// in-flight concurrency to zero, so a window smaller than the
+        /// document only hurts throughput on large docs. At runtime the
+        /// effective window is raised to at least `--max-concurrency`
+        /// (a window smaller than the concurrency budget can never
+        /// saturate it). Lower it only to cap memory on huge documents.
+        #[arg(long, default_value_t = 64)]
         window_size: usize,
-        #[arg(long, default_value_t = 4)]
+        /// Max concurrent model requests in flight across the whole
+        /// document (page-level + per-block, sharing one budget).
+        /// Default 16 — the empirically-measured sweet spot against a
+        /// remote vLLM backend (the prior default of 4 left the endpoint
+        /// badly under-fed; MinerU's own http client defaults to 100).
+        /// Raise toward 32-100 for a beefier endpoint, lower for a
+        /// fragile/shared one.
+        #[arg(long, default_value_t = 16)]
         max_concurrency: usize,
         /// `pipeline`-only per-stage backend/endpoint overrides
         /// (ARCHITECTURE.md §11.2/T-5.1). Ignored by every other
@@ -459,7 +476,12 @@ fn run_parse(
 
     let transport = Arc::new(Transport::new());
     let permits = Arc::new(Semaphore::new(max_concurrency.max(1)));
-    let scheduler = Scheduler::new(window_size.max(1));
+    // A window smaller than the concurrency budget can never saturate it
+    // (the inter-window barrier drains in-flight requests to zero before
+    // the next window starts), so raise the effective window to at least
+    // `max_concurrency`. Users lower `--window-size` only to cap memory.
+    let effective_window = window_size.max(max_concurrency).max(1);
+    let scheduler = Scheduler::new(effective_window);
 
     // Computed once, reused by both the streaming per-window callback and
     // the non-streaming aggregate result below, so a stream of NDJSON

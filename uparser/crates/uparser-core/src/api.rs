@@ -73,8 +73,13 @@ impl Default for ParseOptions {
             protocol: "mock".to_string(),
             endpoint: None,
             model: None,
-            window_size: 16,
-            max_concurrency: 4,
+            // See cli.rs's `--window-size`/`--max-concurrency` doc
+            // comments for the rationale behind these defaults: 64 keeps
+            // any <=64-page document as a single barrier-free window, and
+            // 16 is the measured sweet spot against a remote vLLM backend
+            // (the old default of 4 badly under-fed the endpoint).
+            window_size: 64,
+            max_concurrency: 16,
             pipeline_config: PipelineConfig::default(),
             no_cache: false,
             no_postprocess: false,
@@ -265,7 +270,11 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
 
     let transport = Arc::new(Transport::new());
     let permits = Arc::new(Semaphore::new(options.max_concurrency.max(1)));
-    let scheduler = Scheduler::new(options.window_size.max(1));
+    // A window smaller than the concurrency budget can never saturate it
+    // (see cli.rs for the same clamp and its rationale), so raise the
+    // effective window to at least `max_concurrency`.
+    let effective_window = options.window_size.max(options.max_concurrency).max(1);
+    let scheduler = Scheduler::new(effective_window);
     let (result_pages, page_errors, warnings) =
         scheduler.run(adapter, transport, permits, pages).await;
     let result_pages = if options.no_postprocess {
