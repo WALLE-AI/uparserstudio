@@ -54,6 +54,17 @@ pub struct ParseOptions {
     /// a protocol/endpoint against one page of a large document without
     /// waiting for every earlier page first.
     pub pages: Option<Vec<u32>>,
+    /// Directory image/chart-category block crops get written to (see
+    /// `assets.rs`), overriding `assets::default_assets_dir(path)`.
+    /// Ignored when `no_assets` is set.
+    pub assets_dir: Option<String>,
+    /// Skip writing image assets to disk entirely (and leave every
+    /// block's `asset_path` unset) — an explicit opt-out for a caller
+    /// that doesn't want the filesystem side effect `write_page_assets`
+    /// introduces by default (see `image_link_gap_report.md` for why
+    /// that default-on behavior was chosen: it mirrors MinerU's own
+    /// unconditional `images/` output convention).
+    pub no_assets: bool,
 }
 
 impl Default for ParseOptions {
@@ -68,6 +79,8 @@ impl Default for ParseOptions {
             no_cache: false,
             no_postprocess: false,
             pages: None,
+            assets_dir: None,
+            no_assets: false,
         }
     }
 }
@@ -267,7 +280,7 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
             .collect()
     };
 
-    let result = ParseResult {
+    let mut result = ParseResult {
         source_path: path.to_string(),
         source_sha256,
         protocol: effective_protocol,
@@ -285,6 +298,17 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         warnings,
         timing: Default::default(),
     };
+
+    if !options.no_assets {
+        let assets_dir = options
+            .assets_dir
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::assets::default_assets_dir(path));
+        if let Err(e) = crate::assets::write_block_assets(&mut result, &assets_dir) {
+            eprintln!("warning: failed to write image assets: {e}");
+        }
+    }
 
     if !options.no_cache {
         let _ = cache::put(&cache_dir, &cache_key, &result);

@@ -753,6 +753,97 @@ async fn unrecognized_category_warning_surfaces_in_parse_result_warnings() {
     );
 }
 
+/// Proves the image-asset pipeline (`image_link_gap_report.md`) end to
+/// end through the real CLI binary: an "image"-category layout box
+/// results in a real PNG file on disk under `--assets-dir`, referenced
+/// by `asset_path` in the JSON output, with no `asset_bytes` key
+/// anywhere (that field is `#[serde(skip)]` and must never leak).
+#[tokio::test]
+async fn image_category_block_writes_a_real_asset_file_and_references_it_in_json() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content":
+                "<|box_start|>100 100 500 500<|box_end|><|ref_start|>image<|ref_end|>"
+            }}]
+        })))
+        .mount(&server)
+        .await;
+
+    // A real 100x100 page — "image" is in mineru-vlm's SKIP_CONTENT, so
+    // no stage-2 request is ever seeded/expected for it.
+    let png_bytes = {
+        let img = image::RgbImage::from_pixel(100, 100, image::Rgb([200, 100, 50]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&png_bytes).unwrap();
+    let cache_dir = isolated_cache_dir();
+    let assets_dir = tempfile::tempdir().unwrap();
+
+    let output = tokio::task::spawn_blocking({
+        let path = file.path().to_str().unwrap().to_string();
+        let cache_dir = cache_dir.path().to_path_buf();
+        let assets_dir_path = assets_dir.path().to_path_buf();
+        let endpoint = format!("{}/v1/chat/completions", server.uri());
+        move || {
+            Command::cargo_bin("uparser")
+                .unwrap()
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args([
+                    "parse",
+                    &path,
+                    "--protocol",
+                    "mineru-vlm",
+                    "--endpoint",
+                    &endpoint,
+                    "--format",
+                    "json",
+                    "--assets-dir",
+                    assets_dir_path.to_str().unwrap(),
+                ])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone()
+        }
+    })
+    .await
+    .unwrap();
+
+    let stdout_str = String::from_utf8(output.clone()).unwrap();
+    assert!(
+        !stdout_str.contains("asset_bytes"),
+        "asset_bytes must never appear in JSON output: {stdout_str}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let block = &parsed["pages"][0]["blocks"][0];
+    assert_eq!(block["category"], "image");
+    let asset_path = block["asset_path"]
+        .as_str()
+        .expect("image block must have asset_path set");
+    assert!(asset_path.ends_with(".png"));
+
+    let filename = std::path::Path::new(asset_path)
+        .file_name()
+        .expect("asset_path must have a filename component");
+    let on_disk_path = assets_dir.path().join(filename);
+    let on_disk_bytes =
+        std::fs::read(&on_disk_path).unwrap_or_else(|e| panic!("{on_disk_path:?}: {e}"));
+    image::load_from_memory(&on_disk_bytes).expect("written file must be valid PNG bytes");
+}
+
 /// Proves DOCX input reaches real `normalize_format` conversion logic
 /// through the CLI (previously: silently degraded to the 1x1 placeholder
 /// and got fed to a protocol adapter as a blank image, exit 0, no

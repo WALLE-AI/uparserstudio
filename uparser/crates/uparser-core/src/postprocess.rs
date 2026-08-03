@@ -99,6 +99,8 @@ mod tests {
             confidence: None,
             source: BlockSource::LayoutThenRecognize,
             error: None,
+            asset_bytes: None,
+            asset_path: None,
         }
     }
 

@@ -118,6 +118,8 @@ fn map_text_item(item: liteparse::TextItem) -> Block {
         confidence: item.confidence,
         source: BlockSource::NativeTextLayer,
         error: None,
+        asset_bytes: None,
+        asset_path: None,
     }
 }
 

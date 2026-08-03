@@ -23,6 +23,16 @@ pub fn to_markdown(result: &ParseResult) -> String {
             } else if let Some(text) = &block.text {
                 out.push_str(text);
                 out.push_str("\n\n");
+            } else if let Some(asset_path) = &block.asset_path {
+                // See `image_link_gap_report.md`: image-category blocks
+                // previously fell through every branch above with
+                // text/html/latex all `None`, producing no Markdown
+                // output at all. `asset_path` is only ever populated
+                // by `assets::write_page_assets` after a real crop was
+                // written to disk.
+                out.push_str("![](");
+                out.push_str(asset_path);
+                out.push_str(")\n\n");
             }
         }
     }
@@ -41,6 +51,7 @@ pub fn to_content_list(result: &ParseResult) -> String {
                     "text": block.text,
                     "html": block.html,
                     "latex": block.latex,
+                    "asset_path": block.asset_path,
                 })
             })
         })
@@ -81,6 +92,8 @@ mod tests {
                     confidence: Some(1.0),
                     source: BlockSource::OneShotVlm,
                     error: None,
+                    asset_bytes: None,
+                    asset_path: None,
                 }],
             }],
             page_errors: vec![],
@@ -93,6 +106,33 @@ mod tests {
     #[test]
     fn markdown_snapshot() {
         insta::assert_snapshot!(to_markdown(&sample_result()));
+    }
+
+    #[test]
+    fn markdown_renders_an_image_only_block_as_a_link() {
+        let mut result = sample_result();
+        result.pages[0].blocks[0].text = None;
+        result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
+        assert_eq!(to_markdown(&result), "![](doc_images/abc123.png)");
+    }
+
+    #[test]
+    fn markdown_prefers_text_over_asset_path_when_both_are_present() {
+        // Shouldn't happen in practice (an adapter either extracts text
+        // or crops an image, not both, for the same block) but the
+        // fallback order should still be deterministic if it ever does.
+        let mut result = sample_result();
+        result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
+        assert_eq!(to_markdown(&result), "Hello world");
+    }
+
+    #[test]
+    fn content_list_includes_asset_path() {
+        let mut result = sample_result();
+        result.pages[0].blocks[0].text = None;
+        result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
+        let list = to_content_list(&result);
+        assert!(list.contains("doc_images/abc123.png"));
     }
 
     #[test]
@@ -131,6 +171,8 @@ mod tests {
                 confidence: None,
                 source,
                 error: None,
+                asset_bytes: None,
+                asset_path: None,
             }
         }
 

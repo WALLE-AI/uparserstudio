@@ -345,6 +345,16 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 Err(e) => (None, None, None, Some(e)),
             };
 
+            // Same shape as mineru-vlm's equivalent: skip calling the
+            // model for "Picture" content (real protocol behavior), but
+            // still crop-and-preserve the pixels so `render.rs` has
+            // something to link to (see `image_link_gap_report.md`).
+            let asset_bytes = if p.label == "Picture" {
+                imaging::crop(&page_rgb, p.bbox_px).and_then(|img| imaging::to_png_bytes(&img).ok())
+            } else {
+                None
+            };
+
             let [x0, y0, x1, y1] = p.bbox_px;
             blocks.push(Block {
                 geom: Geometry::Rect([x0 as f32, y0 as f32, x1 as f32, y1 as f32]),
@@ -361,6 +371,8 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 confidence: None,
                 source: BlockSource::LayoutThenRecognize,
                 error,
+                asset_bytes,
+                asset_path: None,
             });
         }
 
@@ -464,6 +476,15 @@ mod tests {
             picture_block.error.is_none(),
             "Picture must skip stage 2 entirely, not dispatch-and-fail"
         );
+        // image_link_gap_report.md: the model is never called for
+        // "Picture" content, but the pixels must still be cropped and
+        // preserved for `render.rs` to link to.
+        let asset_bytes = picture_block
+            .asset_bytes
+            .as_ref()
+            .expect("Picture block must have cropped pixels attached");
+        let decoded = image::load_from_memory(asset_bytes).expect("must be valid PNG bytes");
+        assert_eq!((decoded.width(), decoded.height()), (80, 200));
     }
 
     #[tokio::test]

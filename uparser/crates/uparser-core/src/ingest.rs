@@ -184,6 +184,8 @@ fn sheet_block(rows: &[Vec<String>]) -> Block {
         confidence: None,
         source: BlockSource::StructuredNative,
         error: None,
+        asset_bytes: None,
+        asset_path: None,
     }
 }
 

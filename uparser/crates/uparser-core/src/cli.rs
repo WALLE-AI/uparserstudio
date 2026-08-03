@@ -53,6 +53,12 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+// `Parse` genuinely has many CLI-flag-derived fields (clap subcommand
+// variants, not a hot-path data structure) — boxing individual fields to
+// shrink the enum would complicate clap's derive parsing for no runtime
+// benefit; `Command` is only ever constructed once per process, matched
+// once in `run()`.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     Parse {
         path: String,
@@ -122,6 +128,20 @@ pub enum Command {
         /// earlier page first. Omit to parse every page.
         #[arg(long)]
         pages: Option<String>,
+        /// Directory image/chart-category block crops get written to,
+        /// overriding the default `<source_stem>_images/` next to the
+        /// source document (mirrors MinerU's own `images/` output
+        /// convention — see `image_link_gap_report.md`). Ignored if
+        /// `--no-assets` is set.
+        #[arg(long)]
+        assets_dir: Option<String>,
+        /// Skip writing image assets to disk entirely — every block's
+        /// `asset_path` stays unset and `to_markdown` never emits an
+        /// `![](...)` link. An explicit opt-out for callers that don't
+        /// want the filesystem side effect image-asset writing
+        /// introduces by default.
+        #[arg(long)]
+        no_assets: bool,
     },
     /// Run the Profiler only (no protocol adapter, no full parse) and
     /// print the resulting DocumentProfile as JSON. Per ARCHITECTURE.md
@@ -188,6 +208,8 @@ pub fn run(cli: Cli) -> i32 {
             stream,
             no_postprocess,
             pages,
+            assets_dir,
+            no_assets,
         } => {
             let wanted_pages = match pages.as_deref().map(crate::page_range::parse_page_range) {
                 Some(Ok(pages)) => Some(pages),
@@ -248,6 +270,8 @@ pub fn run(cli: Cli) -> i32 {
                 stream,
                 no_postprocess,
                 wanted_pages,
+                assets_dir,
+                no_assets,
             )
         }
         Command::Classify { path } => run_classify(path),
@@ -271,6 +295,8 @@ fn run_parse(
     stream: bool,
     no_postprocess: bool,
     wanted_pages: Option<Vec<u32>>,
+    assets_dir: Option<String>,
+    no_assets: bool,
 ) -> i32 {
     if !Path::new(&path).exists() {
         return emit_error(
@@ -435,6 +461,18 @@ fn run_parse(
     let permits = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let scheduler = Scheduler::new(window_size.max(1));
 
+    // Computed once, reused by both the streaming per-window callback and
+    // the non-streaming aggregate result below, so a stream of NDJSON
+    // lines and one final JSON/Markdown document reference the same
+    // images/ folder rather than each recomputing (and potentially
+    // disagreeing on) the default.
+    let effective_assets_dir = (!no_assets).then(|| {
+        assets_dir
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::assets::default_assets_dir(&path))
+    });
+
     let (result_pages, page_errors, warnings) = if stream {
         runtime.block_on(scheduler.run_streaming(
             adapter,
@@ -442,7 +480,7 @@ fn run_parse(
             permits,
             pages,
             |window_pages, window_errors, window_warnings| {
-                let printed_pages: Vec<crate::types::Page> = if no_postprocess {
+                let mut printed_pages: Vec<crate::types::Page> = if no_postprocess {
                     window_pages.to_vec()
                 } else {
                     window_pages
@@ -454,6 +492,11 @@ fn run_parse(
                         })
                         .collect()
                 };
+                if let Some(dir) = &effective_assets_dir
+                    && let Err(e) = crate::assets::write_page_assets(&mut printed_pages, dir)
+                {
+                    eprintln!("warning: failed to write image assets: {e}");
+                }
                 let line = serde_json::json!({
                     "window_pages": printed_pages,
                     "window_errors": window_errors,
@@ -554,7 +597,7 @@ fn run_parse(
     };
     let has_errors = !page_errors.is_empty();
 
-    let result = ParseResult {
+    let mut result = ParseResult {
         source_path: path.clone(),
         source_sha256,
         protocol: effective_protocol.clone(),
@@ -572,6 +615,17 @@ fn run_parse(
         warnings,
         timing: Default::default(),
     };
+
+    // Runs regardless of `--stream`: the streaming per-window closure
+    // above (if taken) only writes assets for its own cloned NDJSON
+    // view, never touching the original `Page`/`Block`s that end up
+    // here — this is the call that actually clears `asset_bytes` on the
+    // aggregate `result` that gets cached and (non-streaming) rendered.
+    if let Some(dir) = &effective_assets_dir
+        && let Err(e) = crate::assets::write_block_assets(&mut result, dir)
+    {
+        eprintln!("warning: failed to write image assets: {e}");
+    }
 
     if !no_cache && let Err(e) = cache::put(&cache_dir, &cache_key, &result) {
         eprintln!("warning: failed to write cache entry: {e}");

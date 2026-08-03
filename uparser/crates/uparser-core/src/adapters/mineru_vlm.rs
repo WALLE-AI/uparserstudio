@@ -388,6 +388,18 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 Err(e) => (None, None, None, Some(e)),
             };
 
+            // mineru-vlm's SKIP_CONTENT correctly skips calling the
+            // model for "image" content (that's a real, confirmed
+            // property of the protocol), but crop-and-preserve is a
+            // separate decision MinerU makes unconditionally for image
+            // spans — do that here so `render.rs` has pixels to link to
+            // (see `image_link_gap_report.md`).
+            let asset_bytes = if p.category_raw == "image" {
+                imaging::crop(&page_rgb, p.bbox_px).and_then(|img| imaging::to_png_bytes(&img).ok())
+            } else {
+                None
+            };
+
             let [x0, y0, x1, y1] = p.bbox_px;
             blocks.push(Block {
                 geom: Geometry::Rect([x0 as f32, y0 as f32, x1 as f32, y1 as f32]),
@@ -404,6 +416,8 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 confidence: None,
                 source: BlockSource::LayoutThenRecognize,
                 error,
+                asset_bytes,
+                asset_path: None,
             });
         }
 
@@ -496,6 +510,16 @@ mod tests {
             "image category must skip stage 2 entirely, not dispatch-and-fail"
         );
         assert_eq!(image_block.bbox_px, Some([0, 700, 80, 900]));
+        // D.13-adjacent (image_link_gap_report.md): the model is never
+        // called for "image" content, but the pixels must still be
+        // cropped and preserved — otherwise `render.rs` has nothing to
+        // link to.
+        let asset_bytes = image_block
+            .asset_bytes
+            .as_ref()
+            .expect("image block must have cropped pixels attached");
+        let decoded = image::load_from_memory(asset_bytes).expect("must be valid PNG bytes");
+        assert_eq!((decoded.width(), decoded.height()), (80, 200));
     }
 
     #[tokio::test]

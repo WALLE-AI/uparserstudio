@@ -289,6 +289,19 @@ impl ProtocolAdapter for PipelineAdapter {
                 Err(e) => (None, None, None, Some(e)),
             };
 
+            // SKIP_RECOGNITION correctly skips the OCR/formula/table
+            // stage dispatch for "image"/"chart" regions, but crop-and-
+            // preserve is a separate step MinerU does unconditionally
+            // for these categories — do it here so `render.rs` has
+            // pixels to link to (see `image_link_gap_report.md`).
+            let asset_bytes = if matches!(p.category.as_str(), "image" | "chart") {
+                ctx.crop(page, p.bbox_px)
+                    .ok()
+                    .and_then(|img| imaging::to_png_bytes(&img).ok())
+            } else {
+                None
+            };
+
             let [x0, y0, x1, y1] = p.bbox_px;
             blocks.push(Block {
                 geom: Geometry::Rect([x0 as f32, y0 as f32, x1 as f32, y1 as f32]),
@@ -305,6 +318,8 @@ impl ProtocolAdapter for PipelineAdapter {
                 confidence: None,
                 source: BlockSource::LayoutThenRecognize,
                 error,
+                asset_bytes,
+                asset_path: None,
             });
         }
 
@@ -549,6 +564,15 @@ mod tests {
             blocks[3].error.is_none(),
             "image category must skip recognition entirely, not dispatch-and-fail"
         );
+        // image_link_gap_report.md: SKIP_RECOGNITION correctly skips
+        // model dispatch for "image" content, but the pixels must still
+        // be cropped and preserved for `render.rs` to link to.
+        let asset_bytes = blocks[3]
+            .asset_bytes
+            .as_ref()
+            .expect("image block must have cropped pixels attached");
+        let decoded = image::load_from_memory(asset_bytes).expect("must be valid PNG bytes");
+        assert_eq!((decoded.width(), decoded.height()), (100, 50));
     }
 
     #[tokio::test]

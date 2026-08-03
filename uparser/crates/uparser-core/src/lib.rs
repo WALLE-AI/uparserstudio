@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod api;
+pub mod assets;
 pub mod cache;
 pub mod category_map;
 pub mod cli;

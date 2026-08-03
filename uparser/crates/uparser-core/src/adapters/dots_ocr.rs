@@ -229,6 +229,19 @@ impl ProtocolAdapter for DotsOcrAdapter {
                 _ => (cell.text.clone(), None, None),
             };
 
+            // dots.ocr never calls the model for "Picture" content
+            // (matches the real protocol's own behavior — see
+            // `image_link_gap_report.md`), but that's a separate
+            // decision from "should the raw pixels be preserved at
+            // all" — crop them here so `render.rs` has something to
+            // link to, mirroring MinerU's own unconditional
+            // crop-and-save step for image spans.
+            let asset_bytes = if cell.category_raw == "Picture" {
+                imaging::crop(&page_rgb, bbox_px).and_then(|img| imaging::to_png_bytes(&img).ok())
+            } else {
+                None
+            };
+
             let [x0, y0, x1, y1] = bbox_px;
             blocks.push(Block {
                 geom: Geometry::Rect([x0 as f32, y0 as f32, x1 as f32, y1 as f32]),
@@ -242,6 +255,8 @@ impl ProtocolAdapter for DotsOcrAdapter {
                 latex,
                 spans: vec![],
                 merge_hint: None,
+                asset_bytes,
+                asset_path: None,
                 confidence: None,
                 source: BlockSource::OneShotVlm,
                 error: None,
@@ -330,6 +345,17 @@ mod tests {
         );
         assert!(picture_block.html.is_none());
         assert!(picture_block.latex.is_none());
+        // image_link_gap_report.md: dots-ocr never calls the model for
+        // "Picture" content, but the pixels must still be cropped and
+        // preserved for `render.rs` to link to. (Exact dimensions aren't
+        // asserted here — same reasoning as this test's own comment
+        // above about not pinning smart_resize's internal arithmetic.)
+        let asset_bytes = picture_block
+            .asset_bytes
+            .as_ref()
+            .expect("Picture block must have cropped pixels attached");
+        let decoded = image::load_from_memory(asset_bytes).expect("must be valid PNG bytes");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
     }
 
     #[tokio::test]

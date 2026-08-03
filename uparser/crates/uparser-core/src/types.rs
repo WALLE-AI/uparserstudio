@@ -77,6 +77,20 @@ pub struct Block {
     pub confidence: Option<f32>,
     pub source: BlockSource,
     pub error: Option<String>,
+    /// Raw PNG bytes of a cropped image/chart region, populated by
+    /// protocol adapters for image-category blocks (see
+    /// `image_link_gap_report.md`) and cleared by `assets::write_page_assets`
+    /// once written to disk. `#[serde(skip)]` — this must never leak into
+    /// JSON output, defensively, even if a caller forgets to run the
+    /// write step; `asset_path` (below) is what callers actually see.
+    #[serde(skip)]
+    pub asset_bytes: Option<Vec<u8>>,
+    /// Path (relative to the source document, e.g. `"doc_images/<hash>.png"`)
+    /// the asset was written to, populated by `assets::write_page_assets`.
+    /// `#[serde(default)]` so a `ParseResult` cached before this field
+    /// existed still deserializes cleanly.
+    #[serde(default)]
+    pub asset_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -259,11 +273,51 @@ mod tests {
             confidence: Some(0.99),
             source: BlockSource::OneShotVlm,
             error: None,
+            asset_bytes: None,
+            asset_path: None,
         };
         let json = serde_json::to_string(&block).unwrap();
         let back: Block = serde_json::from_str(&json).unwrap();
         assert_eq!(block.category_raw, back.category_raw);
         assert_eq!(block.text, back.text);
+    }
+
+    #[test]
+    fn asset_bytes_never_serialized_but_asset_path_round_trips() {
+        let mut block = Block {
+            geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+            geom_frame: CoordFrame::Page,
+            bbox_px: Some([0, 0, 10, 10]),
+            category_raw: "image".into(),
+            category: Some("image".into()),
+            reading_order: None,
+            text: None,
+            html: None,
+            latex: None,
+            spans: vec![],
+            merge_hint: None,
+            confidence: None,
+            source: BlockSource::LayoutThenRecognize,
+            error: None,
+            asset_bytes: Some(vec![1, 2, 3, 4]),
+            asset_path: Some("doc_images/abc123.png".into()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(
+            !json.contains("asset_bytes"),
+            "asset_bytes must never appear in JSON output: {json}"
+        );
+        assert!(json.contains("doc_images/abc123.png"));
+
+        let back: Block = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.asset_bytes, None);
+        assert_eq!(back.asset_path, block.asset_path);
+
+        // Old cached JSON (pre-dating this field) must still deserialize.
+        block.asset_path = None;
+        let old_shape_json = json.replace(r#","asset_path":"doc_images/abc123.png""#, "");
+        let back: Block = serde_json::from_str(&old_shape_json).unwrap();
+        assert_eq!(back.asset_path, None);
     }
 
     #[test]

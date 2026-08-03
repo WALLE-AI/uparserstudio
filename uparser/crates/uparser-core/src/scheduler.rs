@@ -346,6 +346,8 @@ mod tests {
                 confidence: None,
                 source: BlockSource::OneShotVlm,
                 error: None,
+                asset_bytes: None,
+                asset_path: None,
             }])
         }
     }

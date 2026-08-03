@@ -1,9 +1,11 @@
 ---
 source: crates/uparser-core/src/render/mod.rs
+assertion_line: 143
 expression: to_content_list(&sample_result())
 ---
 [
   {
+    "asset_path": null,
     "category": "text",
     "html": null,
     "latex": null,

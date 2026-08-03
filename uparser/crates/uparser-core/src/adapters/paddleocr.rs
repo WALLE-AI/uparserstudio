@@ -186,6 +186,8 @@ impl ProtocolAdapter for PaddleOcrAdapter {
                 confidence: b.confidence,
                 source: BlockSource::OcrPipeline,
                 error: None,
+                asset_bytes: None,
+                asset_path: None,
             })
             .collect();
 
