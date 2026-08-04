@@ -21,7 +21,25 @@ pub fn to_markdown(result: &ParseResult) -> String {
                 out.push_str(latex);
                 out.push_str("\n$$\n\n");
             } else if let Some(text) = &block.text {
-                out.push_str(text);
+                // Emit semantic Markdown markup from the block's normalized
+                // category so heading/list structure survives into Markdown
+                // (previously every text block rendered as a bare paragraph,
+                // which zeroed the heading-hierarchy metric for the VLM
+                // protocols whose adapters DO classify titles/lists — see
+                // the opendataloader-bench mineru-vlm finding). `native`'s
+                // markdown path bypasses this renderer entirely, so it is
+                // unaffected.
+                match block.category.as_deref() {
+                    Some("title") => {
+                        out.push_str("# ");
+                        out.push_str(text);
+                    }
+                    Some("list") => {
+                        out.push_str("- ");
+                        out.push_str(text);
+                    }
+                    _ => out.push_str(text),
+                }
                 out.push_str("\n\n");
             } else if let Some(asset_path) = &block.asset_path {
                 // See `image_link_gap_report.md`: image-category blocks

@@ -756,6 +756,29 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
     };
 
     let adapter = crate::adapters::native::NativeAdapter;
+
+    // Markdown output takes liteparse's OWN native markdown (full pipeline
+    // quality — headings/paragraphs/tables), bypassing the block-based
+    // `render::to_markdown` entirely. JSON keeps the coherent-line block IR
+    // from `parse_document`. Both are single parses; neither touches any
+    // other protocol's flow (this branch is `native`-only).
+    if let OutputFormat::Markdown = format {
+        return match runtime.block_on(adapter.native_markdown(&file_bytes)) {
+            Ok(md) => {
+                println!("{md}");
+                EXIT_SUCCESS
+            }
+            Err(e) => emit_error(
+                format,
+                EXIT_INTERNAL,
+                "native_parse_failed",
+                &e.message,
+                "native",
+                e.stage.as_deref(),
+            ),
+        };
+    }
+
     let result = match runtime.block_on(adapter.parse_document(&path, &file_bytes)) {
         Ok(r) => r,
         Err(e) => {
@@ -771,11 +794,7 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
     };
 
     let has_errors = !result.page_errors.is_empty();
-    let output = match format {
-        OutputFormat::Json => render::to_json(&result),
-        OutputFormat::Markdown => render::to_markdown(&result),
-    };
-    println!("{output}");
+    println!("{}", render::to_json(&result));
 
     if has_errors {
         EXIT_PARTIAL

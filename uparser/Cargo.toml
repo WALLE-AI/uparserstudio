@@ -4,6 +4,7 @@ members = [
     "crates/uparser-core",
     "crates/uparser-napi",
     "crates/uparser-python",
+    "crates/uparser-native-engine",
 ]
 
 [workspace.package]

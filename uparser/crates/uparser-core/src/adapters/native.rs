@@ -1,27 +1,24 @@
-//! Zero-model native-PDF-text-layer protocol, per T-4.1. Embeds
-//! `opensource/liteparse` as a library dependency (not a wire protocol —
-//! no reverse-engineering needed, this is first-party Rust). Confirmed
-//! API surface (from source read of `crates/liteparse/src/{parser,types,config}.rs`):
-//! `LiteParse::new(config).parse_input(PdfInput::Bytes(..))` returns a
-//! `liteparse::ParseResult { pages: Vec<ParsedPage>, .. }`; each
-//! `ParsedPage.text_items: Vec<TextItem>` carries `text/x/y/width/height`
-//! (viewport space, top-left origin, 72 DPI — already pixel-equivalent),
-//! `font_size`, and `confidence: Option<f32>` (native items never carry
-//! one — only OCR-sourced items do, which we disable entirely).
+//! Zero-model native-PDF-text-layer protocol, per T-4.1. Embeds the
+//! **`uparser-native-engine`** crate (vendored from firecrawl/pdf-inspector,
+//! MIT — see that crate's `ATTRIBUTION.md`) as a pure-Rust, lopdf-based,
+//! **PDFium-free** text-extraction engine. This replaced the earlier
+//! dependency on `opensource/liteparse` (see repo-root
+//! `NATIVE_ENGINE_INTERNALIZATION_DESIGN.md`): native no longer depends on
+//! liteparse, and no longer pulls the PDFium prebuilt binary.
 //!
-//! Responsibility boundary (T-4.2): `LiteParseConfig.ocr_enabled = false`
-//! disables OCR outright; format conversion in liteparse only triggers
-//! for non-PDF input, so handing it genuine PDF bytes never invokes it —
-//! satisfied by construction, no extra code needed.
+//! Two entry points, both whole-document (native parses a whole PDF in one
+//! call; it does not fit `ProtocolAdapter::parse_page`'s per-rasterized-page
+//! contract — that method returns an explanatory `PageError`):
+//!   * `native_markdown()` → the engine's own markdown (its full pipeline:
+//!     headings, paragraph grouping, three-strategy tables) — the
+//!     bench-critical, coordinate-free path used by `--format markdown`.
+//!   * `parse_document()` → the engine's positioned `TextItem`s, grouped
+//!     into coherent reading-ordered *lines* (not per-span fragments) and
+//!     mapped to the uparser `Block` IR — used by `--format json`.
 //!
-//! This adapter's `parse_document` operates on a **whole document**, not
-//! a single rasterized page — it doesn't fit `ProtocolAdapter::parse_page`
-//! (which assumes a pre-rasterized `RenderedPage` and network dispatch,
-//! neither of which applies here). `parse_page` is implemented but
-//! returns an explanatory `PageError`; reconciling native's whole-document
-//! shape with the per-page scheduler pipeline is deferred (see the P4
-//! plan's "What's different" section) — likely a router/scheduler
-//! concern for a later phase, not this one.
+//! Engine `TextItem` coordinates are PDF space (origin bottom-left); the IR
+//! wants top-left pixel space, so `build_page` flips Y against a per-page
+//! top reference derived from the items themselves.
 
 use super::{ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat};
 use crate::ingest::RenderedPage;
@@ -30,34 +27,29 @@ use crate::types::{
     RoutedBy, Span,
 };
 use async_trait::async_trait;
-use liteparse::{LiteParse, LiteParseConfig};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use uparser_native_engine::types::{ItemType, TextItem};
 
 #[derive(Default)]
 pub struct NativeAdapter;
 
 impl NativeAdapter {
-    /// Parse a whole PDF document via liteparse's native text-layer
-    /// extraction — zero model calls, zero external services.
+    /// Parse a whole PDF via the native engine's positioned-text extraction —
+    /// zero model calls, zero external services, no PDFium.
     pub async fn parse_document(
         &self,
         source_path: &str,
         pdf_bytes: &[u8],
     ) -> Result<ParseResult, PageError> {
-        let config = LiteParseConfig {
-            ocr_enabled: false,
-            ..Default::default()
-        };
-        let parser = LiteParse::new(config);
-        let input = liteparse::types::PdfInput::Bytes(pdf_bytes.to_vec());
+        let items = uparser_native_engine::extractor::extract_text_with_positions_mem(pdf_bytes)
+            .map_err(|e| PageError {
+                page_num: 0,
+                message: format!("native engine extraction failed: {e}"),
+                stage: Some("native".into()),
+            })?;
 
-        let lp_result = parser.parse_input(input).await.map_err(|e| PageError {
-            page_num: 0,
-            message: format!("liteparse native extraction failed: {e}"),
-            stage: Some("native".into()),
-        })?;
-
-        let pages: Vec<Page> = lp_result.pages.into_iter().map(map_page).collect();
+        let pages = build_pages(items);
 
         let mut hasher = Sha256::new();
         hasher.update(pdf_bytes);
@@ -78,44 +70,162 @@ impl NativeAdapter {
             timing: Default::default(),
         })
     }
+
+    /// Render the document as the native engine's OWN markdown — its full
+    /// pipeline output (heading levels, paragraph grouping, three-strategy
+    /// tables). Coordinate-free; the bench-critical `--format markdown` path.
+    ///
+    /// Currently passes the engine markdown through verbatim (so it is
+    /// byte-identical to upstream pdf-inspector). The uparser enhancement
+    /// layer (design doc §4.6) is intentionally *not* wired here yet: the
+    /// opendataloader-bench MHS metric is heading-*level*-agnostic (it
+    /// treats all `#`/`##`/… as one "heading" tag), so the obvious
+    /// level-flattening tweak is a no-op; the real levers (heading
+    /// over-detection — engine emits 280 vs GT's 193 — and table TEDS) are
+    /// engine-core tuning, tracked in the design doc's §6.5/§6.6.
+    pub async fn native_markdown(&self, pdf_bytes: &[u8]) -> Result<String, PageError> {
+        let result = uparser_native_engine::process_pdf_mem(pdf_bytes).map_err(|e| PageError {
+            page_num: 0,
+            message: format!("native engine markdown rendering failed: {e}"),
+            stage: Some("native".into()),
+        })?;
+        Ok(result.markdown.unwrap_or_default())
+    }
 }
 
-fn map_page(page: liteparse::ParsedPage) -> Page {
-    let blocks = page.text_items.into_iter().map(map_text_item).collect();
+/// Group all pages' positioned items into `Page`s of coherent line-`Block`s.
+fn build_pages(items: Vec<TextItem>) -> Vec<Page> {
+    let mut by_page: BTreeMap<u32, Vec<TextItem>> = BTreeMap::new();
+    for it in items {
+        // Image placeholders carry no extractable text; drop them (the
+        // markdown path handles figures separately). Keep Text/Link/FormField.
+        if matches!(it.item_type, ItemType::Image) || it.text.trim().is_empty() {
+            continue;
+        }
+        by_page.entry(it.page).or_default().push(it);
+    }
+    by_page
+        .into_iter()
+        .map(|(page_num, items)| build_page(page_num, items))
+        .collect()
+}
+
+fn build_page(page_num: u32, mut items: Vec<TextItem>) -> Page {
+    // Per-page top/right reference from the items themselves (the engine's
+    // simple positioned-text API doesn't return MediaBox dims). Y is flipped
+    // against `page_top` so the top-of-page text sorts first, matching the
+    // IR's top-left-origin expectation used by postprocess/reading order.
+    let page_top = items.iter().map(|i| i.y + i.height).fold(0.0_f32, f32::max);
+    let page_right = items.iter().map(|i| i.x + i.width).fold(0.0_f32, f32::max);
+
+    // Sort top-to-bottom (PDF y descending), then left-to-right.
+    items.sort_by(|a, b| {
+        b.y.partial_cmp(&a.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // Cluster into lines by vertical proximity of adjacent (already sorted)
+    // items — same line when the y-centers are within ~0.6× the glyph height.
+    let mut lines: Vec<Vec<TextItem>> = Vec::new();
+    for it in items {
+        let center = it.y + it.height / 2.0;
+        let same_line = lines.last().and_then(|l| l.last()).is_some_and(|last| {
+            let lc = last.y + last.height / 2.0;
+            let tol = (it.height.max(last.height) * 0.6).max(1.0);
+            (lc - center).abs() <= tol
+        });
+        if same_line {
+            lines.last_mut().unwrap().push(it);
+        } else {
+            lines.push(vec![it]);
+        }
+    }
+
+    let blocks = lines
+        .into_iter()
+        .map(|mut line| {
+            line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            build_line_block(&line, page_top)
+        })
+        .collect();
+
     Page {
-        page_num: page.page_number as u32,
-        width_px: page.page_width.round() as u32,
-        height_px: page.page_height.round() as u32,
+        page_num,
+        width_px: page_right.ceil().max(0.0) as u32,
+        height_px: page_top.ceil().max(0.0) as u32,
         blocks,
     }
 }
 
-fn map_text_item(item: liteparse::TextItem) -> Block {
+/// Assemble one coherent line (its already-x-sorted items) into a `Block`,
+/// flipping PDF coords to top-left pixel space via `page_top`.
+fn build_line_block(line: &[TextItem], page_top: f32) -> Block {
+    let x0 = line.iter().map(|i| i.x).fold(f32::INFINITY, f32::min);
+    let x1 = line
+        .iter()
+        .map(|i| i.x + i.width)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let pdf_ytop = line
+        .iter()
+        .map(|i| i.y + i.height)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let pdf_ybot = line.iter().map(|i| i.y).fold(f32::INFINITY, f32::min);
+    let y0 = page_top - pdf_ytop; // top edge (top-left origin)
+    let y1 = page_top - pdf_ybot; // bottom edge
     let bbox_px = [
-        item.x.round() as i32,
-        item.y.round() as i32,
-        (item.x + item.width).round() as i32,
-        (item.y + item.height).round() as i32,
+        x0.round() as i32,
+        y0.round() as i32,
+        x1.round() as i32,
+        y1.round() as i32,
     ];
-    let span = Span {
-        text: item.text.clone(),
-        bbox_px: Some(bbox_px),
-        font_size: item.font_size,
-        is_inline_formula: false,
-    };
+
+    // Join item texts, inserting a space across a real inter-item gap.
+    let mut text = String::new();
+    for (idx, it) in line.iter().enumerate() {
+        if idx > 0 {
+            let prev = &line[idx - 1];
+            let gap = it.x - (prev.x + prev.width);
+            let boundary = !text.ends_with(' ') && !it.text.starts_with(' ');
+            if boundary && gap > it.font_size * 0.15 {
+                text.push(' ');
+            }
+        }
+        text.push_str(&it.text);
+    }
+
+    let spans: Vec<Span> = line
+        .iter()
+        .map(|it| {
+            let sy0 = page_top - (it.y + it.height);
+            let sy1 = page_top - it.y;
+            Span {
+                text: it.text.clone(),
+                bbox_px: Some([
+                    it.x.round() as i32,
+                    sy0.round() as i32,
+                    (it.x + it.width).round() as i32,
+                    sy1.round() as i32,
+                ]),
+                font_size: Some(it.font_size),
+                is_inline_formula: false,
+            }
+        })
+        .collect();
+
     Block {
-        geom: Geometry::Rect([item.x, item.y, item.x + item.width, item.y + item.height]),
+        geom: Geometry::Rect([x0, y0, x1, y1]),
         geom_frame: CoordFrame::Page,
         bbox_px: Some(bbox_px),
         category_raw: "text".to_string(),
         category: Some("text".to_string()),
         reading_order: None,
-        text: Some(item.text),
+        text: Some(text),
         html: None,
         latex: None,
-        spans: vec![span],
+        spans,
         merge_hint: None,
-        confidence: item.confidence,
+        confidence: None,
         source: BlockSource::NativeTextLayer,
         error: None,
         asset_bytes: None,
@@ -134,8 +244,7 @@ impl ProtocolAdapter for NativeAdapter {
     }
 
     fn provides_reading_order(&self) -> bool {
-        // liteparse's spatial grid projection already produces
-        // reading-ordered text.
+        // The engine emits items in reading order; `build_page` preserves it.
         true
     }
 
@@ -148,8 +257,6 @@ impl ProtocolAdapter for NativeAdapter {
     }
 
     fn emitted_signals(&self) -> PostprocessSignals {
-        // The first adapter to legitimately emit spans/font_size — all
-        // three VLM protocols (P1-P3) landed on the pure-geometry path.
         PostprocessSignals {
             spans: true,
             merge_hint: false,
@@ -180,49 +287,14 @@ impl ProtocolAdapter for NativeAdapter {
 mod tests {
     use super::*;
 
+    /// A real digitally-native PDF (MinerU's demo1) — replaces the old
+    /// liteparse fixture now that native no longer depends on liteparse.
     fn fixture_pdf_path() -> String {
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../opensource/liteparse/integration_tests_data/sample.pdf"
+            "/../../../opensource/MinerU/demo/pdfs/demo1.pdf"
         )
         .to_string()
-    }
-
-    #[test]
-    fn map_text_item_preserves_geometry_and_native_source() {
-        let item = liteparse::TextItem {
-            text: "hello".to_string(),
-            x: 10.0,
-            y: 20.0,
-            width: 100.0,
-            height: 12.0,
-            rotation: 0.0,
-            font_name: Some("Helvetica".to_string()),
-            font_size: Some(11.0),
-            font_height: None,
-            font_ascent: None,
-            font_descent: None,
-            font_weight: None,
-            font_flags: None,
-            text_width: None,
-            font_is_buggy: false,
-            has_unicode_map_error: false,
-            mcid: None,
-            fill_color: None,
-            stroke_color: None,
-            confidence: None,
-            link: None,
-            strike: false,
-            words: vec![],
-        };
-
-        let block = map_text_item(item);
-        assert_eq!(block.text.as_deref(), Some("hello"));
-        assert_eq!(block.bbox_px, Some([10, 20, 110, 32]));
-        assert_eq!(block.source, BlockSource::NativeTextLayer);
-        assert_eq!(block.spans.len(), 1);
-        assert_eq!(block.spans[0].font_size, Some(11.0));
-        assert!(block.confidence.is_none());
     }
 
     #[test]
@@ -238,16 +310,20 @@ mod tests {
 
     #[tokio::test]
     async fn parse_page_is_unsupported() {
+        use crate::testing::MockDispatch;
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
         let adapter = NativeAdapter;
         let page = RenderedPage {
             page_num: 1,
-            width: 10,
-            height: 10,
             png_bytes: vec![],
+            width: 1,
+            height: 1,
         };
-        let ctx = ParseCtx::new(
-            std::sync::Arc::new(crate::transport::Transport::new()),
-            std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        let ctx = ParseCtx::with_mock(
+            Arc::new(MockDispatch::default()),
+            Arc::new(Semaphore::new(1)),
         );
         let result = adapter.parse_page(&page, &ctx).await;
         assert!(result.is_err());
@@ -261,9 +337,7 @@ mod tests {
             return;
         }
         let bytes = std::fs::read(&path).expect("read fixture PDF");
-
-        let adapter = NativeAdapter;
-        let result = adapter
+        let result = NativeAdapter
             .parse_document(&path, &bytes)
             .await
             .expect("native parse succeeds");
@@ -285,5 +359,57 @@ mod tests {
                 .flat_map(|p| &p.blocks)
                 .all(|b| b.source == BlockSource::NativeTextLayer)
         );
+    }
+
+    /// Regression guard: native maps one Block per coherent *line* (not per
+    /// raw span), so a prose PDF must yield multi-word, multi-span blocks.
+    #[tokio::test]
+    async fn parse_document_yields_coherent_multiword_lines_not_span_fragments() {
+        let path = fixture_pdf_path();
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("skipping: no fixture PDF at {path}");
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("read fixture PDF");
+        let result = NativeAdapter
+            .parse_document(&path, &bytes)
+            .await
+            .expect("native parse succeeds");
+
+        let multiword = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .filter(|b| b.text.as_deref().is_some_and(|t| t.trim().contains(' ')))
+            .count();
+        assert!(multiword > 0, "expected coherent multi-word line blocks");
+
+        let multi_span = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .any(|b| b.spans.len() > 1);
+        assert!(
+            multi_span,
+            "expected at least one line grouping multiple spans"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_markdown_has_structure() {
+        let path = fixture_pdf_path();
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("skipping: no fixture PDF at {path}");
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("read fixture PDF");
+        let md = NativeAdapter
+            .native_markdown(&bytes)
+            .await
+            .expect("native markdown succeeds");
+        assert!(!md.trim().is_empty(), "expected non-empty markdown");
+        // A real report yields at least one heading via the engine's
+        // font-histogram heading detection.
+        assert!(md.contains('#'), "expected at least one markdown heading");
     }
 }

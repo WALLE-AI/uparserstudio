@@ -20,10 +20,13 @@ path = "src/main.rs"
 # available.
 default = []
 pdfium = ["dep:pdfium"]
-# Zero-model native-PDF-text-layer protocol: embeds liteparse as a
-# library. Pulls in `pdfium` transitively (liteparse needs it). Not
-# default-on for the same reason as `pdfium` above.
-native = ["dep:liteparse", "pdfium"]
+# Zero-model native-PDF-text-layer protocol: embeds the vendored
+# `uparser-native-engine` (pure-Rust, lopdf-based, internalized from
+# firecrawl/pdf-inspector — see NATIVE_ENGINE_INTERNALIZATION_DESIGN.md).
+# Unlike the old liteparse-based native, this pulls **no** PDFium binary,
+# so `--features native` builds fully offline. Not default-on only to keep
+# the default build minimal.
+native = ["dep:uparser-native-engine"]
 # Local ONNX inference for the `pipeline` protocol's `table` stage
 # (ARCHITECTURE.md §11.2). Not default-on: `ort`'s `download-binaries`
 # feature fetches a prebuilt ONNX Runtime binary on first build, same
@@ -51,7 +54,7 @@ image = { version = "0.25", default-features = false, features = ["default-forma
 regex = "1"
 futures = "0.3"
 pdfium = { package = "liteparse-pdfium", version = "1.3.0", path = "../../../opensource/liteparse/crates/pdfium", optional = true }
-liteparse = { path = "../../../opensource/liteparse/crates/liteparse", default-features = false, optional = true }
+uparser-native-engine = { path = "../uparser-native-engine", optional = true }
 file-format = { version = "0.29.0", features = ["reader"] }
 calamine = "0.26"
 csv = "1"
