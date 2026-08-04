@@ -209,4 +209,45 @@ mod tests {
             to_content_list(&dots_ocr_shaped)
         );
     }
+
+    /// The shared renderer emits Markdown markup from the normalized
+    /// `category` — proven here at the renderer level so it holds for EVERY
+    /// VLM adapter (mineru-vlm/dots.ocr/monkeyocr-v2/pipeline all normalize
+    /// title/section-header → "title" and list-item → "list" via
+    /// `category_map`). This is the fix behind mineru-vlm's 0.708→0.928 jump
+    /// on opendataloader-bench (see `BENCHMARK_REPORT.md`).
+    #[test]
+    fn category_drives_heading_and_list_markdown_markup() {
+        fn typed(category: &str, text: &str) -> Block {
+            Block {
+                geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+                geom_frame: CoordFrame::Page,
+                bbox_px: Some([0, 0, 10, 10]),
+                category_raw: category.into(),
+                category: Some(category.into()),
+                reading_order: None,
+                text: Some(text.into()),
+                html: None,
+                latex: None,
+                spans: vec![],
+                merge_hint: None,
+                confidence: None,
+                source: BlockSource::LayoutThenRecognize,
+                error: None,
+                asset_bytes: None,
+                asset_path: None,
+            }
+        }
+        let mut r = sample_result();
+        r.pages[0].blocks = vec![
+            typed("title", "The Heading"),
+            typed("list", "an item"),
+            typed("text", "a paragraph"),
+        ];
+        let md = to_markdown(&r);
+        assert!(md.contains("# The Heading"), "title → '# ': {md}");
+        assert!(md.contains("- an item"), "list → '- ': {md}");
+        // Plain text is unprefixed.
+        assert!(md.contains("a paragraph") && !md.contains("# a paragraph"));
+    }
 }
