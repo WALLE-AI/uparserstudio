@@ -12,18 +12,31 @@ Pick the parsing engine with `--protocol`. The two you'll use most:
 - **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per page. Best for **born-digital (electronic) PDFs** where you just need the text/structure fast. Cannot read scanned/image-only pages (no OCR).
 - **`mineru-vlm`** — highest accuracy (best reading order + tables). Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
 
-## Getting the binary
+## Getting the binary (auto-downloaded — usually nothing to do)
 
-If `uparser` is not already on PATH, build it from the `uparser/` workspace in this repo:
+You only need to install this skill. The binary is fetched on first use:
+`scripts/ensure_uparser.sh` (Linux/WSL/macOS) / `scripts/ensure_uparser.ps1`
+(Windows) resolves `uparser` in this order and prints its path:
 
+1. `uparser` already on PATH → use it;
+2. a previously downloaded copy in `~/.cache/uparser/bin/` → reuse it;
+3. otherwise **download the version-pinned prebuilt from GitHub Releases**
+   (`WALLE-AI/uparserstudio`, currently `v0.1.0`, Linux x86_64), trying the
+   direct URL then the `ghfast.top` mirror, verifying `SHA256SUMS`, and
+   smoke-testing it;
+4. if no prebuilt fits the platform (non-x86_64, glibc < 2.35, Windows with no
+   published `.exe`), it falls back to building from source.
+
+The config-driven wrappers (`scripts/uparser-run.sh` / `.ps1`) call this
+automatically, so `uparser-run.sh parse ...` just works on a fresh machine.
+Env overrides: `UPARSER_VERSION`, `UPARSER_REPO`, `UPARSER_HOME` (cache root).
+
+**Building from source instead** (e.g. to add `pdfium` for the VLM/OCR
+protocols — the prebuilt already includes it):
 ```bash
-# native only (fast, no GPU, no PDFium download):
-cargo build --release --features native
-# add pdfium (needed to rasterize pages for the VLM/OCR protocols):
-cargo build --release --features native,pdfium
+cargo build --release --features native,pdfium   # from the uparser/ workspace
 ```
-
-The binary lands at `uparser/target/release/uparser`. `scripts/find_uparser.sh` locates or builds it and prints the path.
+`scripts/find_uparser.sh` locates or builds it and prints the path.
 
 ## Quick start
 

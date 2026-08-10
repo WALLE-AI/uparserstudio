@@ -17,13 +17,14 @@ set -euo pipefail
 
 CONFIG="${UPARSER_CONFIG:-$HOME/.config/uparser/config.toml}"
 
-# --- locate the real binary: PATH first, then find_uparser.sh next to us ---
+# --- locate the real binary: PATH first, else ensure_uparser.sh downloads a
+#     version-pinned prebuilt from GitHub Releases (or builds from source) ---
 BIN="$(command -v uparser || true)"
 if [ -z "$BIN" ]; then
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  BIN="$("$here/find_uparser.sh" 2>/dev/null || true)"
+  BIN="$("$here/ensure_uparser.sh" | tail -1 || true)"
 fi
-[ -n "$BIN" ] || { echo "uparser binary not found (put it on PATH or build it)" >&2; exit 2; }
+[ -n "$BIN" ] && [ -x "$BIN" ] || { echo "uparser binary not found and could not be downloaded/built" >&2; exit 2; }
 
 args=("$@")
 

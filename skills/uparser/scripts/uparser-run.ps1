@@ -19,10 +19,12 @@ $ErrorActionPreference = 'Stop'
 
 $cfg = if ($env:UPARSER_CONFIG) { $env:UPARSER_CONFIG } else { Join-Path $HOME '.config/uparser/config.toml' }
 
-# --- locate the real binary on PATH (uparser.exe on Windows) ---
+# --- locate the real binary: PATH first, else ensure_uparser.ps1 downloads a
+#     version-pinned prebuilt from GitHub Releases (or builds from source) ---
 $bin = (Get-Command uparser.exe -ErrorAction SilentlyContinue).Source
 if (-not $bin) { $bin = (Get-Command uparser -ErrorAction SilentlyContinue).Source }
-if (-not $bin) { Write-Error 'uparser binary not found on PATH (build it or add ~/.local/bin to PATH)'; exit 2 }
+if (-not $bin) { $bin = (& (Join-Path $PSScriptRoot 'ensure_uparser.ps1') | Select-Object -Last 1) }
+if (-not $bin -or -not (Test-Path $bin)) { Write-Error 'uparser binary not found and could not be downloaded/built'; exit 2 }
 
 function Read-Ini([string]$section, [string]$key) {
   if (-not (Test-Path $cfg)) { return $null }
