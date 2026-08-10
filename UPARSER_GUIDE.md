@@ -512,10 +512,47 @@ VLM 协议对接 **OpenAI 兼容的 `/v1/chat/completions`** 端点(vLLM/LMDeplo
 
 ```
 skills/uparser/
-├── SKILL.md                  技能说明(触发条件、快速上手、输出契约、配方)
-├── references/protocols.md   协议参考(能力矩阵、端点配置、JSON 结构)
-└── scripts/find_uparser.sh   定位/构建 uparser 二进制并打印路径
+├── SKILL.md                     技能说明(触发条件、快速上手、输出契约、配方)
+├── references/
+│   ├── protocols.md             协议参考(能力矩阵、端点配置、JSON 结构)
+│   └── config.example.toml      端点配置模板(→ ~/.config/uparser/config.toml)
+└── scripts/
+    ├── ensure_uparser.sh/.ps1   确保二进制就位:PATH→缓存→下载 Release→源码构建
+    ├── uparser-run.sh/.ps1      配置化包装器:自动下载 + 注入 --endpoint/--model
+    ├── find_uparser.sh          定位/构建 uparser 二进制并打印路径
+    └── build-windows.ps1        Windows 源码构建(需 rustup + MSVC)
 ```
+
+### 7.0 安装(只需装 skill,二进制自动下载)
+
+```bash
+# 全局(任意目录可用)
+cp -r skills/uparser ~/.claude/skills/uparser
+# 或项目级(仅该仓库内可用)
+cp -r skills/uparser <项目>/.claude/skills/uparser
+```
+
+**无需手动准备二进制**:首次调用时 `ensure_uparser.sh` 按如下顺序解析出 `uparser` 并缓存到 `~/.cache/uparser/bin/`:
+
+1. `uparser` 已在 PATH → 直接用;
+2. 缓存已有 → 复用;
+3. 否则从 GitHub Release 下载版本固定的预编译包(`v0.1.0`,Linux x86_64;直连优先→`ghfast.top` 镜像兜底),校验 `SHA256SUMS` + 冒烟测试;
+4. 平台不支持(非 x86_64 / glibc<2.35 / Windows 无 exe)→ 回退源码构建。
+
+覆盖变量:`UPARSER_VERSION`(版本)/ `UPARSER_REPO`(仓库)/ `UPARSER_HOME`(缓存根)。
+
+验证安装:
+
+```bash
+# 直接下载/定位二进制并打印路径
+~/.claude/skills/uparser/scripts/ensure_uparser.sh
+# 或经配置化包装器跑一次(会自动确保二进制就位)
+~/.claude/skills/uparser/scripts/uparser-run.sh parse --protocol native --format markdown some.pdf | head
+```
+
+在 Claude Code 里输入 `/uparser` 能补全,即表示 skill 已被发现。
+
+> 说明:Claude Code 只从 `~/.claude/skills/<name>/`(用户级)或 `<项目>/.claude/skills/<name>/`(项目级)发现 skill。仓库里的 `skills/uparser/` 需先拷到上述位置才会生效。
 
 ### 7.1 触发时机
 
@@ -533,10 +570,11 @@ skills/uparser/
 
 在 Claude Code 中,Skill 会在匹配到上述意图时自动被考虑;也可由用户显式 `/uparser` 触发。Skill 内部的工作流:
 
-1. 用 `scripts/find_uparser.sh` 定位或构建二进制;
+1. 用 `scripts/ensure_uparser.sh`(或直接经 `uparser-run.sh`)确保二进制就位——首次会自动下载/构建并缓存;
 2. 按 §5 的选型表选 `--protocol`(不确定就先 `uparser classify` 或用 `--protocol auto`);
-3. 以子进程运行 `uparser parse ...`,**stdout 取结果、stderr 取日志、按 exit code 分支**;
-4. 需要更深的协议/端点细节时读 `references/protocols.md`。
+3. 若已配置 `~/.config/uparser/config.toml`,用 `scripts/uparser-run.sh parse ...` 让端点/模型自动注入;否则直接 `uparser parse ... --endpoint <url>`;
+4. 以子进程运行,**stdout 取结果、stderr 取日志、按 exit code 分支**;
+5. 需要更深的协议/端点细节时读 `references/protocols.md`。
 
 ### 7.3 Skill 里的关键约定(供 Agent 遵循)
 

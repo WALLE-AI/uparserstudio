@@ -114,19 +114,24 @@ cargo fmt --all -- --check
 
 ## 🤖 作为 Claude Code Skill 使用
 
-`skills/uparser/` 是一个可直接安装的 Claude Code Skill。安装到全局:
+`skills/uparser/` 是一个可直接安装的 Claude Code Skill。**只需装 skill,二进制首次使用时自动下载**(无需手动构建):
 
 ```bash
+# 安装到全局(任意目录可用)
 cp -r skills/uparser ~/.claude/skills/uparser
-# 让二进制上 PATH(或用 skill 里的 find_uparser.sh 现场构建)
-ln -sf "$PWD/uparser/target/release/uparser" ~/.local/bin/uparser
+# 或项目级(仅该仓库内可用)
+cp -r skills/uparser <项目>/.claude/skills/uparser
 ```
 
-启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
+首次调用时,skill 的 `ensure_uparser.sh` 会按 `PATH → 缓存 → 从 GitHub Release 下载版本固定的预编译包(直连→ghfast.top 镜像兜底,校验 sha256 + 冒烟)→ 源码构建兜底` 解析出 `uparser` 并缓存到 `~/.cache/uparser/bin/`。启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
 
-**端点配置化**(免每次带 `--endpoint`):把端点写进 `~/.config/uparser/config.toml`(模板见 `skills/uparser/references/config.example.toml`),用包装器调用——`scripts/uparser-run.sh`(Linux/WSL)或 `scripts/uparser-run.ps1`(Windows),会按 `--protocol` 自动注入 `--endpoint`/`--model`。
+**端点配置化**(免每次带 `--endpoint`):把端点写进 `~/.config/uparser/config.toml`(模板见 `skills/uparser/references/config.example.toml`),用包装器调用——`scripts/uparser-run.sh`(Linux/WSL)或 `scripts/uparser-run.ps1`(Windows)——它会先确保二进制就位,再按 `--protocol` 自动注入 `--endpoint`/`--model`:
 
-**Windows**:无预编译二进制,用 `skills/uparser/scripts/build-windows.ps1` 从源码构建(需 rustup + MSVC)。
+```bash
+skills/uparser/scripts/uparser-run.sh parse --protocol mineru-vlm --format markdown doc.pdf
+```
+
+**平台**:预编译包目前为 **Linux x86_64(glibc ≥ 2.35)**。其他平台(arm64 / 旧 glibc / Windows)下载器自动回退到源码构建;Windows 另可用 `scripts/build-windows.ps1`(需 rustup + MSVC)。覆盖变量:`UPARSER_VERSION` / `UPARSER_REPO` / `UPARSER_HOME`。
 
 ---
 
