@@ -107,6 +107,46 @@ By default, image/figure regions are cropped and written to `<source_stem>_image
 - `--max-concurrency <N>` — concurrent model requests (default 16; raise to 32–100 for a beefy endpoint)
 - `--no-cache`, `--stream`, `--assets-dir`, `--no-assets`, `--no-postprocess`
 
+## Configuring endpoints (avoid retyping `--endpoint`/`--model`)
+
+The binary itself takes the endpoint on the command line, but the skill ships a
+config-driven wrapper so you don't repeat it every call — useful when moving
+between machines/endpoints. Put a config at `~/.config/uparser/config.toml`
+(template: `references/config.example.toml`):
+
+```toml
+[mineru-vlm]
+endpoint = "http://10.0.0.5:19122/v1/chat/completions"
+model    = "MinerU2.5-2604-1.2B"
+```
+
+Then invoke via the wrapper instead of the raw binary — it injects
+`--endpoint`/`--model` for the `parse` subcommand from the `[protocol]` section:
+
+```bash
+# Linux / WSL / git-bash:
+scripts/uparser-run.sh parse --protocol mineru-vlm --format markdown doc.pdf
+```
+```powershell
+# Windows PowerShell:
+scripts\uparser-run.ps1 parse --protocol mineru-vlm --format markdown doc.pdf
+```
+
+An explicit `--endpoint`/`--model` on the command line always overrides the
+config. Override the config path with the `UPARSER_CONFIG` env var. The raw
+`uparser ...` binary keeps working unchanged (no config read).
+
+## Windows
+
+There is no prebuilt Windows binary. Two options:
+
+- **WSL2 (simplest):** use the Linux binary/bundle unchanged inside WSL2 Ubuntu.
+- **Native Windows build:** run `scripts/build-windows.ps1` (needs rustup+MSVC
+  toolchain + VS C++ Build Tools). Try `-Features native` first (pure Rust, no
+  PDFium download); add `pdfium` for the VLM/OCR protocols. Native Windows build
+  is not yet CI-verified: `native`/`parse` should work; `doctor pipeline`'s
+  memory report is Linux-only and returns null on Windows (non-fatal).
+
 ## Performance notes (measured on opendataloader-bench)
 
 - `native` ≈ 0.05 s/doc, no GPU; strong quality on born-digital docs. Use it as the default fast path.

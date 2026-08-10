@@ -1,0 +1,21 @@
+# uparser endpoint config — copy to ~/.config/uparser/config.toml
+# (Windows: same path under your home, i.e. %USERPROFILE%\.config\uparser\config.toml)
+#
+# Read by scripts/uparser-run.sh (Linux/WSL/git-bash) and
+# scripts/uparser-run.ps1 (Windows PowerShell). One [section] per protocol;
+# only endpoint/model are used. An explicit --endpoint/--model on the command
+# line still overrides these.
+
+[mineru-vlm]
+endpoint = "http://127.0.0.1:19122/v1/chat/completions"
+model    = "MinerU2.5-2604-1.2B"
+
+# [dots-ocr]
+# endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+# model    = "dots-ocr"
+
+# [monkeyocr-v2]
+# endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+# model    = "MonkeyOCR-v2"
+
+# native needs no endpoint/model — nothing to configure here.

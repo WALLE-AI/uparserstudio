@@ -1,2 +1,20 @@
+# Third-party upstream clones (full repos with their own .git — not submodules)
 opensource/
+
+# Secrets / local env
+.env
+.env.*
+
+# Sample documents
 *.pdf
+
+# Build artifacts
+target/
+uparser/target/
+
+# Distribution bundles (ship these via GitHub Releases, not git)
+*.tar.gz
+uparser-bundle/
+
+# Editor / OS cruft
+.DS_Store
