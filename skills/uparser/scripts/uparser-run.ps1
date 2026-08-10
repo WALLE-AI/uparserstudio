@@ -9,7 +9,8 @@
     model    = MinerU2.5-2604-1.2B
 
   Precedence: an explicit --endpoint/--model on the command line ALWAYS wins;
-  the config only fills what you omitted. Injection happens only for `parse`.
+  the config only fills what you omitted. --endpoint is injected for `parse`
+  and `doctor`; --model only for `parse`.
 
   Usage: .\uparser-run.ps1 parse --protocol mineru-vlm doc.pdf
 #>
@@ -41,16 +42,24 @@ function Read-Ini([string]$section, [string]$key) {
 $a = @($Args)
 $sub = ($a | Where-Object { $_ -in 'parse', 'classify', 'doctor', 'protocols', 'cache' } | Select-Object -First 1)
 
-if ($sub -eq 'parse') {
+# `parse` takes the protocol via --protocol; `doctor` takes it as the positional
+# token right after the subcommand (doctor <protocol> [--endpoint <url>]).
+if ($sub -eq 'parse' -or $sub -eq 'doctor') {
   $proto = 'mock'
+  if ($sub -eq 'doctor') {
+    $di = [array]::IndexOf($a, 'doctor')
+    if ($di -ge 0 -and ($di + 1) -lt $a.Count -and $a[$di + 1] -notlike '-*') { $proto = $a[$di + 1] }
+  }
   for ($i = 0; $i -lt $a.Count; $i++) {
     if ($a[$i] -eq '--protocol') { $proto = $a[$i + 1] }
     elseif ($a[$i] -like '--protocol=*') { $proto = $a[$i].Split('=', 2)[1] }
   }
   $hasEp = ($a -contains '--endpoint') -or [bool]($a | Where-Object { $_ -like '--endpoint=*' })
-  $hasModel = ($a -contains '--model') -or [bool]($a | Where-Object { $_ -like '--model=*' })
   if (-not $hasEp) { $ep = Read-Ini $proto 'endpoint'; if ($ep) { $a += @('--endpoint', $ep) } }
-  if (-not $hasModel) { $md = Read-Ini $proto 'model'; if ($md) { $a += @('--model', $md) } }
+  if ($sub -eq 'parse') {
+    $hasModel = ($a -contains '--model') -or [bool]($a | Where-Object { $_ -like '--model=*' })
+    if (-not $hasModel) { $md = Read-Ini $proto 'model'; if ($md) { $a += @('--model', $md) } }
+  }
 }
 
 & $bin @a

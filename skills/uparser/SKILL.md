@@ -12,6 +12,41 @@ Pick the parsing engine with `--protocol`. The two you'll use most:
 - **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per page. Best for **born-digital (electronic) PDFs** where you just need the text/structure fast. Cannot read scanned/image-only pages (no OCR).
 - **`mineru-vlm`** — highest accuracy (best reading order + tables). Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
 
+> ⚠️ **Always pass `--protocol`.** It defaults to `mock`, which emits placeholder text, *not* your document. `uparser parse doc.pdf` (no `--protocol`) returns fake output with exit 0 — a silent trap. When unsure which engine to use, pass `--protocol auto`.
+
+## Agent helper scripts (one call, correct defaults)
+
+If you'd rather not assemble flags yourself, the skill ships two wrappers that
+make the right decisions for you. Both auto-resolve the binary (download/build
+on first use) and **never fall into the `mock` trap**.
+
+```bash
+# Smart parse: file in → Markdown out. Picks `native` (offline) when no VLM
+# endpoint is known, or `auto` (endpoint injected) when one is. Exit code is
+# the binary's own (0/1/2/3/4). Extra flags pass through and win.
+scripts/uparser-parse.sh report.pdf                 # → Markdown on stdout
+scripts/uparser-parse.sh scan.pdf --format json     # override anything
+UPARSER_ENDPOINT=http://host:port/v1/chat/completions scripts/uparser-parse.sh scan.pdf
+
+# Preflight: is the binary usable, which protocols exist, is my endpoint up?
+# Prints one compact JSON line to stdout (exit 0 usable / 2 not) — branch on it.
+scripts/uparser-check.sh
+scripts/uparser-check.sh --protocol mineru-vlm --endpoint http://host:port/v1/chat/completions
+# → {"binary":"...","ok":true,"protocols":[...],"endpoint":"...","endpoint_reachable":true}
+```
+
+Windows equivalents: `scripts\uparser-parse.ps1`, `scripts\uparser-check.ps1`.
+Endpoint/model for `uparser-parse` are resolved from `--endpoint`/`--model`,
+then `$UPARSER_ENDPOINT`/`$UPARSER_MODEL`, then the config file (below).
+
+Batch a folder (Markdown per file) with a plain loop:
+```bash
+for f in docs/*.pdf; do scripts/uparser-parse.sh "$f" > "${f%.pdf}.md"; done
+```
+
+Prefer the raw `uparser` binary directly when you want full control — the
+sections below document it. The helpers are just a convenience layer on top.
+
 ## Getting the binary (auto-downloaded — usually nothing to do)
 
 You only need to install this skill. The binary is fetched on first use:
@@ -118,6 +153,7 @@ By default, image/figure regions are cropped and written to `<source_stem>_image
 - `--endpoint <url>` / `--model <name>` — for the VLM/OCR protocols
 - `--pages <1-5,7>` — 1-indexed page selection
 - `--max-concurrency <N>` — concurrent model requests (default 16; raise to 32–100 for a beefy endpoint)
+- `--window-size <N>` — pages processed together before buffers drop (default 64; lower only to cap memory on huge docs)
 - `--no-cache`, `--stream`, `--assets-dir`, `--no-assets`, `--no-postprocess`
 
 ## Configuring endpoints (avoid retyping `--endpoint`/`--model`)
@@ -134,7 +170,8 @@ model    = "MinerU2.5-2604-1.2B"
 ```
 
 Then invoke via the wrapper instead of the raw binary — it injects
-`--endpoint`/`--model` for the `parse` subcommand from the `[protocol]` section:
+`--endpoint`/`--model` from the `[protocol]` section (for `parse`, and
+`--endpoint` also for `doctor`, so pre-flight checks pick up the same config):
 
 ```bash
 # Linux / WSL / git-bash:

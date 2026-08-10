@@ -9,8 +9,8 @@
 #   model    = MinerU2.5-2604-1.2B
 #
 # Precedence: an explicit --endpoint/--model on the command line ALWAYS wins;
-# the config only fills in what you omitted. Injection happens only for the
-# `parse` subcommand.
+# the config only fills in what you omitted. --endpoint is injected for `parse`
+# and `doctor`; --model only for `parse`.
 #
 # Usage: uparser-run.sh parse --protocol mineru-vlm doc.pdf
 set -euo pipefail
@@ -29,10 +29,20 @@ fi
 args=("$@")
 
 # --- scan args: subcommand, protocol, and whether endpoint/model were given ---
+# `parse` takes the protocol via --protocol; `doctor` takes it as the positional
+# token right after the subcommand (doctor <protocol> [--endpoint <url>]).
 sub=""; protocol="mock"; has_ep=0; has_model=0
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
-    parse|classify|doctor|protocols|cache) [ -z "$sub" ] && sub="${args[$i]}" ;;
+    parse|classify|doctor|protocols|cache)
+      if [ -z "$sub" ]; then
+        sub="${args[$i]}"
+        # doctor's protocol is positional: the next non-flag token
+        if [ "$sub" = "doctor" ]; then
+          nxt="${args[$((i+1))]:-}"
+          case "$nxt" in ""|-*) ;; *) protocol="$nxt" ;; esac
+        fi
+      fi ;;
     --protocol)   protocol="${args[$((i+1))]:-mock}" ;;
     --protocol=*) protocol="${args[$i]#--protocol=}" ;;
     --endpoint|--endpoint=*) has_ep=1 ;;
@@ -52,10 +62,12 @@ read_ini() { # $1=section $2=key
     }' "$CONFIG"
 }
 
-# --- inject only for `parse` ---
-if [ "$sub" = "parse" ]; then
+# --- inject --endpoint for `parse` and `doctor`; --model only for `parse` ---
+if [ "$sub" = "parse" ] || [ "$sub" = "doctor" ]; then
   if [ "$has_ep" -eq 0 ]; then ep="$(read_ini "$protocol" endpoint)"; [ -n "$ep" ] && args+=(--endpoint "$ep"); fi
-  if [ "$has_model" -eq 0 ]; then md="$(read_ini "$protocol" model)"; [ -n "$md" ] && args+=(--model "$md"); fi
+fi
+if [ "$sub" = "parse" ] && [ "$has_model" -eq 0 ]; then
+  md="$(read_ini "$protocol" model)"; [ -n "$md" ] && args+=(--model "$md")
 fi
 
 exec "$BIN" "${args[@]}"
