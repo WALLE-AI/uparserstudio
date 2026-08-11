@@ -14,7 +14,7 @@
 [CmdletBinding()] param()
 $ErrorActionPreference = 'Stop'
 
-$version = if ($env:UPARSER_VERSION) { $env:UPARSER_VERSION } else { '0.1.0' }
+$version = if ($env:UPARSER_VERSION) { $env:UPARSER_VERSION } else { '0.1.1' }
 $repo    = if ($env:UPARSER_REPO)    { $env:UPARSER_REPO }    else { 'WALLE-AI/uparserstudio' }
 $cache   = Join-Path (if ($env:UPARSER_HOME) { $env:UPARSER_HOME } else { Join-Path $HOME '.cache/uparser' }) 'bin'
 $here    = $PSScriptRoot

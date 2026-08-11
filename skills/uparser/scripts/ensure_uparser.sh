@@ -11,7 +11,7 @@
 # Env overrides: UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME (cache root).
 set -euo pipefail
 
-VERSION="${UPARSER_VERSION:-0.1.0}"
+VERSION="${UPARSER_VERSION:-0.1.1}"
 REPO="${UPARSER_REPO:-WALLE-AI/uparserstudio}"
 CACHE="${UPARSER_HOME:-$HOME/.cache/uparser}/bin"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
