@@ -949,3 +949,70 @@ fn invalid_pages_value_is_a_usage_error() {
         .failure()
         .code(1);
 }
+
+// --- endpoint/model resolution from env + config (agent_config) ------------
+// These assert the *resolved* endpoint the binary echoes back in `doctor`'s
+// JSON `endpoint` field — deliberately NOT `reachable`, so they don't depend
+// on any network/proxy behavior of the host.
+
+fn doctor_endpoint_field(cmd: &mut Command) -> String {
+    let out = cmd.assert().success().get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    v["endpoint"].as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn doctor_resolves_endpoint_from_config_file() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = \"http://config.example/v1/chat/completions\"\nmodel = \"cfg-model\""
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://config.example/v1/chat/completions"
+    );
+}
+
+#[test]
+fn doctor_resolves_endpoint_from_env_var() {
+    // Point UPARSER_CONFIG at a nonexistent file so only the env var can win.
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", "/no/such/uparser-config.toml")
+        .env("UPARSER_ENDPOINT", "http://env.example/v1/chat/completions");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://env.example/v1/chat/completions"
+    );
+}
+
+#[test]
+fn explicit_endpoint_flag_overrides_env_and_config() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = \"http://config.example/v1/chat/completions\""
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args([
+        "doctor",
+        "mineru-vlm",
+        "--endpoint",
+        "http://flag.example/v1/chat/completions",
+    ])
+    .env("UPARSER_CONFIG", cfg.path())
+    .env("UPARSER_ENDPOINT", "http://env.example/v1/chat/completions");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://flag.example/v1/chat/completions"
+    );
+}

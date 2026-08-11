@@ -12,7 +12,7 @@ Pick the parsing engine with `--protocol`. The two you'll use most:
 - **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per page. Best for **born-digital (electronic) PDFs** where you just need the text/structure fast. Cannot read scanned/image-only pages (no OCR).
 - **`mineru-vlm`** — highest accuracy (best reading order + tables). Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
 
-> ⚠️ **Always pass `--protocol`.** It defaults to `mock`, which emits placeholder text, *not* your document. `uparser parse doc.pdf` (no `--protocol`) returns fake output with exit 0 — a silent trap. When unsure which engine to use, pass `--protocol auto`.
+> **`--protocol` defaults to `auto`** (a Profiler+Router picks the engine: born-digital PDF → `native` offline; scan/complex → a VLM). So `uparser parse doc.pdf` with no flags does the right thing on a born-digital PDF. `mock` (placeholder output, *not* your document) is now **explicit-only** — request it deliberately with `--protocol mock`. Note: for `auto` to reach the offline `native` path the binary must be the `native`-enabled build (the shipped prebuilt is); if `auto` routes to a VLM it still needs an endpoint (it prints a clear stderr hint when none is configured).
 
 ## Agent helper scripts (one call, correct defaults)
 
@@ -158,33 +158,31 @@ By default, image/figure regions are cropped and written to `<source_stem>_image
 
 ## Configuring endpoints (avoid retyping `--endpoint`/`--model`)
 
-The binary itself takes the endpoint on the command line, but the skill ships a
-config-driven wrapper so you don't repeat it every call — useful when moving
-between machines/endpoints. Put a config at `~/.config/uparser/config.toml`
-(template: `references/config.example.toml`):
+**The binary resolves `--endpoint`/`--model` itself** — no wrapper needed. For
+`parse` and `doctor`, when a flag is omitted it falls back, in order:
 
+1. the explicit `--endpoint` / `--model` flag (always wins);
+2. the `UPARSER_ENDPOINT` / `UPARSER_MODEL` environment variables;
+3. `~/.config/uparser/config.toml` (override the path with `UPARSER_CONFIG`),
+   the `[<protocol>]` section — keyed by the *effective* protocol, so
+   `--protocol auto` that routes to `mineru-vlm` picks up `[mineru-vlm]`.
+
+```bash
+# Set once, then omit the flags on every call:
+export UPARSER_ENDPOINT=http://10.0.0.5:19122/v1/chat/completions
+export UPARSER_MODEL=MinerU2.5-2604-1.2B
+uparser parse --protocol mineru-vlm --format markdown doc.pdf   # no --endpoint/--model
+```
 ```toml
+# …or a config file (template: references/config.example.toml):
 [mineru-vlm]
 endpoint = "http://10.0.0.5:19122/v1/chat/completions"
 model    = "MinerU2.5-2604-1.2B"
 ```
 
-Then invoke via the wrapper instead of the raw binary — it injects
-`--endpoint`/`--model` from the `[protocol]` section (for `parse`, and
-`--endpoint` also for `doctor`, so pre-flight checks pick up the same config):
-
-```bash
-# Linux / WSL / git-bash:
-scripts/uparser-run.sh parse --protocol mineru-vlm --format markdown doc.pdf
-```
-```powershell
-# Windows PowerShell:
-scripts\uparser-run.ps1 parse --protocol mineru-vlm --format markdown doc.pdf
-```
-
-An explicit `--endpoint`/`--model` on the command line always overrides the
-config. Override the config path with the `UPARSER_CONFIG` env var. The raw
-`uparser ...` binary keeps working unchanged (no config read).
+The `scripts/uparser-run.sh` / `.ps1` wrappers predate this and inject the same
+values; they're now **optional** (useful only for an older binary that lacks
+native config support). Prefer env vars or the config file with the raw binary.
 
 ## Windows
 

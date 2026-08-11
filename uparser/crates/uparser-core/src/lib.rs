@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod agent_config;
 pub mod api;
 pub mod assets;
 pub mod cache;

@@ -1,10 +1,12 @@
 # uparser endpoint config — copy to ~/.config/uparser/config.toml
 # (Windows: same path under your home, i.e. %USERPROFILE%\.config\uparser\config.toml)
 #
-# Read by scripts/uparser-run.sh (Linux/WSL/git-bash) and
-# scripts/uparser-run.ps1 (Windows PowerShell). One [section] per protocol;
-# only endpoint/model are used. An explicit --endpoint/--model on the command
-# line still overrides these.
+# Read directly by the `uparser` binary (parse/doctor) as the lowest-precedence
+# fallback for --endpoint/--model: explicit flag > $UPARSER_ENDPOINT /
+# $UPARSER_MODEL env > this file's [<protocol>] section. The section is matched
+# against the *effective* protocol, so `--protocol auto` that routes to
+# mineru-vlm reads [mineru-vlm]. Override the path with $UPARSER_CONFIG.
+# (The scripts/uparser-run.* wrappers read the same file; now redundant.)
 
 [mineru-vlm]
 endpoint = "http://127.0.0.1:19122/v1/chat/completions"

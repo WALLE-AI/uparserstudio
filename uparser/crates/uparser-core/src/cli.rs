@@ -64,10 +64,13 @@ pub enum Command {
         path: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
-        /// Protocol name (`mock`, `mineru-vlm`, `dots-ocr`, `monkeyocr-v2`,
-        /// `native`), or `auto` to run the Profiler+Router first and pick
-        /// one automatically (per ARCHITECTURE.md §13.5).
-        #[arg(long, default_value = "mock")]
+        /// Protocol name (`native`, `mineru-vlm`, `dots-ocr`,
+        /// `monkeyocr-v2`, `pipeline`, `paddleocr`, `mock`), or `auto`
+        /// (the default) to run the Profiler+Router first and pick one
+        /// automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto`
+        /// rather than `mock` keeps an Agent that omits `--protocol` from
+        /// silently getting placeholder output — `mock` is now explicit-only.
+        #[arg(long, default_value = "auto")]
         protocol: String,
         /// Override the adapter's default endpoint (ignored by adapters
         /// with no endpoint, e.g. `mock`/`native`).
@@ -384,6 +387,24 @@ fn run_parse(
     } else {
         protocol.clone()
     };
+
+    // Resolve endpoint/model from CLI flag → env → config file, keyed by the
+    // *effective* (post-`auto`) protocol so a routed VLM picks up its config
+    // section. An explicit flag always wins; the fallbacks only fill omissions.
+    let (endpoint, model) =
+        crate::agent_config::resolve_endpoint_model(&effective_protocol, endpoint, model);
+
+    // Agent-friendly hint: `auto` routed to a model-backed protocol but nothing
+    // (flag/env/config) supplied an endpoint, so it will fall back to that
+    // adapter's built-in default and almost certainly fail to connect. Say so
+    // clearly on stderr instead of leaving a cryptic connection error.
+    if protocol == "auto" && effective_protocol != "native" && endpoint.is_none() {
+        eprintln!(
+            "hint: auto selected '{effective_protocol}', which needs a model endpoint, but \
+             none is configured — set UPARSER_ENDPOINT (or --endpoint / config.toml), or pass \
+             --protocol native for an offline text-layer parse"
+        );
+    }
 
     if effective_protocol == "native" {
         // Caching/`--stream` aren't wired into the `native` whole-document
@@ -992,6 +1013,9 @@ fn available_memory_mb() -> Option<u64> {
 /// protocols, or a local CPU/memory advisory for `pipeline`. Diagnostic
 /// only — a failed probe never changes `parse`'s behavior.
 fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
+    // Same endpoint resolution as `parse` (flag → env → config[protocol]) so a
+    // pre-flight `doctor` probes the very endpoint a later `parse` would use.
+    let (endpoint, _) = crate::agent_config::resolve_endpoint_model(&protocol, endpoint, None);
     if protocol == "pipeline" {
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
