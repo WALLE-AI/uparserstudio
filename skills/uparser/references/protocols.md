@@ -53,8 +53,13 @@ Traditional layout→OCR→formula→table, each stage independently `Local` (in
 ## 6. `paddleocr`
 Detect+recognize OCR with a from-scratch XY-cut geometric reading-order fallback. Single fixed `text` category. Needs a PaddleOCR-style REST endpoint (`--endpoint`).
 
-## 7. `auto`
-Runs the Profiler (L1 format + L2 structural, no model) then the Router to pick a protocol, logs the choice to stderr, then parses. Use when you don't know the document. Inspect the decision first with `uparser classify <file>` (prints a `DocumentProfile`: `kind`, `dominant_content`, per-page `has_table_region`/`needs_ocr`, etc.).
+## 7. `auto` (the default protocol)
+Runs the Profiler (L1 format + L2 structural, no model) then the Router to pick a protocol, logs the choice to stderr, then parses. This is the **default** when `--protocol` is omitted, so a bare `uparser parse doc.pdf` does the right thing. Inspect the decision first with `uparser classify <file>` (prints a `DocumentProfile`: `kind`, `dominant_content`, per-page `has_table_region`/`needs_ocr`, etc.).
+
+Two caveats: (1) the L2 structural signal that recognizes born-digital docs requires the `native`-enabled build (the shipped prebuilt is; without it, unclassifiable docs fall to the VLM fallback row). (2) if `auto` routes to a VLM, that VLM still needs an endpoint — resolved from `--endpoint` / `$UPARSER_ENDPOINT` / config; the binary prints a clear stderr hint if none is configured.
+
+## 7b. Endpoint/model resolution
+For `parse` and `doctor`, `--endpoint`/`--model` fall back (when omitted) to `$UPARSER_ENDPOINT`/`$UPARSER_MODEL`, then `~/.config/uparser/config.toml` (`$UPARSER_CONFIG` overrides the path) under the `[<effective-protocol>]` section. Explicit flags always win.
 
 ## 8. Endpoints & serving
 VLM protocols talk to an **OpenAI-compatible `/v1/chat/completions`** endpoint (e.g. a vLLM or LMDeploy server). Example: serve `MinerU2.5-Pro-2604-1.2B` with vLLM and point `--endpoint http://127.0.0.1:PORT/v1/chat/completions --model MinerU2.5-2604-1.2B`. Verify reachability with `uparser doctor <protocol> --endpoint <url>` before a large run. `pipeline`/`paddleocr` use their own lightweight (non-chat-completions) REST contracts.
