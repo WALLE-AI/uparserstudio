@@ -80,6 +80,10 @@ pub enum Command {
         /// `--endpoint`).
         #[arg(long)]
         model: Option<String>,
+        /// Save MinerU stage-1/stage-2 raw responses and final blocks for
+        /// deterministic offline analysis. Ignored by other protocols.
+        #[arg(long)]
+        trace_dir: Option<String>,
         /// Number of pages rasterized+processed together before the
         /// window's page buffers are dropped and the next window begins
         /// (bounds peak memory to ~O(window) page images, not O(total)).
@@ -214,6 +218,7 @@ pub fn run(cli: Cli) -> i32 {
             protocol,
             endpoint,
             model,
+            trace_dir,
             window_size,
             max_concurrency,
             layout_backend,
@@ -283,6 +288,7 @@ pub fn run(cli: Cli) -> i32 {
                 protocol,
                 endpoint,
                 model,
+                trace_dir,
                 window_size,
                 max_concurrency,
                 pipeline_config,
@@ -308,6 +314,7 @@ fn run_parse(
     protocol: String,
     endpoint: Option<String>,
     model: Option<String>,
+    trace_dir: Option<String>,
     window_size: usize,
     max_concurrency: usize,
     pipeline_config: PipelineConfig,
@@ -441,6 +448,7 @@ fn run_parse(
     let overrides = AdapterOverrides {
         endpoint,
         model,
+        trace_dir: trace_dir.map(std::path::PathBuf::from),
         pipeline: Some(pipeline_config),
     };
     let Some(adapter) = registry.build(&effective_protocol, &overrides) else {
@@ -523,18 +531,28 @@ fn run_parse(
             permits,
             pages,
             |window_pages, window_errors, window_warnings| {
-                let mut printed_pages: Vec<crate::types::Page> = if no_postprocess {
-                    window_pages.to_vec()
-                } else {
-                    window_pages
-                        .iter()
-                        .cloned()
-                        .map(|page| crate::types::Page {
-                            blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
-                            ..page
-                        })
-                        .collect()
-                };
+                let mut printed_pages: Vec<crate::types::Page> =
+                    if no_postprocess || effective_protocol == "mineru-vlm-official" {
+                        window_pages.to_vec()
+                    } else if effective_protocol == "mineru-vlm-surpass" {
+                        window_pages
+                            .iter()
+                            .cloned()
+                            .map(|page| crate::types::Page {
+                                blocks: postprocess::merge_dense_index_by_geometry(page.blocks),
+                                ..page
+                            })
+                            .collect()
+                    } else {
+                        window_pages
+                            .iter()
+                            .cloned()
+                            .map(|page| crate::types::Page {
+                                blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
+                                ..page
+                            })
+                            .collect()
+                    };
                 if let Some(dir) = &effective_assets_dir
                     && let Err(e) = crate::assets::write_page_assets(&mut printed_pages, dir)
                 {
@@ -627,8 +645,16 @@ fn run_parse(
             result
         })
     };
-    let result_pages = if no_postprocess {
+    let result_pages = if no_postprocess || effective_protocol == "mineru-vlm-official" {
         result_pages
+    } else if effective_protocol == "mineru-vlm-surpass" {
+        result_pages
+            .into_iter()
+            .map(|page| crate::types::Page {
+                blocks: postprocess::merge_dense_index_by_geometry(page.blocks),
+                ..page
+            })
+            .collect()
     } else {
         result_pages
             .into_iter()
@@ -983,7 +1009,7 @@ fn run_cache(action: CacheAction) -> i32 {
 /// doctor check is local-resource-based, not endpoint reachability).
 fn default_endpoint_for(protocol: &str) -> Option<String> {
     match protocol {
-        "mineru-vlm" => {
+        "mineru-vlm" | "mineru-vlm-official" | "mineru-vlm-surpass" => {
             Some(crate::adapters::mineru_vlm::MineruVlmAdapter::default().endpoint_base)
         }
         "dots-ocr" => Some(crate::adapters::dots_ocr::DotsOcrAdapter::default().endpoint_base),

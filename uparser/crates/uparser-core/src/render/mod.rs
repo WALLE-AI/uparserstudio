@@ -10,9 +10,18 @@ pub fn to_json(result: &ParseResult) -> String {
 }
 
 pub fn to_markdown(result: &ParseResult) -> String {
+    if matches!(
+        result.protocol.as_str(),
+        "mineru-vlm-official" | "mineru-vlm-surpass"
+    ) {
+        return to_mineru_official_markdown(result);
+    }
     let mut out = String::new();
     for page in &result.pages {
         for block in &page.blocks {
+            if is_discarded_markdown_category(block.category.as_deref()) {
+                continue;
+            }
             if let Some(html) = &block.html {
                 out.push_str(html);
                 out.push_str("\n\n");
@@ -55,6 +64,34 @@ pub fn to_markdown(result: &ParseResult) -> String {
         }
     }
     out.trim_end().to_string()
+}
+
+/// OmniDocBench's official MinerU conversion writes each truthy `content`
+/// field verbatim in model order, separated by blank lines. In particular,
+/// it does not add Markdown heading/list syntax or wrap an already-delimited
+/// equation in another pair of math delimiters.
+fn to_mineru_official_markdown(result: &ParseResult) -> String {
+    result
+        .pages
+        .iter()
+        .flat_map(|page| &page.blocks)
+        .filter_map(|block| {
+            block
+                .html
+                .as_deref()
+                .or(block.latex.as_deref())
+                .or(block.text.as_deref())
+        })
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn is_discarded_markdown_category(category: Option<&str>) -> bool {
+    matches!(
+        category,
+        Some("header" | "footer" | "page_number" | "unknown")
+    )
 }
 
 pub fn to_content_list(result: &ParseResult) -> String {
@@ -124,6 +161,22 @@ mod tests {
     #[test]
     fn markdown_snapshot() {
         insta::assert_snapshot!(to_markdown(&sample_result()));
+    }
+
+    #[test]
+    fn official_mineru_markdown_emits_content_verbatim() {
+        let mut result = sample_result();
+        result.protocol = "mineru-vlm-official".into();
+        result.pages[0].blocks[0].category = Some("title".into());
+        result.pages[0].blocks[0].text = Some("Heading".into());
+
+        let mut formula = result.pages[0].blocks[0].clone();
+        formula.text = None;
+        formula.category = Some("equation".into());
+        formula.latex = Some("\\[\nx+y\n\\]".into());
+        result.pages[0].blocks.push(formula);
+
+        assert_eq!(to_markdown(&result), "Heading\n\n\\[\nx+y\n\\]");
     }
 
     #[test]
@@ -249,5 +302,37 @@ mod tests {
         assert!(md.contains("- an item"), "list → '- ': {md}");
         // Plain text is unprefixed.
         assert!(md.contains("a paragraph") && !md.contains("# a paragraph"));
+    }
+
+    #[test]
+    fn markdown_discards_paratext_categories() {
+        fn typed(category: &str, text: &str) -> Block {
+            Block {
+                geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+                geom_frame: CoordFrame::Page,
+                bbox_px: Some([0, 0, 10, 10]),
+                category_raw: category.into(),
+                category: Some(category.into()),
+                reading_order: None,
+                text: Some(text.into()),
+                html: None,
+                latex: None,
+                spans: vec![],
+                merge_hint: None,
+                confidence: None,
+                source: BlockSource::LayoutThenRecognize,
+                error: None,
+                asset_bytes: None,
+                asset_path: None,
+            }
+        }
+        let mut r = sample_result();
+        r.pages[0].blocks = vec![
+            typed("header", "running head"),
+            typed("page_number", "12"),
+            typed("text", "body"),
+            typed("footer", "footer"),
+        ];
+        assert_eq!(to_markdown(&r), "body");
     }
 }

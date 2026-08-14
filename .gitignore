@@ -11,6 +11,7 @@ opensource/
 # Build artifacts
 target/
 uparser/target/
+benchmark
 
 # Distribution bundles (ship these via GitHub Releases, not git)
 *.tar.gz

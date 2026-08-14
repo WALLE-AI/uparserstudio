@@ -11,6 +11,59 @@ use crate::types::{Block, Geometry};
 
 const VERTICAL_GAP_THRESHOLD_PX: i32 = 8;
 const HORIZONTAL_ALIGN_TOLERANCE_PX: i32 = 20;
+const DENSE_INDEX_MIN_BLOCKS: usize = 150;
+
+/// Merge only pages with the distinctive geometry of a dense multi-column
+/// index. This bounds matcher complexity without changing normal pages.
+pub fn merge_dense_index_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
+    if !is_dense_index_page(&blocks) {
+        return blocks;
+    }
+    merge_paragraphs_by_geometry(blocks)
+}
+
+fn is_dense_index_page(blocks: &[Block]) -> bool {
+    if blocks.len() < DENSE_INDEX_MIN_BLOCKS {
+        return false;
+    }
+
+    let text_blocks: Vec<&Block> = blocks
+        .iter()
+        .filter(|block| block.category.as_deref() == Some("text"))
+        .collect();
+    if text_blocks.len() * 10 < blocks.len() * 9 {
+        return false;
+    }
+
+    let short_with_bbox = text_blocks
+        .iter()
+        .filter(|block| {
+            block.bbox_px.is_some()
+                && block
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= 100)
+        })
+        .count();
+    if short_with_bbox * 10 < text_blocks.len() * 9 {
+        return false;
+    }
+
+    let mergeable_pairs = text_blocks
+        .windows(2)
+        .filter(|pair| {
+            let (Some(a), Some(b)) = (pair[0].bbox_px, pair[1].bbox_px) else {
+                return false;
+            };
+            let vertical_gap = b[1] - a[3];
+            let left_diff = (a[0] - b[0]).abs();
+            (0..=VERTICAL_GAP_THRESHOLD_PX).contains(&vertical_gap)
+                && left_diff <= HORIZONTAL_ALIGN_TOLERANCE_PX
+        })
+        .count();
+
+    mergeable_pairs * 4 >= text_blocks.len().saturating_sub(1) * 3
+}
 
 /// Merge adjacent same-category "text" blocks that are vertically close
 /// and left-aligned into a single paragraph block, purely from geometry
@@ -126,22 +179,14 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_punctuation_before_merging() {
-        // The real case content_normalize.rs exists for: adjacent
-        // blocks with inconsistent halfwidth/fullwidth punctuation
-        // should come out normalized after this pass, not just merged
-        // as-is (D.10-adjacent — see the "P0：后处理模块强化" section
-        // of CLI_ENHANCEMENT_PROPOSAL.md).
-        let blocks = vec![text_block([10, 0, 200, 20], "安全投入符合安全生产要求;")];
+    fn normalizes_fullwidth_alnum_before_merging() {
+        let blocks = vec![text_block([10, 0, 200, 20], "编号Ａ１２")];
         let merged = merge_paragraphs_by_geometry(blocks);
-        assert_eq!(
-            merged[0].text.as_deref(),
-            Some("安全投入符合安全生产要求；")
-        );
+        assert_eq!(merged[0].text.as_deref(), Some("编号A12"));
     }
 
     #[test]
-    fn does_not_normalize_punctuation_in_non_cjk_text() {
+    fn does_not_normalize_punctuation() {
         let blocks = vec![text_block([10, 0, 200, 20], "Hello, world; how are you?")];
         let merged = merge_paragraphs_by_geometry(blocks);
         assert_eq!(
@@ -202,6 +247,41 @@ mod tests {
         let merged = merge_paragraphs_by_geometry(blocks);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].text.as_deref(), Some("One Two Three"));
+    }
+
+    #[test]
+    fn dense_index_merge_is_selective() {
+        let blocks = (0..150)
+            .map(|index| {
+                let column = index / 50;
+                let row = index % 50;
+                text_block(
+                    [column * 300, row * 25, column * 300 + 200, row * 25 + 20],
+                    &format!("Index entry {index}, 1:20"),
+                )
+            })
+            .collect();
+        let merged = merge_dense_index_by_geometry(blocks);
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn dense_index_merge_preserves_non_index_pages() {
+        let blocks = (0..150)
+            .map(|index| {
+                text_block(
+                    [
+                        if index % 2 == 0 { 0 } else { 300 },
+                        index * 25,
+                        500,
+                        index * 25 + 20,
+                    ],
+                    &format!("Independent paragraph {index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let merged = merge_dense_index_by_geometry(blocks);
+        assert_eq!(merged.len(), 150);
     }
 
     /// Gate G2 proof: this module is unmodified by P2, and must treat a

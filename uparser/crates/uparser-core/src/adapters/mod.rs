@@ -276,6 +276,9 @@ pub struct PipelineConfig {
 pub struct AdapterOverrides {
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    /// Optional protocol trace directory. Currently consumed by MinerU's
+    /// two-stage adapter; other adapters ignore it.
+    pub trace_dir: Option<std::path::PathBuf>,
     /// `pipeline`-only stage-backend overrides; ignored by every other
     /// adapter.
     pub pipeline: Option<PipelineConfig>,
@@ -333,6 +336,31 @@ impl Registry {
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
             }
+            adapter.trace_dir = overrides.trace_dir.clone();
+            Arc::new(adapter)
+        });
+
+        registry.register("mineru-vlm-official", |overrides| {
+            let mut adapter = mineru_vlm::MineruVlmAdapter::official();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.endpoint_base = endpoint.clone();
+            }
+            if let Some(model) = &overrides.model {
+                adapter.model = model.clone();
+            }
+            adapter.trace_dir = overrides.trace_dir.clone();
+            Arc::new(adapter)
+        });
+
+        registry.register("mineru-vlm-surpass", |overrides| {
+            let mut adapter = mineru_vlm::MineruVlmAdapter::surpass();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.endpoint_base = endpoint.clone();
+            }
+            if let Some(model) = &overrides.model {
+                adapter.model = model.clone();
+            }
+            adapter.trace_dir = overrides.trace_dir.clone();
             Arc::new(adapter)
         });
 
@@ -521,6 +549,24 @@ mod tests {
     fn is_truncated_response_false_for_missing_finish_reason() {
         let resp = serde_json::json!({"choices": [{"message": {"content": "x"}}]});
         assert!(!is_truncated_response(&resp));
+    }
+
+    #[test]
+    fn registry_exposes_independent_mineru_official_profile() {
+        let registry = Registry::with_builtins();
+        let adapter = registry
+            .build("mineru-vlm-official", &AdapterOverrides::default())
+            .expect("official profile registered");
+        assert_eq!(adapter.name(), "mineru-vlm-official");
+    }
+
+    #[test]
+    fn registry_exposes_independent_mineru_surpass_profile() {
+        let registry = Registry::with_builtins();
+        let adapter = registry
+            .build("mineru-vlm-surpass", &AdapterOverrides::default())
+            .expect("surpass profile registered");
+        assert_eq!(adapter.name(), "mineru-vlm-surpass");
     }
 
     #[tokio::test]

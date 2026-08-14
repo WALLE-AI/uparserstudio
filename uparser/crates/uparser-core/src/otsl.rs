@@ -7,25 +7,34 @@
 //! HTML directly instead of OTSL tokens — that case short-circuits to a
 //! passthrough.
 //!
-//! This is a best-effort general implementation of the published OTSL
-//! grid semantics, not a verified port of MinerU's exact converter (that
-//! source isn't available locally — see the P1 plan's caveat); malformed
-//!/truncated token streams degrade to a best-effort partial table rather
-//! than panicking.
+//! The converter follows `mineru_vl_utils` v1.0.5's `otsl2html.py` shape:
+//! split into row token grids, pad ragged rows with `<ecel>`, then compute
+//! spans for `<fcel>/<ecel>` origin cells by scanning right/down extension
+//! tokens. Malformed/truncated streams degrade to a best-effort partial
+//! table rather than panicking.
 
 use regex::Regex;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
 static TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<(nl|fcel|ecel|lcel|ucel|xcel)>").expect("valid regex"));
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Token {
+    Nl,
+    Fcel,
+    Ecel,
+    Lcel,
+    Ucel,
+    Xcel,
+}
+
 struct Cell {
     text: String,
     row: usize,
     col: usize,
-    max_row: usize,
-    max_col: usize,
+    row_span: usize,
+    col_span: usize,
 }
 
 /// Convert OTSL tokens (or a passthrough literal `<table>...</table>`) to
@@ -50,159 +59,156 @@ pub fn to_html(raw: &str) -> (String, Vec<String>) {
         );
     }
 
-    let mut cells: Vec<Cell> = Vec::new();
-    let mut grid: HashMap<(usize, usize), usize> = HashMap::new();
-    let mut row = 0usize;
-    let mut col = 0usize;
-    let mut max_row_seen = 0usize;
-    let mut max_col_seen = 0usize;
-
-    let matches: Vec<_> = TAG_RE.captures_iter(trimmed).collect();
-    if matches.is_empty() {
+    let items = tokenize(trimmed);
+    if items.is_empty() {
         return ("<table></table>".to_string(), warnings);
     }
-    for (i, caps) in matches.iter().enumerate() {
-        let tag = &caps[1];
-        let tag_match = caps.get(0).unwrap();
-        let text_start = tag_match.end();
-        let text_end = matches
-            .get(i + 1)
-            .map(|next| next.get(0).unwrap().start())
-            .unwrap_or(trimmed.len());
-        let trailing = trimmed[text_start..text_end].trim();
 
-        match tag {
-            "nl" => {
-                row += 1;
-                col = 0;
-            }
-            "fcel" | "ecel" => {
-                let idx = cells.len();
-                cells.push(Cell {
-                    text: if tag == "fcel" {
-                        trailing.to_string()
-                    } else {
-                        String::new()
-                    },
-                    row,
-                    col,
-                    max_row: row,
-                    max_col: col,
-                });
-                grid.insert((row, col), idx);
-                max_row_seen = max_row_seen.max(row);
-                max_col_seen = max_col_seen.max(col);
-                col += 1;
-            }
-            "lcel" => {
-                let referent = grid.get(&(row, col.wrapping_sub(1))).copied();
-                let idx = referent.unwrap_or_else(|| new_fallback_cell(&mut cells, row, col));
-                cells[idx].max_col = cells[idx].max_col.max(col);
-                grid.insert((row, col), idx);
-                max_row_seen = max_row_seen.max(row);
-                max_col_seen = max_col_seen.max(col);
-                col += 1;
-            }
-            "ucel" => {
-                let referent = if row == 0 {
-                    None
-                } else {
-                    grid.get(&(row - 1, col)).copied()
-                };
-                let idx = referent.unwrap_or_else(|| new_fallback_cell(&mut cells, row, col));
-                cells[idx].max_row = cells[idx].max_row.max(row);
-                grid.insert((row, col), idx);
-                max_row_seen = max_row_seen.max(row);
-                max_col_seen = max_col_seen.max(col);
-                col += 1;
-            }
-            "xcel" => {
-                // `xcel` extends both up and left, so it can have a
-                // referent on either side. When both exist and disagree
-                // (a genuinely ambiguous span), previously this silently
-                // picked "up" with no consistency check or warning at
-                // all — the exact spot this module's own doc comment
-                // calls out as most likely to break on real irregular
-                // table headers (see D.6 in `CLI_ENHANCEMENT_PROPOSAL.md`).
-                // Now: prefer whichever neighbor already covers the
-                // larger span (a reasonable tie-break — the bigger
-                // existing merge is more likely the "real" origin cell),
-                // and warn on the conflict rather than deciding silently.
-                let referent_up = if row == 0 {
-                    None
-                } else {
-                    grid.get(&(row - 1, col)).copied()
-                };
-                let referent_left = grid.get(&(row, col.wrapping_sub(1))).copied();
-                let idx = match (referent_up, referent_left) {
-                    (Some(up), Some(left)) if up != left => {
-                        let span = |i: usize| {
-                            (cells[i].max_row - cells[i].row + 1)
-                                * (cells[i].max_col - cells[i].col + 1)
-                        };
-                        let chosen = if span(left) > span(up) { left } else { up };
-                        warnings.push(format!(
-                            "xcel span conflict at row {row} col {col}: up-neighbor and left-neighbor cells disagree, picked the {} span",
-                            if chosen == left { "left" } else { "up" }
-                        ));
-                        chosen
-                    }
-                    (Some(up), _) => up,
-                    (None, Some(left)) => left,
-                    (None, None) => new_fallback_cell(&mut cells, row, col),
-                };
-                cells[idx].max_row = cells[idx].max_row.max(row);
-                cells[idx].max_col = cells[idx].max_col.max(col);
-                grid.insert((row, col), idx);
-                max_row_seen = max_row_seen.max(row);
-                max_col_seen = max_col_seen.max(col);
-                col += 1;
-            }
-            _ => unreachable!("regex only matches known tags"),
-        }
+    let mut rows = split_rows(&items);
+    if rows.is_empty() {
+        return ("<table></table>".to_string(), warnings);
     }
+    pad_rows(&mut rows, &mut warnings);
 
-    let html = render_html(&cells, &grid, max_row_seen, max_col_seen);
+    let cells = parse_cells(&rows, &items);
+    let html = render_html(&cells, rows.len(), rows.first().map_or(0, Vec::len));
     (html, warnings)
 }
 
-fn new_fallback_cell(cells: &mut Vec<Cell>, row: usize, col: usize) -> usize {
-    let idx = cells.len();
-    cells.push(Cell {
-        text: String::new(),
-        row,
-        col,
-        max_row: row,
-        max_col: col,
-    });
-    idx
+fn tokenize(input: &str) -> Vec<(Token, String)> {
+    let matches: Vec<_> = TAG_RE.captures_iter(input).collect();
+    matches
+        .iter()
+        .enumerate()
+        .map(|(i, caps)| {
+            let tag_match = caps.get(0).unwrap();
+            let text_start = tag_match.end();
+            let text_end = matches
+                .get(i + 1)
+                .map(|next| next.get(0).unwrap().start())
+                .unwrap_or(input.len());
+            (
+                parse_tag(&caps[1]),
+                input[text_start..text_end].trim().to_string(),
+            )
+        })
+        .collect()
 }
 
-fn render_html(
-    cells: &[Cell],
-    grid: &HashMap<(usize, usize), usize>,
-    max_row: usize,
-    max_col: usize,
-) -> String {
+fn parse_tag(tag: &str) -> Token {
+    match tag {
+        "nl" => Token::Nl,
+        "fcel" => Token::Fcel,
+        "ecel" => Token::Ecel,
+        "lcel" => Token::Lcel,
+        "ucel" => Token::Ucel,
+        "xcel" => Token::Xcel,
+        _ => unreachable!("regex only matches known tags"),
+    }
+}
+
+fn split_rows(items: &[(Token, String)]) -> Vec<Vec<Token>> {
+    let mut rows = Vec::new();
+    let mut current = Vec::new();
+    for (token, _) in items {
+        if *token == Token::Nl {
+            if !current.is_empty() {
+                rows.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(*token);
+        }
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    rows
+}
+
+fn pad_rows(rows: &mut [Vec<Token>], warnings: &mut Vec<String>) {
+    let Some(max_cols) = rows.iter().map(Vec::len).max() else {
+        return;
+    };
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        if row.len() < max_cols {
+            warnings.push(format!(
+                "padded ragged OTSL row {row_idx} from {} to {max_cols} columns with <ecel>",
+                row.len()
+            ));
+            row.resize(max_cols, Token::Ecel);
+        }
+    }
+}
+
+fn parse_cells(rows: &[Vec<Token>], items: &[(Token, String)]) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut row = 0usize;
+    let mut col = 0usize;
+    for (token, text) in items {
+        match token {
+            Token::Nl => {
+                row += 1;
+                col = 0;
+            }
+            Token::Fcel | Token::Ecel => {
+                if row < rows.len() && col < rows[row].len() {
+                    cells.push(Cell {
+                        text: if *token == Token::Fcel {
+                            text.trim().to_string()
+                        } else {
+                            String::new()
+                        },
+                        row,
+                        col,
+                        row_span: 1 + count_down(rows, row + 1, col, &[Token::Ucel, Token::Xcel]),
+                        col_span: 1 + count_right(rows, row, col + 1, &[Token::Lcel, Token::Xcel]),
+                    });
+                }
+                col += 1;
+            }
+            Token::Lcel | Token::Ucel | Token::Xcel => {
+                col += 1;
+            }
+        }
+    }
+    cells
+}
+
+fn count_right(rows: &[Vec<Token>], row: usize, mut col: usize, tokens: &[Token]) -> usize {
+    let mut span = 0;
+    while row < rows.len() && col < rows[row].len() && tokens.contains(&rows[row][col]) {
+        span += 1;
+        col += 1;
+    }
+    span
+}
+
+fn count_down(rows: &[Vec<Token>], mut row: usize, col: usize, tokens: &[Token]) -> usize {
+    let mut span = 0;
+    while row < rows.len() && col < rows[row].len() && tokens.contains(&rows[row][col]) {
+        span += 1;
+        row += 1;
+    }
+    span
+}
+
+fn render_html(cells: &[Cell], num_rows: usize, num_cols: usize) -> String {
     let mut html = String::from("<table>");
-    for r in 0..=max_row {
+    for r in 0..num_rows {
         html.push_str("<tr>");
-        for c in 0..=max_col {
-            let Some(&idx) = grid.get(&(r, c)) else {
+        for c in 0..num_cols {
+            if covered_by_previous_span(cells, r, c) {
+                continue;
+            }
+            let Some(cell) = cells.iter().find(|cell| cell.row == r && cell.col == c) else {
                 continue;
             };
-            let cell = &cells[idx];
-            if cell.row != r || cell.col != c {
-                continue; // not the origin cell of this span
-            }
-            let rowspan = cell.max_row - cell.row + 1;
-            let colspan = cell.max_col - cell.col + 1;
             html.push_str("<td");
-            if rowspan > 1 {
-                html.push_str(&format!(" rowspan=\"{rowspan}\""));
+            if cell.row_span > 1 {
+                html.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
             }
-            if colspan > 1 {
-                html.push_str(&format!(" colspan=\"{colspan}\""));
+            if cell.col_span > 1 {
+                html.push_str(&format!(" colspan=\"{}\"", cell.col_span));
             }
             html.push('>');
             html.push_str(&escape_html(&cell.text));
@@ -212,6 +218,16 @@ fn render_html(
     }
     html.push_str("</table>");
     html
+}
+
+fn covered_by_previous_span(cells: &[Cell], row: usize, col: usize) -> bool {
+    cells.iter().any(|cell| {
+        (cell.row != row || cell.col != col)
+            && row >= cell.row
+            && row < cell.row + cell.row_span
+            && col >= cell.col
+            && col < cell.col + cell.col_span
+    })
 }
 
 pub(crate) fn escape_html(s: &str) -> String {
@@ -280,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn xcel_span_conflict_between_distinct_up_and_left_cells_is_resolved_and_warned() {
+    fn xcel_with_distinct_neighbors_still_renders_stably() {
         // Row 0: three independent single cells "a", "b", "c".
         // Row 1: "d", then an lcel (extends "d" rightward to col 1),
         // then an xcel at col 2 — its left-neighbor is the lcel-extended
@@ -289,11 +305,11 @@ mod tests {
         // is a real conflict rather than the same cell reached two ways.
         let raw = "<fcel>a<fcel>b<fcel>c<nl><fcel>d<lcel><xcel>";
         let (html, warnings) = to_html(raw);
-        // Some resolution must have happened without panicking, and the
-        // conflict must have been reported rather than silently decided.
-        assert!(!warnings.is_empty(), "expected a span-conflict warning");
-        assert!(warnings[0].contains("xcel span conflict"));
+        // v1.0.5's two-pass converter derives spans from origin cells
+        // only; xcel itself is not a conflict-resolution event.
+        assert!(warnings.is_empty());
         assert!(html.starts_with("<table>"));
+        assert!(html.contains("colspan=\"3\""));
     }
 
     #[test]

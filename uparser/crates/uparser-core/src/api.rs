@@ -38,6 +38,7 @@ pub struct ParseOptions {
     pub protocol: String,
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    pub trace_dir: Option<String>,
     pub window_size: usize,
     pub max_concurrency: usize,
     pub pipeline_config: PipelineConfig,
@@ -73,6 +74,7 @@ impl Default for ParseOptions {
             protocol: "mock".to_string(),
             endpoint: None,
             model: None,
+            trace_dir: None,
             // See cli.rs's `--window-size`/`--max-concurrency` doc
             // comments for the rationale behind these defaults: 64 keeps
             // any <=64-page document as a single barrier-free window, and
@@ -248,6 +250,7 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
     let overrides = AdapterOverrides {
         endpoint: options.endpoint.clone(),
         model: options.model.clone(),
+        trace_dir: options.trace_dir.as_ref().map(std::path::PathBuf::from),
         pipeline: Some(options.pipeline_config.clone()),
     };
     let adapter = registry
@@ -277,8 +280,16 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
     let scheduler = Scheduler::new(effective_window);
     let (result_pages, page_errors, warnings) =
         scheduler.run(adapter, transport, permits, pages).await;
-    let result_pages = if options.no_postprocess {
+    let result_pages = if options.no_postprocess || effective_protocol == "mineru-vlm-official" {
         result_pages
+    } else if effective_protocol == "mineru-vlm-surpass" {
+        result_pages
+            .into_iter()
+            .map(|page| crate::types::Page {
+                blocks: crate::postprocess::merge_dense_index_by_geometry(page.blocks),
+                ..page
+            })
+            .collect()
     } else {
         result_pages
             .into_iter()

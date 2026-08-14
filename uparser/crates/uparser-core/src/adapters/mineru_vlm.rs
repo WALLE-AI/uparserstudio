@@ -28,15 +28,34 @@ use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, P
 use async_trait::async_trait;
 use futures::future::join_all;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const LAYOUT_IMAGE_SIZE: u32 = 1036;
 const MAX_EDGE_RATIO: f32 = 50.0;
 const MIN_EDGE: u32 = 28;
 const IOU_DEDUPE_THRESHOLD: f32 = 0.8;
+const TABLE_INTERNAL_COVERAGE_THRESHOLD: f32 = 0.9;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MineruVlmProfile {
+    Enhanced,
+    Official,
+    Surpass,
+}
 
 /// Native categories for which stage 2 (content extraction) is skipped
-/// entirely — confirmed from `mineru_vl_utils` v0.1.14.
+/// entirely. `image` pixels are preserved as an asset crop instead of sent to
+/// the model. `list`/`equation_block` are the *container* boxes; their items
+/// are emitted as their own `list_item`/`equation` boxes.
+///
+/// NOTE: recognizing `list` (F3) and `equation_block` (F4) content was tried
+/// and REVERTED. On a stratified dev set F4 looked net-positive (formula ↓,
+/// table ↑), but that set over-represented equation/table pages — on the full
+/// OmniDocBench distribution both regressed the (text-weighted) headline: Text
+/// Edit +0.0028, Reading Order +0.0043, outweighing the formula gain, because
+/// the extra recovered blocks displace text matches and perturb reading order
+/// under the scorer. See MINERU_VLM_OPTIMIZATION_PLAN.md appendix A.
 const SKIP_CONTENT: &[&str] = &["image", "list", "equation_block"];
 
 pub struct MineruVlmAdapter {
@@ -47,6 +66,8 @@ pub struct MineruVlmAdapter {
     pub model: String,
     pub timeout: Duration,
     pub max_retries: u32,
+    pub profile: MineruVlmProfile,
+    pub trace_dir: Option<PathBuf>,
 }
 
 impl Default for MineruVlmAdapter {
@@ -56,17 +77,65 @@ impl Default for MineruVlmAdapter {
             model: "mineru-vlm".to_string(),
             timeout: Duration::from_secs(60),
             max_retries: 2,
+            profile: MineruVlmProfile::Enhanced,
+            trace_dir: None,
         }
     }
 }
 
 impl MineruVlmAdapter {
+    pub fn official() -> Self {
+        Self {
+            timeout: Duration::from_secs(600),
+            max_retries: 3,
+            profile: MineruVlmProfile::Official,
+            ..Self::default()
+        }
+    }
+
+    pub fn surpass() -> Self {
+        Self {
+            profile: MineruVlmProfile::Surpass,
+            ..Self::official()
+        }
+    }
+
+    fn official_compatible(&self) -> bool {
+        matches!(
+            self.profile,
+            MineruVlmProfile::Official | MineruVlmProfile::Surpass
+        )
+    }
+
     fn stage1_endpoint(&self) -> String {
         format!("{}#stage1", self.endpoint_base)
     }
 
     fn stage2_endpoint(&self, block_index: usize) -> String {
         format!("{}#stage2:{block_index}", self.endpoint_base)
+    }
+
+    fn write_trace(&self, ctx: &ParseCtx, page_num: u32, name: &str, value: &Value) {
+        let Some(dir) = &self.trace_dir else {
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            ctx.warn(format!(
+                "mineru-vlm page {page_num}: failed to create trace directory {}: {error}",
+                dir.display()
+            ));
+            return;
+        }
+        let path = dir.join(format!("page-{page_num:04}-{name}.json"));
+        let result = serde_json::to_vec_pretty(value)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| std::fs::write(&path, bytes).map_err(|error| error.to_string()));
+        if let Err(error) = result {
+            ctx.warn(format!(
+                "mineru-vlm page {page_num}: failed to write trace {}: {error}",
+                path.display()
+            ));
+        }
     }
 
     fn request(
@@ -96,49 +165,106 @@ impl MineruVlmAdapter {
         }
     }
 
-    fn layout_sampling() -> Value {
+    /// Shared greedy-decoding base params for BOTH stages, matching
+    /// `mineru_vl_utils`' `MinerUSamplingParams` defaults
+    /// (temperature=0.0, top_p=0.01, top_k=1, no_repeat_ngram_size=100).
+    /// `skip_special_tokens: false` is required — vLLM's OpenAI-compatible
+    /// endpoint defaults to stripping special tokens, which would eat the
+    /// `<|box_start|>`/`<|ref_start|>` wrapper tokens the custom_token grammar
+    /// depends on.
+    ///
+    /// Stage-2 previously set ONLY the per-type presence/frequency penalties
+    /// and omitted these greedy params, so content recognition silently ran at
+    /// the server's *default* (non-greedy) sampling — a real fidelity gap vs.
+    /// MinerU, whose stage-2 inherits exactly these base defaults. Sharing one
+    /// base here keeps stage-1/stage-2 from drifting apart.
+    fn base_greedy_sampling() -> serde_json::Map<String, Value> {
         serde_json::json!({
             "temperature": 0.0,
             "top_p": 0.01,
             "top_k": 1,
-            "no_repeat_ngram_size": 100,
-            // Required: vLLM's OpenAI-compatible endpoint defaults to
-            // stripping special tokens from decoded text, which would eat
-            // the `<|box_start|>`/`<|ref_start|>` wrapper tokens the
-            // custom_token grammar depends on.
+            "repetition_penalty": 1.0,
+            "vllm_xargs": {
+                "no_repeat_ngram_size": 100,
+                "debug": false
+            },
             "skip_special_tokens": false,
         })
+        .as_object()
+        .expect("literal is an object")
+        .clone()
     }
 
-    /// Per-category stage-2 prompt/sampling, confirmed from
-    /// `mineru_vl_utils` v0.1.14's `DEFAULT_PROMPTS`/`DEFAULT_SAMPLING_PARAMS`.
+    fn layout_sampling() -> Value {
+        Value::Object(Self::base_greedy_sampling())
+    }
+
+    /// Per-category stage-2 prompt/sampling. Prompts + penalties confirmed from
+    /// `mineru_vl_utils`' `DEFAULT_PROMPTS`/`DEFAULT_SAMPLING_PARAMS`; the greedy
+    /// base is shared with stage-1 via [`Self::base_greedy_sampling`].
     fn stage2_prompt_and_sampling(category_raw: &str) -> (&'static str, Value) {
-        match category_raw {
-            "table" => (
-                "\nTable Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.005,
-                    "skip_special_tokens": false,
-                }),
-            ),
-            "equation" => (
-                "\nFormula Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.05,
-                    "skip_special_tokens": false,
-                }),
-            ),
-            _ => (
-                "\nText Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.05,
-                    "skip_special_tokens": false,
-                }),
-            ),
+        let (prompt, presence_penalty, frequency_penalty) = match category_raw {
+            "table" => ("\nTable Recognition:", 1.0, 0.005),
+            "equation" => ("\nFormula Recognition:", 1.0, 0.05),
+            _ => ("\nText Recognition:", 1.0, 0.05),
+        };
+        let mut sampling = Self::base_greedy_sampling();
+        sampling.insert(
+            "presence_penalty".to_string(),
+            serde_json::json!(presence_penalty),
+        );
+        sampling.insert(
+            "frequency_penalty".to_string(),
+            serde_json::json!(frequency_penalty),
+        );
+        (prompt, Value::Object(sampling))
+    }
+
+    fn normalize_official_category(raw: &str) -> Option<(String, String)> {
+        let raw = match raw {
+            "unknown" => "image",
+            "inline_formula" => return None,
+            value => value,
+        };
+        let known = matches!(
+            raw,
+            "text"
+                | "title"
+                | "table"
+                | "equation"
+                | "formula_number"
+                | "code"
+                | "algorithm"
+                | "aside_text"
+                | "ref_text"
+                | "index"
+                | "phonetic"
+                | "list_item"
+                | "table_caption"
+                | "image_caption"
+                | "code_caption"
+                | "table_footnote"
+                | "image_footnote"
+                | "header"
+                | "footer"
+                | "page_number"
+                | "page_footnote"
+                | "image"
+                | "chart"
+                | "list"
+                | "image_block"
+                | "equation_block"
+        );
+        if !known {
+            return None;
         }
+        let (category, _) = category_map::map_mineru_vlm_category(raw);
+        let category = match raw {
+            "formula_number" | "index" => "text".to_string(),
+            "chart" | "image_block" => "image".to_string(),
+            _ => category,
+        };
+        Some((raw.to_string(), category))
     }
 }
 
@@ -152,7 +278,11 @@ struct PendingBlock {
 #[async_trait]
 impl ProtocolAdapter for MineruVlmAdapter {
     fn name(&self) -> &'static str {
-        "mineru-vlm"
+        match self.profile {
+            MineruVlmProfile::Enhanced => "mineru-vlm",
+            MineruVlmProfile::Official => "mineru-vlm-official",
+            MineruVlmProfile::Surpass => "mineru-vlm-surpass",
+        }
     }
 
     fn coordinate_system(&self) -> CoordinateSystem {
@@ -222,7 +352,30 @@ impl ProtocolAdapter for MineruVlmAdapter {
             message: e,
             stage: Some("layout".into()),
         })?;
-        let (layout_boxes, warnings) = output_parse::parse_custom_tokens(layout_content);
+        let (layout_boxes, warnings) = match self.profile {
+            MineruVlmProfile::Enhanced => output_parse::parse_custom_tokens(layout_content),
+            MineruVlmProfile::Official | MineruVlmProfile::Surpass => {
+                output_parse::parse_custom_tokens_official(layout_content)
+            }
+        };
+        self.write_trace(
+            ctx,
+            page.page_num,
+            "stage1",
+            &serde_json::json!({
+                "profile": self.name(),
+                "model": self.model,
+                "prompt": "\nLayout Detection:",
+                "sampling": Self::layout_sampling(),
+                "raw_content": layout_content,
+                "parsed_boxes": layout_boxes.iter().map(|layout_box| serde_json::json!({
+                    "bbox_1000": layout_box.bbox_1000,
+                    "category_raw": layout_box.category_raw,
+                    "angle": layout_box.angle,
+                })).collect::<Vec<_>>(),
+                "warnings": warnings,
+            }),
+        );
         for w in &warnings {
             ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
         }
@@ -231,38 +384,78 @@ impl ProtocolAdapter for MineruVlmAdapter {
         let mut pending: Vec<PendingBlock> = Vec::with_capacity(layout_boxes.len());
         for lb in &layout_boxes {
             let bbox_px = geometry::denormalize_0to1000_bbox(lb.bbox_1000, page.width, page.height);
-            let (category, warning) = category_map::map_mineru_vlm_category(&lb.category_raw);
-            if let Some(w) = warning {
-                ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
-            }
+            let mapped = if self.official_compatible() {
+                Self::normalize_official_category(&lb.category_raw)
+            } else {
+                let (category, warning) = category_map::map_mineru_vlm_category(&lb.category_raw);
+                if let Some(w) = warning {
+                    ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
+                }
+                Some((lb.category_raw.clone(), category))
+            };
+            let Some((category_raw, category)) = mapped else {
+                ctx.warn(format!(
+                    "mineru-vlm page {}: official parser skipped category {:?}",
+                    page.page_num, lb.category_raw
+                ));
+                continue;
+            };
             pending.push(PendingBlock {
                 bbox_px,
-                category_raw: lb.category_raw.clone(),
+                category_raw,
                 category,
                 angle: lb.angle,
             });
         }
 
-        let bboxes: Vec<[i32; 4]> = pending.iter().map(|p| p.bbox_px).collect();
-        let kept_indices = geometry::dedupe_by_iou(&bboxes, IOU_DEDUPE_THRESHOLD);
-        let pending: Vec<PendingBlock> = kept_indices
+        let pending = if self.profile == MineruVlmProfile::Enhanced {
+            let bboxes: Vec<[i32; 4]> = pending.iter().map(|p| p.bbox_px).collect();
+            geometry::dedupe_by_iou(&bboxes, IOU_DEDUPE_THRESHOLD)
+                .into_iter()
+                .map(|i| {
+                    let p = &pending[i];
+                    PendingBlock {
+                        bbox_px: p.bbox_px,
+                        category_raw: p.category_raw.clone(),
+                        category: p.category.clone(),
+                        angle: p.angle,
+                    }
+                })
+                .collect()
+        } else {
+            pending
+        };
+        let table_bboxes: Vec<[i32; 4]> = pending
+            .iter()
+            .filter(|p| p.category_raw == "table")
+            .map(|p| p.bbox_px)
+            .collect();
+        let pending: Vec<PendingBlock> = pending
             .into_iter()
-            .map(|i| {
-                // Safe: `kept_indices` are indices into the original `pending`.
-                let p = &pending[i];
-                PendingBlock {
-                    bbox_px: p.bbox_px,
-                    category_raw: p.category_raw.clone(),
-                    category: p.category.clone(),
-                    angle: p.angle,
-                }
+            .filter(|p| {
+                let is_table_internal_candidate = matches!(
+                    p.category_raw.as_str(),
+                    "text" | "equation" | "equation_block"
+                );
+                !is_table_internal_candidate
+                    || !table_bboxes.iter().any(|&table_bbox| {
+                        geometry::coverage_ratio(p.bbox_px, table_bbox)
+                            >= TABLE_INTERNAL_COVERAGE_THRESHOLD
+                    })
             })
             .collect();
 
         // Stage 2: per-block content extraction, concurrent within the
         // page (bounded by the shared document-level permit budget).
         let futures_iter = pending.iter().enumerate().map(|(index, p)| {
-            let skip = SKIP_CONTENT.contains(&p.category_raw.as_str());
+            let skip = if self.official_compatible() {
+                matches!(
+                    p.category_raw.as_str(),
+                    "image" | "chart" | "list" | "equation_block" | "image_block"
+                )
+            } else {
+                SKIP_CONTENT.contains(&p.category_raw.as_str())
+            };
             async move {
                 if skip {
                     return (index, Ok(None));
@@ -300,6 +493,20 @@ impl ProtocolAdapter for MineruVlmAdapter {
                     },
                     Err(e) => return (index, Err(e.to_string())),
                 };
+                self.write_trace(
+                    ctx,
+                    page.page_num,
+                    &format!("stage2-{index:04}"),
+                    &serde_json::json!({
+                        "block_index": index,
+                        "bbox_px": p.bbox_px,
+                        "category_raw": p.category_raw,
+                        "angle": p.angle,
+                        "prompt": prompt,
+                        "sampling": sampling,
+                        "raw_content": content,
+                    }),
+                );
 
                 // Robustness: a "the model gets stuck looping a phrase"
                 // degenerate response is a real, known VLM failure mode
@@ -312,7 +519,10 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 // failure is never masked as "degenerate empty content"
                 // — it already returned above via the `Err` arms).
                 let is_plain_text = !matches!(p.category_raw.as_str(), "table" | "equation");
-                let content = if is_plain_text && robustness::is_degenerate(&content) {
+                let content = if self.profile == MineruVlmProfile::Enhanced
+                    && is_plain_text
+                    && robustness::is_degenerate(&content)
+                {
                     ctx.warn(format!(
                         "mineru-vlm page {}: stage-2 content for block {index} ({}) looks degenerate (repetitive loop) — retrying with escalating temperature",
                         page.page_num, p.category_raw
@@ -421,6 +631,22 @@ impl ProtocolAdapter for MineruVlmAdapter {
             });
         }
 
+        // NOTE: an adapter-scoped geometric line→paragraph merge (N1) was tried
+        // here and REVERTED — it regressed OmniDocBench Text Edit (+0.006) and
+        // Reading Order (+0.008) on a 200-page dev set. The scorer already
+        // re-joins under-segmented pred lines (its `deal_with_truncated`) but
+        // penalizes over-merge (a wrongly-absorbed GT paragraph goes unmatched
+        // at edit=1.0), so geometric merging can only lose here. See
+        // MINERU_VLM_OPTIMIZATION_PLAN.md appendix A.
+        self.write_trace(
+            ctx,
+            page.page_num,
+            "final",
+            &serde_json::json!({
+                "profile": self.name(),
+                "blocks": blocks,
+            }),
+        );
         Ok(blocks)
     }
 }
@@ -587,6 +813,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trace_dir_records_stage_inputs_raw_outputs_and_final_blocks() {
+        let trace_dir = tempfile::tempdir().unwrap();
+        let mut adapter = MineruVlmAdapter::official();
+        adapter.trace_dir = Some(trace_dir.path().to_path_buf());
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.stage1_endpoint(),
+            chat_response(
+                "<|box_start|>0 0 200 100<|box_end|><|ref_start|>text<|ref_end|><|rotate_up|>",
+            ),
+        );
+        mock.seed(&adapter.stage2_endpoint(0), chat_response("trace me"));
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(2)));
+        adapter
+            .parse_page(&fake_page(400, 1000), &ctx)
+            .await
+            .unwrap();
+
+        let stage1: Value = serde_json::from_slice(
+            &std::fs::read(trace_dir.path().join("page-0001-stage1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stage1["parsed_boxes"][0]["category_raw"], "text");
+        assert_eq!(
+            stage1["sampling"]["vllm_xargs"]["no_repeat_ngram_size"],
+            100
+        );
+
+        let stage2: Value = serde_json::from_slice(
+            &std::fs::read(trace_dir.path().join("page-0001-stage2-0000.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stage2["raw_content"], "trace me");
+        assert_eq!(stage2["bbox_px"], serde_json::json!([0, 0, 80, 100]));
+
+        let final_trace: Value = serde_json::from_slice(
+            &std::fs::read(trace_dir.path().join("page-0001-final.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(final_trace["blocks"][0]["text"], "trace me");
+    }
+
+    #[tokio::test]
     async fn missing_stage1_seed_yields_page_error() {
         let adapter = MineruVlmAdapter::default();
         let mock = Arc::new(MockDispatch::new());
@@ -607,5 +877,17 @@ mod tests {
         assert_eq!(adapter.raw_output_format(), RawOutputFormat::CustomToken);
         let signals = adapter.emitted_signals();
         assert!(!signals.spans && !signals.merge_hint && !signals.font_size);
+    }
+
+    #[test]
+    fn no_repeat_ngram_is_sent_through_vllm_xargs() {
+        let sampling = MineruVlmAdapter::layout_sampling();
+        assert_eq!(sampling["vllm_xargs"]["no_repeat_ngram_size"], 100);
+        assert_eq!(sampling["vllm_xargs"]["debug"], false);
+        assert!(sampling.get("no_repeat_ngram_size").is_none());
+
+        let (_, stage2) = MineruVlmAdapter::stage2_prompt_and_sampling("text");
+        assert_eq!(stage2["vllm_xargs"]["no_repeat_ngram_size"], 100);
+        assert!(stage2.get("no_repeat_ngram_size").is_none());
     }
 }

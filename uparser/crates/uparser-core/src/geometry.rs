@@ -131,6 +131,29 @@ pub fn iou(a: [i32; 4], b: [i32; 4]) -> f32 {
     if union <= 0.0 { 0.0 } else { inter / union }
 }
 
+/// Fraction of `inner`'s area covered by `outer`.
+///
+/// This is different from IoU: a small text box inside a large table has
+/// low IoU but high coverage, which is exactly the duplicate table-internal
+/// layout case MinerU's postprocessing filters out.
+pub fn coverage_ratio(inner: [i32; 4], outer: [i32; 4]) -> f32 {
+    let ix0 = inner[0].max(outer[0]);
+    let iy0 = inner[1].max(outer[1]);
+    let ix1 = inner[2].min(outer[2]);
+    let iy1 = inner[3].min(outer[3]);
+
+    let inter_w = (ix1 - ix0).max(0);
+    let inter_h = (iy1 - iy0).max(0);
+    let inter = (inter_w as f32) * (inter_h as f32);
+    let area_inner = ((inner[2] - inner[0]).max(0) as f32) * ((inner[3] - inner[1]).max(0) as f32);
+
+    if area_inner <= 0.0 {
+        0.0
+    } else {
+        inter / area_inner
+    }
+}
+
 /// Drop boxes that overlap an earlier-kept box above `threshold` IoU,
 /// keeping the first occurrence (stable order) of each cluster.
 pub fn dedupe_by_iou(boxes: &[[i32; 4]], threshold: f32) -> Vec<usize> {
@@ -257,6 +280,21 @@ mod tests {
     fn iou_identical_boxes_is_one() {
         let a = [0, 0, 10, 10];
         assert!((iou(a, a) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn coverage_ratio_detects_small_box_inside_large_box() {
+        let table = [0, 0, 100, 100];
+        let text = [10, 10, 20, 20];
+        assert!((coverage_ratio(text, table) - 1.0).abs() < 1e-6);
+        assert!(iou(text, table) < 0.02);
+    }
+
+    #[test]
+    fn coverage_ratio_is_partial_for_clipped_box() {
+        let inner = [0, 0, 10, 10];
+        let outer = [5, 0, 15, 10];
+        assert!((coverage_ratio(inner, outer) - 0.5).abs() < 1e-6);
     }
 
     #[test]

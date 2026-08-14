@@ -51,6 +51,62 @@ static LAYOUT_LINE_RELAXED_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static regex is valid")
 });
 
+/// MinerU >=1.0.5's exact layout matcher. Unlike the enhanced line parser
+/// below, this scans the whole response, requires every closing token, and
+/// lets the tail span newlines until the next box. Keeping it separate makes
+/// official-parity experiments reproducible without removing fault recovery
+/// from the normal `mineru-vlm` protocol.
+static MINERU_OFFICIAL_LAYOUT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"<\|box_start\|>(\d+)\s+(\d+)\s+(\d+)\s+(\d+)<\|box_end\|><\|ref_start\|>(\w+?)<\|ref_end\|>(?:(<\|rotate_(?:up|right|down|left)\|>))?",
+    )
+    .expect("static regex is valid")
+});
+
+/// Parse with MinerU 1.0.5's strict whole-response semantics. Coordinates
+/// outside `[0,1000]` are rejected rather than clamped.
+pub fn parse_custom_tokens_official(raw: &str) -> (Vec<LayoutBox>, Vec<String>) {
+    let mut boxes = Vec::new();
+    let mut warnings = Vec::new();
+
+    for caps in MINERU_OFFICIAL_LAYOUT_RE.captures_iter(raw) {
+        let coords: Option<[u32; 4]> = (|| {
+            Some([
+                caps[1].parse().ok()?,
+                caps[2].parse().ok()?,
+                caps[3].parse().ok()?,
+                caps[4].parse().ok()?,
+            ])
+        })();
+        let Some([x1, y1, x2, y2]) = coords else {
+            warnings.push(format!("unparseable coordinates: {:?}", &caps[0]));
+            continue;
+        };
+        if [x1, y1, x2, y2].iter().any(|&coord| coord > 1000) {
+            warnings.push(format!("out-of-range coordinates: {:?}", &caps[0]));
+            continue;
+        }
+
+        let (xa, xb) = (x1.min(x2), x1.max(x2));
+        let (ya, yb) = (y1.min(y2), y1.max(y2));
+        if xa == xb || ya == yb {
+            warnings.push(format!("degenerate box: {:?}", &caps[0]));
+            continue;
+        }
+
+        boxes.push(LayoutBox {
+            bbox_1000: [xa, ya, xb, yb],
+            category_raw: caps[5].to_lowercase(),
+            angle: caps.get(6).and_then(|m| parse_rotation(m.as_str())),
+        });
+    }
+
+    if boxes.is_empty() && !raw.trim().is_empty() {
+        warnings.push("layout output does not match official MinerU grammar".to_string());
+    }
+    (boxes, warnings)
+}
+
 /// Parse mineru-vlm's stage-1 `custom_token` output: one candidate block
 /// per line. Malformed lines, out-of-range/degenerate boxes are skipped
 /// (recorded as warnings) rather than failing the whole page — mirrors
@@ -837,6 +893,25 @@ mod tests {
                 angle: None,
             }]
         );
+    }
+
+    #[test]
+    fn official_parser_scans_adjacent_boxes_across_newlines() {
+        let raw = "prefix<|box_start|>1 2 30 40<|box_end|><|ref_start|>TEXT<|ref_end|><|rotate_right|>tail\ntext\n<|box_start|>50 60 70 80<|box_end|><|ref_start|>table<|ref_end|>";
+        let (boxes, warnings) = parse_custom_tokens_official(raw);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[0].category_raw, "text");
+        assert_eq!(boxes[0].angle, Some(90));
+        assert_eq!(boxes[1].bbox_1000, [50, 60, 70, 80]);
+    }
+
+    #[test]
+    fn official_parser_rejects_out_of_range_and_missing_closing_tokens() {
+        let raw = "<|box_start|>0 0 1001 20<|box_end|><|ref_start|>text<|ref_end|>\n<|box_start|>1 2 3 4<|box_end|><|ref_start|>title";
+        let (boxes, warnings) = parse_custom_tokens_official(raw);
+        assert!(boxes.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("out-of-range")));
     }
 
     #[test]
