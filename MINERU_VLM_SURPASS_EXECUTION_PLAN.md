@@ -536,7 +536,7 @@ cargo clippy --workspace --all-targets --manifest-path uparser/Cargo.toml -- -D 
    `--logits-processors mineru_vl_utils:MinerULogitsProcessor`；`/v1/models` 和真实图片
    两阶段请求均成功。
 4. 新增严格 parser、profile 注册和官方 Markdown renderer 单测。宿主网络环境执行全 workspace
-   tests 通过，合计 1103 项，0 失败；沙箱内 localhost wiremock 会被代理改写，不能作为失败依据。
+   tests 通过，合计 1105 项，0 失败；沙箱内 localhost wiremock 会被代理改写，不能作为失败依据。
 5. 完成 1651 页 `mineru-vlm-2605-official` 全量预测和官方 evaluator：预测 1651/1651，
    runner 无错误日志，TEDS 665 个样本无 timeout/error，page match 有 2 个 quick-match timeout。
 
@@ -613,7 +613,28 @@ Markdown 契约，只在同时满足以下条件时执行几何合并：
 | Text Edit | 1.0 | 0.00562046 | 显著改善 |
 | Reading Order Edit | 1.0 | 0.0 | 改善至满分 |
 
-保持其余 1649 页完全不变并按官方基线分母换算，E1 全量预期为 Text `0.03645036`、RO
-`0.12840077`；Table 与 Formula 不变。E1 已证明有效，但 Text 仍略差于官方 `0.036`，RO 仍差于
-官方 `0.120`，所以当前仍禁止声明全面超过。下一步必须执行完整 1651 页 E1 run，确认选择器未在
-其他页面误触发，再进入 PIL/Rust 像素对齐和 selective order reranker。
+保持其余 1649 页完全不变并按官方基线分母换算，E1 预期为 Text `0.03645036`、RO
+`0.12840077`。独立完整 1651 页 E1 run 已完成，正式结果为 Text `0.03673060`、Formula Edit
+`0.09483955`、TEDS `0.92605025`、TEDS-S `0.95555340`、RO `0.12845440`。page/quick-match
+timeout 均为 0，665 个 TEDS 样本无 timeout/error/exception。
+
+相对 official profile，Text 改善 `0.00099706`、RO 改善 `0.00116737`，但 Formula Edit 回退
+`0.00130229`、TEDS 回退 `0.00071107`、TEDS-S 回退 `0.00077129`。两次独立推理之间有 380 个
+Markdown 文件字节不同，说明 greedy + 四路并发仍存在 run-to-run 方差；逐页 Text 为 20 改善、
+39 回退、1498 不变，RO 为 9 改善、7 回退、1622 不变。E1 的两页因果增益成立，但完整 run
+不满足所有指标不回退，当前仍禁止声明全面超过。下一步进入 PIL/Rust 像素 differential，并把
+推理复现方差纳入后续实验的对照设计。
+
+### 19.6 PIL/Rust 像素 differential 执行结果
+
+已新增官方 PIL / Rust production-code probe，对同一真实 JPEG 的 layout resize、浮点 bbox crop、
+旋转、极端比例 padding 和短边 upscale 做逐像素比较。初始结果：layout 差异像素 7.318%、MAE
+0.1211/255；普通 0° crop 差异 0.791%、MAE 0.0079；极端比例 padding 逐像素完全一致。
+
+发现并修复一个高影响方向错误：Pillow 正角度旋转为逆时针，Rust `imageops::rotate90` 为顺时针。
+90° extract 修复前差异像素 51.028%、MAE 38.0885、最大通道差 255；修复后降为 0.791%、MAE
+0.0079、最大通道差 1。另将 MinerU bbox 和短边 resize 尺寸取整改为 half-to-even，并增加单测。
+
+像素对齐修复尚未进入独立指标 run，暂不声明精度收益。下一步应先在含 rotate token 的冻结页面
+集验证 Text/Formula 不回退，再进入 exact OTSL differential；layout 的低幅重采样差异单独保留，
+禁止为追求 hash 一致引入 Python/Pillow 运行时依赖。

@@ -11,23 +11,22 @@ use crate::types::{CoordFrame, Geometry};
 /// dimensions (see the P1 plan's "Coordinate system" note).
 pub fn denormalize_frac_bbox(bbox_frac: [f32; 4], width: u32, height: u32) -> [i32; 4] {
     [
-        (bbox_frac[0] * width as f32).round() as i32,
-        (bbox_frac[1] * height as f32).round() as i32,
-        (bbox_frac[2] * width as f32).round() as i32,
-        (bbox_frac[3] * height as f32).round() as i32,
+        (bbox_frac[0] as f64 * width as f64).round_ties_even() as i32,
+        (bbox_frac[1] as f64 * height as f64).round_ties_even() as i32,
+        (bbox_frac[2] as f64 * width as f64).round_ties_even() as i32,
+        (bbox_frac[3] as f64 * height as f64).round_ties_even() as i32,
     ]
 }
 
 /// Convert a MinerU custom_token box (ints in `[0,1000]`) straight to
 /// page pixels in one step.
 pub fn denormalize_0to1000_bbox(bbox_1000: [u32; 4], width: u32, height: u32) -> [i32; 4] {
-    let frac = [
-        bbox_1000[0] as f32 / 1000.0,
-        bbox_1000[1] as f32 / 1000.0,
-        bbox_1000[2] as f32 / 1000.0,
-        bbox_1000[3] as f32 / 1000.0,
-    ];
-    denormalize_frac_bbox(frac, width, height)
+    [
+        (bbox_1000[0] as f64 / 1000.0 * width as f64).round_ties_even() as i32,
+        (bbox_1000[1] as f64 / 1000.0 * height as f64).round_ties_even() as i32,
+        (bbox_1000[2] as f64 / 1000.0 * width as f64).round_ties_even() as i32,
+        (bbox_1000[3] as f64 / 1000.0 * height as f64).round_ties_even() as i32,
+    ]
 }
 
 /// Convert a `[0,1000]`-normalized bbox to page pixels, swapping any
@@ -215,6 +214,14 @@ mod tests {
         let a = denormalize_0to1000_bbox([100, 200, 500, 600], 1000, 2000);
         let b = denormalize_frac_bbox([0.1, 0.2, 0.5, 0.6], 1000, 2000);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn denormalize_0to1000_matches_pillow_ties_to_even() {
+        assert_eq!(
+            denormalize_0to1000_bbox([100, 300, 500, 700], 5, 5),
+            [0, 2, 2, 4]
+        );
     }
 
     #[test]

@@ -41,13 +41,13 @@ pub fn crop(img: &RgbImage, bbox_px: [i32; 4]) -> Option<RgbImage> {
     Some(image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0).to_image())
 }
 
-/// Rotate by a multiple of 90 degrees (0/90/180/270), matching
-/// mineru-vlm's rotation token semantics.
+/// Rotate counter-clockwise by a multiple of 90 degrees, matching Pillow's
+/// positive-angle `Image.rotate(angle, expand=True)` semantics used by MinerU.
 pub fn rotate_90n(img: &RgbImage, angle: u32) -> RgbImage {
     match angle % 360 {
-        90 => image::imageops::rotate90(img),
+        90 => image::imageops::rotate270(img),
         180 => image::imageops::rotate180(img),
-        270 => image::imageops::rotate270(img),
+        270 => image::imageops::rotate90(img),
         _ => img.clone(),
     }
 }
@@ -74,9 +74,9 @@ pub fn resize_by_need(img: &RgbImage, max_edge_ratio: f32, min_edge: u32) -> Rgb
     let (pw, ph) = padded.dimensions();
     let short_edge = pw.min(ph);
     if short_edge < min_edge && short_edge > 0 {
-        let scale = min_edge as f32 / short_edge as f32;
-        let new_w = (pw as f32 * scale).round().max(1.0) as u32;
-        let new_h = (ph as f32 * scale).round().max(1.0) as u32;
+        let scale = min_edge as f64 / short_edge as f64;
+        let new_w = (pw as f64 * scale).round_ties_even().max(1.0) as u32;
+        let new_h = (ph as f64 * scale).round_ties_even().max(1.0) as u32;
         image::imageops::resize(&padded, new_w, new_h, FilterType::CatmullRom)
     } else {
         padded
@@ -242,6 +242,17 @@ mod tests {
         assert_eq!(rotate_90n(&img, 270).dimensions(), (10, 30));
         assert_eq!(rotate_90n(&img, 180).dimensions(), (30, 10));
         assert_eq!(rotate_90n(&img, 0).dimensions(), (30, 10));
+    }
+
+    #[test]
+    fn rotate_90n_uses_pillow_counter_clockwise_direction() {
+        let mut img = RgbImage::new(2, 3);
+        for (index, pixel) in img.pixels_mut().enumerate() {
+            *pixel = Rgb([index as u8, 0, 0]);
+        }
+        let rotated = rotate_90n(&img, 90);
+        let values: Vec<u8> = rotated.pixels().map(|pixel| pixel[0]).collect();
+        assert_eq!(values, vec![1, 3, 5, 0, 2, 4]);
     }
 
     #[test]
