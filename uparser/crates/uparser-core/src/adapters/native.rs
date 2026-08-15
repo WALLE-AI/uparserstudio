@@ -42,6 +42,11 @@ impl NativeAdapter {
         source_path: &str,
         pdf_bytes: &[u8],
     ) -> Result<ParseResult, PageError> {
+        let format = uparser_document_engine::detect_format(pdf_bytes, Some(source_path));
+        if format != uparser_document_engine::DocumentFormat::Pdf {
+            return parse_structured_document(source_path, pdf_bytes, format);
+        }
+
         let items = uparser_native_engine::extractor::extract_text_with_positions_mem(pdf_bytes)
             .map_err(|e| PageError {
                 page_num: 0,
@@ -83,13 +88,182 @@ impl NativeAdapter {
     /// level-flattening tweak is a no-op; the real levers (heading
     /// over-detection — engine emits 280 vs GT's 193 — and table TEDS) are
     /// engine-core tuning, tracked in the design doc's §6.5/§6.6.
-    pub async fn native_markdown(&self, pdf_bytes: &[u8]) -> Result<String, PageError> {
+    pub async fn native_markdown(
+        &self,
+        source_path: &str,
+        pdf_bytes: &[u8],
+    ) -> Result<String, PageError> {
+        let format = uparser_document_engine::detect_format(pdf_bytes, Some(source_path));
+        if format != uparser_document_engine::DocumentFormat::Pdf {
+            let document = uparser_document_engine::parse_document(
+                pdf_bytes,
+                format,
+                &uparser_document_engine::ParseOptions::default(),
+            )
+            .map_err(|error| PageError {
+                page_num: 0,
+                message: format!("native structured document parsing failed: {error}"),
+                stage: Some("native_document".into()),
+            })?;
+            return Ok(uparser_document_engine::render::markdown(&document));
+        }
+
         let result = uparser_native_engine::process_pdf_mem(pdf_bytes).map_err(|e| PageError {
             page_num: 0,
             message: format!("native engine markdown rendering failed: {e}"),
             stage: Some("native".into()),
         })?;
         Ok(result.markdown.unwrap_or_default())
+    }
+
+    pub async fn native_document_json(
+        &self,
+        source_path: &str,
+        bytes: &[u8],
+    ) -> Result<String, PageError> {
+        let format = uparser_document_engine::detect_format(bytes, Some(source_path));
+        if format == uparser_document_engine::DocumentFormat::Pdf {
+            return Err(PageError {
+                page_num: 0,
+                message:
+                    "document-json is currently available for structured native documents, not PDF"
+                        .to_owned(),
+                stage: Some("native_document".into()),
+            });
+        }
+        let document = uparser_document_engine::parse_document(
+            bytes,
+            format,
+            &uparser_document_engine::ParseOptions::default(),
+        )
+        .map_err(|error| PageError {
+            page_num: 0,
+            message: format!("native structured document parsing failed: {error}"),
+            stage: Some("native_document".into()),
+        })?;
+        uparser_document_engine::render::document_json(&document).map_err(|error| PageError {
+            page_num: 0,
+            message: format!("document-json serialization failed: {error}"),
+            stage: Some("native_document".into()),
+        })
+    }
+}
+
+fn parse_structured_document(
+    source_path: &str,
+    bytes: &[u8],
+    format: uparser_document_engine::DocumentFormat,
+) -> Result<ParseResult, PageError> {
+    let document = uparser_document_engine::parse_document(
+        bytes,
+        format,
+        &uparser_document_engine::ParseOptions::default(),
+    )
+    .map_err(|error| PageError {
+        page_num: 0,
+        message: format!("native structured document parsing failed: {error}"),
+        stage: Some("native_document".into()),
+    })?;
+
+    let pages = document
+        .units
+        .iter()
+        .enumerate()
+        .map(|(index, unit)| Page {
+            page_num: (index + 1) as u32,
+            width_px: 0,
+            height_px: 0,
+            blocks: unit
+                .blocks
+                .iter()
+                .map(|block| compatibility_block(block, format))
+                .collect(),
+        })
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let protocol_format = match format {
+        uparser_document_engine::DocumentFormat::Csv => "csv",
+        uparser_document_engine::DocumentFormat::Tsv => "tsv",
+        uparser_document_engine::DocumentFormat::Excel => "excel",
+        uparser_document_engine::DocumentFormat::Ods => "ods",
+        uparser_document_engine::DocumentFormat::Odt => "odt",
+        uparser_document_engine::DocumentFormat::Odp => "odp",
+        uparser_document_engine::DocumentFormat::Epub => "epub",
+        uparser_document_engine::DocumentFormat::Rtf => "rtf",
+        uparser_document_engine::DocumentFormat::Docx => "docx",
+        uparser_document_engine::DocumentFormat::Pptx => "pptx",
+        _ => "document",
+    };
+    Ok(ParseResult {
+        source_path: source_path.to_owned(),
+        source_sha256: format!("{:x}", hasher.finalize()),
+        protocol: format!("native:{protocol_format}"),
+        routed_by: RoutedBy::Explicit,
+        document_profile: None,
+        model_endpoint: None,
+        model_name: None,
+        pages,
+        page_errors: Vec::new(),
+        capability_notes: vec![
+            "source-semantic structured document extraction; geometry is not applicable".to_owned(),
+        ],
+        warnings: document
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect(),
+        timing: Default::default(),
+    })
+}
+
+fn compatibility_block(
+    block: &uparser_document_engine::Block,
+    format: uparser_document_engine::DocumentFormat,
+) -> Block {
+    let category_raw = match block {
+        uparser_document_engine::Block::Heading { .. } => "title",
+        uparser_document_engine::Block::List { .. } => "list",
+        uparser_document_engine::Block::Table { .. } => "table",
+        uparser_document_engine::Block::Figure { .. } => "image",
+        _ => "text",
+    };
+    let mut document = uparser_document_engine::CanonicalDocument::new(format);
+    let mut unit = uparser_document_engine::DocumentUnit::new(
+        uparser_document_engine::UnitKind::Flow,
+        0,
+        None,
+    );
+    unit.blocks.push(block.clone());
+    document.units.push(unit);
+    let mut rendered = uparser_document_engine::render::markdown(&document)
+        .trim()
+        .to_owned();
+    let category = match block {
+        uparser_document_engine::Block::Heading { .. } => {
+            rendered = rendered.trim_start_matches('#').trim_start().to_owned();
+            "title"
+        }
+        uparser_document_engine::Block::List { .. } => "text",
+        _ => category_raw,
+    };
+    Block {
+        geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
+        geom_frame: CoordFrame::Page,
+        bbox_px: None,
+        category_raw: category_raw.to_owned(),
+        category: Some(category.to_owned()),
+        reading_order: None,
+        text: Some(rendered),
+        html: None,
+        latex: None,
+        spans: Vec::new(),
+        merge_hint: None,
+        confidence: Some(1.0),
+        source: BlockSource::StructuredNative,
+        error: None,
+        asset_bytes: None,
+        asset_path: None,
     }
 }
 
@@ -286,6 +460,22 @@ impl ProtocolAdapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn zip_package(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for (name, body) in parts {
+                writer.start_file(name, options).unwrap();
+                writer.write_all(body.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes
+    }
 
     /// A real digitally-native PDF (MinerU's demo1) — replaces the old
     /// liteparse fixture now that native no longer depends on liteparse.
@@ -404,12 +594,104 @@ mod tests {
         }
         let bytes = std::fs::read(&path).expect("read fixture PDF");
         let md = NativeAdapter
-            .native_markdown(&bytes)
+            .native_markdown(&path, &bytes)
             .await
             .expect("native markdown succeeds");
         assert!(!md.trim().is_empty(), "expected non-empty markdown");
         // A real report yields at least one heading via the engine's
         // font-histogram heading detection.
         assert!(md.contains('#'), "expected at least one markdown heading");
+    }
+
+    #[tokio::test]
+    async fn structured_csv_uses_source_semantic_native_path() {
+        let bytes = b"name,value\nalpha,42\nbeta,7\n";
+        let result = NativeAdapter
+            .parse_document("sample.csv", bytes)
+            .await
+            .expect("native CSV parse succeeds");
+        assert_eq!(result.protocol, "native:csv");
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(
+            result.pages[0].blocks[0].source,
+            BlockSource::StructuredNative
+        );
+        assert!(
+            result.pages[0].blocks[0]
+                .text
+                .as_deref()
+                .unwrap()
+                .contains("alpha")
+        );
+
+        let markdown = NativeAdapter
+            .native_markdown("sample.csv", bytes)
+            .await
+            .expect("native CSV markdown succeeds");
+        assert!(markdown.contains("# Sheet 1"));
+        assert!(markdown.contains("| name | value |"));
+    }
+
+    #[tokio::test]
+    async fn structured_tsv_is_detected_from_filename_hint() {
+        let markdown = NativeAdapter
+            .native_markdown("sample.tsv", b"name\tvalue\nalpha\t42\n")
+            .await
+            .expect("native TSV markdown succeeds");
+        assert!(markdown.contains("| alpha | 42 |"));
+    }
+
+    #[tokio::test]
+    async fn structured_document_json_preserves_canonical_contract() {
+        let json = NativeAdapter
+            .native_document_json("sample.csv", b"name,value\nalpha,42\n")
+            .await
+            .expect("canonical JSON succeeds");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["schema_version"], "uparser.document.v1");
+        assert_eq!(value["units"][0]["kind"], "sheet");
+        assert_eq!(value["units"][0]["blocks"][0]["type"], "table");
+    }
+
+    #[tokio::test]
+    async fn epub_uses_chapter_units_through_native_adapter() {
+        let bytes = zip_package(&[
+            ("mimetype", "application/epub+zip"),
+            (
+                "META-INF/container.xml",
+                "<container><rootfiles><rootfile full-path=\"book.opf\"/></rootfiles></container>",
+            ),
+            (
+                "book.opf",
+                "<package><manifest><item id=\"chapter\" href=\"chapter.xhtml\" media-type=\"application/xhtml+xml\"/></manifest><spine><itemref idref=\"chapter\"/></spine></package>",
+            ),
+            (
+                "chapter.xhtml",
+                "<html><body><h1>Chapter</h1><p>Native EPUB</p></body></html>",
+            ),
+        ]);
+        let result = NativeAdapter
+            .parse_document("book.epub", &bytes)
+            .await
+            .expect("native EPUB parse succeeds");
+        assert_eq!(result.protocol, "native:epub");
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks[0].text.as_deref(), Some("Chapter"));
+    }
+
+    #[tokio::test]
+    async fn rtf_uses_source_semantic_native_adapter() {
+        let result = NativeAdapter
+            .parse_document("sample.rtf", br#"{\rtf1\ansi Native \b RTF\b0\par}"#)
+            .await
+            .expect("native RTF parse succeeds");
+        assert_eq!(result.protocol, "native:rtf");
+        assert_eq!(result.pages.len(), 1);
+        assert!(
+            result.pages[0].blocks[0]
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("Native") && text.contains("RTF"))
+        );
     }
 }

@@ -10,7 +10,8 @@ name = "_uparser"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-uparser-core = { path = "../uparser-core", default-features = false }
+uparser-core = { path = "../uparser-core", default-features = false, features = ["native"] }
+uparser-document-engine = { path = "../uparser-document-engine" }
 pyo3 = { version = "0.29", features = ["extension-module"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }

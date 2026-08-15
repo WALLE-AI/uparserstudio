@@ -44,7 +44,7 @@ if (-not $Workspace -or -not (Test-Path (Join-Path $Workspace 'Cargo.toml'))) {
 
 Write-Host "[*] building uparser (features: $Features) in $Workspace ..." -ForegroundColor Cyan
 Push-Location $Workspace
-try { cargo build --release --features $Features } finally { Pop-Location }
+try { cargo build --release -p uparser-core --features $Features } finally { Pop-Location }
 
 $exe = Join-Path $Workspace 'target/release/uparser.exe'
 if (-not (Test-Path $exe)) { Write-Error "build finished but $exe not found"; exit 3 }

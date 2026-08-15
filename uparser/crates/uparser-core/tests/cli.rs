@@ -633,6 +633,7 @@ fn postprocess_merges_by_default_and_no_postprocess_bypasses_it() {
 /// a protocol adapter). `--protocol mock` is passed deliberately to
 /// prove the bypass takes priority over whatever protocol was
 /// requested, per ARCHITECTURE.md §13.1a.
+#[cfg(not(feature = "native"))]
 #[test]
 fn csv_input_bypasses_to_structured_result_regardless_of_protocol() {
     let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
@@ -660,6 +661,84 @@ fn csv_input_bypasses_to_structured_result_regardless_of_protocol() {
     assert_eq!(parsed["protocol"], "structured_bypass:csv");
     let html = parsed["pages"][0]["blocks"][0]["html"].as_str().unwrap();
     assert!(html.contains("Alice"));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn csv_input_auto_routes_to_native_document_engine() {
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    file.write_all(b"Name,Age\nAlice,30\n").unwrap();
+    let cache_dir = isolated_cache_dir();
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "auto",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["protocol"], "native:csv");
+    assert_eq!(parsed["routed_by"]["kind"], "auto");
+    assert_eq!(
+        parsed["pages"][0]["blocks"][0]["source"],
+        "structured_native"
+    );
+    assert!(
+        parsed["pages"][0]["blocks"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Alice")
+    );
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn document_json_outputs_canonical_contract_and_rejects_non_native_protocol() {
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    file.write_all(b"Name,Age\nAlice,30\n").unwrap();
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "document-json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["schema_version"], "uparser.document.v1");
+    assert_eq!(parsed["units"][0]["kind"], "sheet");
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "document-json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "document-json requires the native protocol",
+        ));
 }
 
 /// A minimal real ZIP archive containing a `word/` entry — the

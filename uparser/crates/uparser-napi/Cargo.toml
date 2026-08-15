@@ -9,7 +9,8 @@ description = "Node.js bindings for uparser"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-uparser-core = { path = "../uparser-core", default-features = false }
+uparser-core = { path = "../uparser-core", default-features = false, features = ["native"] }
+uparser-document-engine = { path = "../uparser-document-engine" }
 napi = { version = "2", features = ["async", "napi9"] }
 napi-derive = "2"
 serde_json = "1"

@@ -74,9 +74,21 @@ fn classify(path: String) -> PyResult<String> {
     Ok(serde_json::to_string(&profile).expect("DocumentProfile is always serializable"))
 }
 
+#[pyfunction]
+fn parse_document(path: String) -> PyResult<String> {
+    let document = runtime()
+        .block_on(api::parse_canonical_document(
+            &path,
+            &uparser_document_engine::ParseOptions::default(),
+        ))
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    Ok(serde_json::to_string(&document).expect("CanonicalDocument is always serializable"))
+}
+
 #[pymodule]
 fn _uparser(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(classify, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_document, m)?)?;
     Ok(())
 }

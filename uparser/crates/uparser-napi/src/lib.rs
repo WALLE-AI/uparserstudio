@@ -58,3 +58,14 @@ pub async fn classify(path: String) -> Result<String> {
         .map_err(|e| Error::from_reason(e.to_string()))?;
     Ok(serde_json::to_string(&profile).expect("DocumentProfile is always serializable"))
 }
+
+/// Parse a structured source document into the lossless canonical document
+/// contract, serialized as JSON.
+#[napi(js_name = "parseDocument")]
+pub async fn parse_document(path: String) -> Result<String> {
+    let document =
+        api::parse_canonical_document(&path, &uparser_document_engine::ParseOptions::default())
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+    Ok(serde_json::to_string(&document).expect("CanonicalDocument is always serializable"))
+}

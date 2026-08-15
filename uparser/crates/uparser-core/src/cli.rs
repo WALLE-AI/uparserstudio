@@ -201,6 +201,7 @@ pub enum CacheAction {
 pub enum OutputFormat {
     Json,
     Markdown,
+    DocumentJson,
 }
 
 /// Run the parsed CLI invocation, returning the process exit code. All
@@ -351,6 +352,7 @@ fn run_parse(
     // placeholder, get fed to a protocol adapter as a blank image —
     // exit 0, no error, but a completely wrong result).
     let detected_format = crate::ingest::detect_format(&file_bytes, Some(&path));
+    #[cfg(not(feature = "native"))]
     if let Some(bypass) = crate::ingest::structured_bypass(&file_bytes, detected_format, &path) {
         return match bypass {
             Ok(result) => {
@@ -358,6 +360,7 @@ fn run_parse(
                 let output = match format {
                     OutputFormat::Json => render::to_json(&result),
                     OutputFormat::Markdown => render::to_markdown(&result),
+                    OutputFormat::DocumentJson => render::to_json(&result),
                 };
                 println!("{output}");
                 if has_errors {
@@ -394,6 +397,17 @@ fn run_parse(
     let (endpoint, model) =
         crate::agent_config::resolve_endpoint_model(&effective_protocol, endpoint, model);
 
+    if format == OutputFormat::DocumentJson && effective_protocol != "native" {
+        return emit_error(
+            format,
+            EXIT_USAGE,
+            "unsupported_output_format",
+            "document-json requires the native protocol for a structured document",
+            &effective_protocol,
+            None,
+        );
+    }
+
     // Agent-friendly hint: `auto` routed to a model-backed protocol but nothing
     // (flag/env/config) supplied an endpoint, so it will fall back to that
     // adapter's built-in default and almost certainly fail to connect. Say so
@@ -412,7 +426,7 @@ fn run_parse(
         // scheduler entirely (see `run_parse_native`'s own doc comment),
         // and it has no network round-trip to amortize the way every
         // other protocol does — the main cost caching exists to avoid.
-        return run_parse_native(path, format, file_bytes);
+        return run_parse_native(path, format, file_bytes, protocol == "auto");
     }
 
     let fingerprint = ParamFingerprint {
@@ -428,6 +442,7 @@ fn run_parse(
         let output = match format {
             OutputFormat::Json => render::to_json(&cached),
             OutputFormat::Markdown => render::to_markdown(&cached),
+            OutputFormat::DocumentJson => render::to_json(&cached),
         };
         println!("{output}");
         return if has_errors {
@@ -678,6 +693,7 @@ fn run_parse(
         let output = match format {
             OutputFormat::Json => render::to_json(&result),
             OutputFormat::Markdown => render::to_markdown(&result),
+            OutputFormat::DocumentJson => render::to_json(&result),
         };
         println!("{output}");
     }
@@ -761,7 +777,12 @@ async fn ingest_pages(
 /// implements (a deliberate P4 design decision — see `adapters/native.rs`),
 /// so it can't go through the scheduler-based flow above.
 #[cfg(feature = "native")]
-fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> i32 {
+fn run_parse_native(
+    path: String,
+    format: OutputFormat,
+    file_bytes: Vec<u8>,
+    routed_by_auto: bool,
+) -> i32 {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -784,7 +805,7 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
     // from `parse_document`. Both are single parses; neither touches any
     // other protocol's flow (this branch is `native`-only).
     if let OutputFormat::Markdown = format {
-        return match runtime.block_on(adapter.native_markdown(&file_bytes)) {
+        return match runtime.block_on(adapter.native_markdown(&path, &file_bytes)) {
             Ok(md) => {
                 println!("{md}");
                 EXIT_SUCCESS
@@ -800,7 +821,7 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
         };
     }
 
-    let result = match runtime.block_on(adapter.parse_document(&path, &file_bytes)) {
+    let mut result = match runtime.block_on(adapter.parse_document(&path, &file_bytes)) {
         Ok(r) => r,
         Err(e) => {
             return emit_error(
@@ -813,6 +834,26 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
             );
         }
     };
+    if routed_by_auto {
+        result.routed_by = RoutedBy::Auto;
+    }
+
+    if let OutputFormat::DocumentJson = format {
+        return match runtime.block_on(adapter.native_document_json(&path, &file_bytes)) {
+            Ok(json) => {
+                println!("{json}");
+                EXIT_SUCCESS
+            }
+            Err(e) => emit_error(
+                format,
+                EXIT_USAGE,
+                "unsupported_output_format",
+                &e.message,
+                "native",
+                e.stage.as_deref(),
+            ),
+        };
+    }
 
     let has_errors = !result.page_errors.is_empty();
     println!("{}", render::to_json(&result));
@@ -825,7 +866,12 @@ fn run_parse_native(path: String, format: OutputFormat, file_bytes: Vec<u8>) -> 
 }
 
 #[cfg(not(feature = "native"))]
-fn run_parse_native(_path: String, format: OutputFormat, _file_bytes: Vec<u8>) -> i32 {
+fn run_parse_native(
+    _path: String,
+    format: OutputFormat,
+    _file_bytes: Vec<u8>,
+    _routed_by_auto: bool,
+) -> i32 {
     emit_error(
         format,
         EXIT_USAGE,
@@ -905,6 +951,28 @@ fn profile_best_effort(
 /// `--protocol auto` support: Profiler + Router, per ARCHITECTURE.md
 /// §13.1a/§13.5.
 fn resolve_auto_protocol(path: &str, bytes: &[u8]) -> (String, String) {
+    #[cfg(feature = "native")]
+    {
+        let format = uparser_document_engine::detect_format(bytes, Some(path));
+        if matches!(
+            format,
+            uparser_document_engine::DocumentFormat::Csv
+                | uparser_document_engine::DocumentFormat::Tsv
+                | uparser_document_engine::DocumentFormat::Excel
+                | uparser_document_engine::DocumentFormat::Ods
+                | uparser_document_engine::DocumentFormat::Odt
+                | uparser_document_engine::DocumentFormat::Odp
+                | uparser_document_engine::DocumentFormat::Epub
+                | uparser_document_engine::DocumentFormat::Rtf
+                | uparser_document_engine::DocumentFormat::Docx
+                | uparser_document_engine::DocumentFormat::Pptx
+        ) {
+            return (
+                "native".to_owned(),
+                format!("source-semantic {format:?} parser is available locally"),
+            );
+        }
+    }
     let format = crate::ingest::detect_format(bytes, Some(path));
     let profile = profile_best_effort(bytes, format);
     let decision = crate::router::route(&profile);
@@ -920,7 +988,7 @@ fn emit_error(
     stage: Option<&str>,
 ) -> i32 {
     eprintln!("error: {message}");
-    if format == OutputFormat::Json {
+    if matches!(format, OutputFormat::Json | OutputFormat::DocumentJson) {
         let err = serde_json::json!({
             "error": {
                 "code": error_code,

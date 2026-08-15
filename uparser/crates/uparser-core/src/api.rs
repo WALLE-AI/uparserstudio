@@ -197,6 +197,29 @@ pub async fn classify(path: &str) -> Result<DocumentProfile, ApiError> {
     Ok(profile_best_effort(&bytes, format).await)
 }
 
+/// Parse a structured source document into the lossless canonical contract.
+/// PDF remains available through `parse`, whose page-oriented result carries
+/// geometry that is not represented by the structured document engine.
+#[cfg(feature = "native")]
+pub async fn parse_canonical_document(
+    path: &str,
+    options: &uparser_document_engine::ParseOptions,
+) -> Result<uparser_document_engine::CanonicalDocument, ApiError> {
+    if !Path::new(path).exists() {
+        return Err(ApiError::FileNotFound(path.to_owned()));
+    }
+    let bytes = std::fs::read(path).map_err(|error| ApiError::ReadFailed(error.to_string()))?;
+    let format = uparser_document_engine::detect_format(&bytes, Some(path));
+    if format == uparser_document_engine::DocumentFormat::Pdf {
+        return Err(ApiError::NativeParseFailed(
+            "canonical document output is currently limited to structured source formats"
+                .to_owned(),
+        ));
+    }
+    uparser_document_engine::parse_document(&bytes, format, options)
+        .map_err(|error| ApiError::NativeParseFailed(error.to_string()))
+}
+
 /// Parses `path` with the given `options`, returning the full
 /// `ParseResult` (page-level failures are carried in `page_errors`, not
 /// surfaced as an `Err` — only whole-document failures are).
@@ -216,19 +239,49 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
     // fail `image::load_from_memory`, fall to the 1x1 placeholder, get
     // fed to a protocol adapter as a blank image — exit 0, no error, but
     // a completely wrong result).
+    #[cfg(not(feature = "native"))]
     if let Some(bypass) = crate::ingest::structured_bypass(&file_bytes, format, path) {
         return bypass.map_err(|e| ApiError::IngestFailed(e.to_string()));
     }
 
     let effective_protocol = if options.protocol == "auto" {
-        let profile = profile_best_effort(&file_bytes, format).await;
-        crate::router::route(&profile).protocol.to_string()
+        #[cfg(feature = "native")]
+        {
+            let document_format = uparser_document_engine::detect_format(&file_bytes, Some(path));
+            if matches!(
+                document_format,
+                uparser_document_engine::DocumentFormat::Csv
+                    | uparser_document_engine::DocumentFormat::Tsv
+                    | uparser_document_engine::DocumentFormat::Excel
+                    | uparser_document_engine::DocumentFormat::Ods
+                    | uparser_document_engine::DocumentFormat::Odt
+                    | uparser_document_engine::DocumentFormat::Odp
+                    | uparser_document_engine::DocumentFormat::Epub
+                    | uparser_document_engine::DocumentFormat::Rtf
+                    | uparser_document_engine::DocumentFormat::Docx
+                    | uparser_document_engine::DocumentFormat::Pptx
+            ) {
+                "native".to_owned()
+            } else {
+                let profile = profile_best_effort(&file_bytes, format).await;
+                crate::router::route(&profile).protocol.to_string()
+            }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let profile = profile_best_effort(&file_bytes, format).await;
+            crate::router::route(&profile).protocol.to_string()
+        }
     } else {
         options.protocol.clone()
     };
 
     if effective_protocol == "native" {
-        return parse_native(path, &file_bytes).await;
+        let mut result = parse_native(path, &file_bytes).await?;
+        if options.protocol == "auto" {
+            result.routed_by = RoutedBy::Auto;
+        }
+        return Ok(result);
     }
 
     let fingerprint = ParamFingerprint {
@@ -369,6 +422,7 @@ mod tests {
     /// being read directly). `--protocol` is deliberately set to `mock`
     /// here to prove the bypass takes priority over whatever protocol
     /// was requested, per §13.1a.
+    #[cfg(not(feature = "native"))]
     #[tokio::test]
     async fn parse_bypasses_csv_to_structured_result_regardless_of_protocol() {
         let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
@@ -389,6 +443,52 @@ mod tests {
             .as_ref()
             .expect("csv produces an html table block");
         assert!(html.contains("Alice"));
+    }
+
+    #[cfg(feature = "native")]
+    #[tokio::test]
+    async fn parse_auto_routes_csv_to_native_document_engine() {
+        let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+        std::io::Write::write_all(&mut file, b"Name,Age\nAlice,30\n").unwrap();
+        let options = ParseOptions {
+            protocol: "auto".to_owned(),
+            no_cache: true,
+            ..Default::default()
+        };
+        let result = parse(file.path().to_str().unwrap(), &options)
+            .await
+            .expect("CSV native parse succeeds");
+        assert_eq!(result.protocol, "native:csv");
+        assert_eq!(result.routed_by, RoutedBy::Auto);
+        assert_eq!(
+            result.pages[0].blocks[0].source,
+            crate::types::BlockSource::StructuredNative
+        );
+        assert!(
+            result.pages[0].blocks[0]
+                .text
+                .as_deref()
+                .unwrap()
+                .contains("Alice")
+        );
+    }
+
+    #[cfg(feature = "native")]
+    #[tokio::test]
+    async fn canonical_api_returns_lossless_structured_document() {
+        let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+        std::io::Write::write_all(&mut file, b"Name,Age\nAlice,30\n").unwrap();
+        let document = parse_canonical_document(
+            file.path().to_str().unwrap(),
+            &uparser_document_engine::ParseOptions::default(),
+        )
+        .await
+        .expect("canonical CSV parse succeeds");
+        assert_eq!(document.schema_version, "uparser.document.v1");
+        assert_eq!(
+            document.units[0].kind,
+            uparser_document_engine::UnitKind::Sheet
+        );
     }
 
     /// Proves DOCX input reaches real `normalize_format` conversion logic

@@ -21,3 +21,5 @@ uparser-bundle/
 
 # Release artifacts (upload to GitHub Releases, not git)
 dist/
+benchmark
+output
