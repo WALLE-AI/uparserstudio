@@ -107,6 +107,49 @@ uparser parse --protocol native --max-input-mib 64 report.docx  # 解析前拒�
 
 ---
 
+## 🏗️ 技术架构
+
+三种调用面(CLI / Node / Python)共用同一个 `uparser-core`;`--protocol native` 在 core 内部按文件是否为 PDF 再分流到两个各自独立、零外部依赖的纯 Rust 引擎,其余五个协议(`mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `pipeline` / `paddleocr`)统一经 `scheduler` 调度、把请求发给外置模型服务——**推理永远不在进程内跑**。
+
+```mermaid
+flowchart TB
+    subgraph Surfaces["调用面(三者共用同一 core)"]
+        CLI["uparser CLI"]
+        NAPI["Node.js 绑定<br/>(uparser-napi)"]
+        PYO3["Python 绑定<br/>(uparser-python)"]
+    end
+
+    CLI --> API
+    NAPI --> API
+    PYO3 --> API
+    API["uparser-core :: api.rs<br/>parse / classify"]
+
+    API --> INGEST["ingest.rs<br/>detect_format → normalize_format<br/>→ rasterize(仅 VLM/OCR 协议需要)"]
+    INGEST --> SELECT{"--protocol"}
+    SELECT -- auto --> PROFILER["profiler + router<br/>(内容预分析,选协议)"]
+    PROFILER --> DISPATCH
+    SELECT -- 显式指定 --> DISPATCH{"六大协议"}
+
+    DISPATCH -- native --> NATIVEADAPTER["adapters::native<br/>(绕过 scheduler,单次整篇解析)"]
+    NATIVEADAPTER -- ".pdf" --> PDFENGINE["uparser-native-engine<br/>纯 Rust · lopdf<br/>PDF 文本层/版面/表格"]
+    NATIVEADAPTER -- "docx/pptx/xls(x)/odt/ods/odp<br/>rtf/epub/csv/doc/ppt" --> DOCENGINE["uparser-document-engine<br/>纯 Rust · 零 LibreOffice"]
+
+    DISPATCH -- "mineru-vlm · dots-ocr<br/>monkeyocr-v2 · pipeline · paddleocr" --> SCHED["scheduler.rs<br/>处理窗口 · 并发预算 · 按页失败隔离"]
+    SCHED --> ADAPTERS["adapters::* + 共享层<br/>otsl · formula_repair · postprocess"]
+    ADAPTERS --> TRANS["transport.rs<br/>重试/退避/信号量"]
+    TRANS --> EXT["外置模型服务<br/>vLLM/LMDeploy(OpenAI 兼容)<br/>或轻量 REST(Pipeline/Paddle)"]
+
+    PDFENGINE --> RENDER
+    DOCENGINE --> RENDER
+    ADAPTERS --> RENDER["render/<br/>Markdown · JSON · document-json"]
+    RENDER --> CACHE["cache.rs<br/>内容哈希缓存"]
+    CACHE --> OUT["stdout=结果 · stderr=日志<br/>exit code 0-4"]
+```
+
+> 更细粒度的分层图 / 控制流图 / 时序图见 [`UPARSER_GUIDE.md` §4.6](UPARSER_GUIDE.md#46-架构流程图与时序图)。GitHub 原生渲染 Mermaid,本地查看需支持 Mermaid 的 Markdown 工具。
+
+---
+
 ## 📦 包的情况(仓库结构与 crate)
 
 本仓库是一个**研究工作区**,包含产品代码(`uparser/`)、设计/评测文档、以及一个用于对比研究的第三方项目并置目录(`opensource/`,**已 gitignore,不随仓库上传**)。
