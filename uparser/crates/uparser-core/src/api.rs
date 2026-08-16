@@ -464,9 +464,11 @@ mod tests {
             result.pages[0].blocks[0].source,
             crate::types::BlockSource::StructuredNative
         );
+        // A CSV lowers to a single table block, which carries its content as
+        // HTML so merged cells survive; `text` is deliberately unset.
         assert!(
             result.pages[0].blocks[0]
-                .text
+                .html
                 .as_deref()
                 .unwrap()
                 .contains("Alice")

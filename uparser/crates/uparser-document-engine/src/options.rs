@@ -6,6 +6,11 @@ pub struct ResourceLimits {
     pub max_total_uncompressed_bytes: u64,
     pub max_archive_entries: usize,
     pub max_xml_depth: usize,
+    /// Nesting depth for binary record trees (OLE-based .doc/.ppt).
+    /// Deliberately far tighter than the XML depth: these formats are walked
+    /// by real recursion, and no legitimate document nests records anywhere
+    /// near this deep.
+    pub max_record_depth: usize,
     pub max_xml_nodes: usize,
     pub max_expansion: u64,
     pub max_asset_bytes: usize,
@@ -20,6 +25,7 @@ impl Default for ResourceLimits {
             max_total_uncompressed_bytes: 512 * 1024 * 1024,
             max_archive_entries: 100_000,
             max_xml_depth: 256,
+            max_record_depth: 64,
             max_xml_nodes: 2_000_000,
             max_expansion: 4_000_000,
             max_asset_bytes: 128 * 1024 * 1024,

@@ -3,7 +3,7 @@ use crate::package::Package;
 use crate::{
     Asset, AssetId, Block, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentError,
     DocumentFormat, DocumentUnit, ImageSource, Inline, LinkTarget, List, ListItem, ListMarker,
-    Note, NoteKind, ParseOptions, ParseWarning, Table, TableKind, UnitKind, WarningCode,
+    Note, NoteKind, ParseOptions, ParseWarning, Style, Table, TableKind, UnitKind, WarningCode,
 };
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -33,7 +33,8 @@ pub(crate) fn parse(
         match format {
             DocumentFormat::Odt => "odt",
             DocumentFormat::Odp => "odp",
-            _ => unreachable!(),
+            DocumentFormat::Ods => "ods",
+            _ => return Err(DocumentError::UnsupportedFormat(format)),
         }
         .to_owned(),
     );
@@ -42,8 +43,14 @@ pub(crate) fn parse(
         parse_metadata(&meta, options, &mut document)?;
     }
     let mut list_styles = parse_list_styles(&xml, options)?;
+    let mut text_styles = parse_text_styles(&xml, options)?;
     if let Some(styles_xml) = styles_xml {
         list_styles.extend(parse_list_styles(&styles_xml, options)?);
+        // Automatic styles in content.xml override same-named entries in
+        // styles.xml, so the document-level map is inserted first.
+        for (name, definition) in parse_text_styles(&styles_xml, options)? {
+            text_styles.entry(name).or_insert(definition);
+        }
     }
     parse_content(
         &xml,
@@ -51,6 +58,7 @@ pub(crate) fn parse(
         options,
         &asset_ids,
         &list_styles,
+        &text_styles,
         &mut document,
     )?;
     Ok(document)
@@ -121,7 +129,7 @@ fn parse_metadata(
 fn parse_list_styles(
     xml: &[u8],
     options: &ParseOptions,
-) -> Result<HashMap<String, ListMarker>, DocumentError> {
+) -> Result<HashMap<(String, u8), ListMarker>, DocumentError> {
     let mut reader = Reader::from_reader(xml);
     let mut styles = HashMap::new();
     let mut current: Option<String> = None;
@@ -137,14 +145,32 @@ fn parse_list_styles(
             }
             Ok(Event::Start(event) | Event::Empty(event)) => {
                 let marker = match event.local_name().as_ref() {
-                    b"list-level-style-number" => Some(ListMarker::Decimal),
+                    // `style:num-format` names the sequence type: `1`, `a`,
+                    // `A`, `i`, `I`. Collapsing them all to decimal erased
+                    // both the sequence type and any position within it.
+                    b"list-level-style-number" => {
+                        Some(match attribute(&event, b"num-format").as_deref() {
+                            Some("a") => ListMarker::LowerAlpha,
+                            Some("A") => ListMarker::UpperAlpha,
+                            Some("i") => ListMarker::LowerRoman,
+                            Some("I") => ListMarker::UpperRoman,
+                            _ => ListMarker::Decimal,
+                        })
+                    }
                     b"list-level-style-bullet" | b"list-level-style-image" => {
                         Some(ListMarker::Bullet)
                     }
                     _ => None,
                 };
                 if let (Some(name), Some(marker)) = (current.as_ref(), marker) {
-                    styles.entry(name.clone()).or_insert(marker);
+                    // Each level of a list style names its own format, so
+                    // the map is keyed by level too — otherwise every nested
+                    // level inherited level 1's sequence type.
+                    let level = attribute(&event, b"level")
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .unwrap_or(1)
+                        .saturating_sub(1);
+                    styles.entry((name.clone(), level)).or_insert(marker);
                 }
             }
             Ok(Event::End(event)) if event.local_name().as_ref() == b"list-style" => {
@@ -156,6 +182,172 @@ fn parse_list_styles(
         }
     }
     Ok(styles)
+}
+
+/// Collect text/paragraph style definitions into the run properties they
+/// imply.
+///
+/// ODF expresses emphasis through named styles (`<text:span
+/// text:style-name="T3">`) rather than inline tags, so without this the
+/// entire bold/italic/strike layer of every ODT and ODP is lost. Styles live
+/// in both `content.xml` (automatic styles) and `styles.xml` (named styles);
+/// callers merge both maps.
+fn parse_text_styles(
+    xml: &[u8],
+    options: &ParseOptions,
+) -> Result<HashMap<String, TextStyleDef>, DocumentError> {
+    let mut reader = Reader::from_reader(xml);
+    let mut styles: HashMap<String, TextStyleDef> = HashMap::new();
+    let mut current: Option<(String, TextStyleDef)> = None;
+    let mut nodes = 0usize;
+    loop {
+        nodes += 1;
+        if nodes > options.limits.max_xml_nodes {
+            return Err(limit("max_xml_nodes", nodes));
+        }
+        match reader.read_event() {
+            Ok(Event::Start(event)) if event.local_name().as_ref() == b"style" => {
+                let family = attribute(&event, b"family");
+                if matches!(family.as_deref(), Some("text" | "paragraph"))
+                    && let Some(name) = attribute(&event, b"name")
+                {
+                    current = Some((
+                        name,
+                        TextStyleDef {
+                            parent: attribute(&event, b"parent-style-name"),
+                            ..TextStyleDef::default()
+                        },
+                    ));
+                }
+            }
+            Ok(Event::Start(event) | Event::Empty(event))
+                if event.local_name().as_ref() == b"text-properties" =>
+            {
+                if let Some((_, definition)) = current.as_mut() {
+                    apply_text_properties(&event, definition);
+                }
+            }
+            Ok(Event::End(event)) if event.local_name().as_ref() == b"style" => {
+                if let Some((name, definition)) = current.take() {
+                    styles.insert(name, definition);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(DocumentError::malformed(error.to_string())),
+            _ => {}
+        }
+    }
+    Ok(styles)
+}
+
+/// Run properties as *overrides*.
+///
+/// Every field is optional so a derived style can switch an inherited
+/// property back off — `fo:font-weight="normal"` inside a bold paragraph is
+/// the standard way ODF marks a not-bold span, and a merge that only ORs
+/// flags together cannot express it.
+#[derive(Debug, Clone, Default)]
+struct TextStyleDef {
+    parent: Option<String>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strike: Option<bool>,
+    superscript: Option<Option<bool>>,
+}
+
+impl TextStyleDef {
+    fn overlay(&mut self, source: &TextStyleDef) {
+        if source.bold.is_some() {
+            self.bold = source.bold;
+        }
+        if source.italic.is_some() {
+            self.italic = source.italic;
+        }
+        if source.underline.is_some() {
+            self.underline = source.underline;
+        }
+        if source.strike.is_some() {
+            self.strike = source.strike;
+        }
+        if source.superscript.is_some() {
+            self.superscript = source.superscript;
+        }
+    }
+
+    fn apply_to(&self, style: &mut Style) {
+        if let Some(bold) = self.bold {
+            style.bold = bold;
+        }
+        if let Some(italic) = self.italic {
+            style.italic = italic;
+        }
+        if let Some(underline) = self.underline {
+            style.underline = underline;
+        }
+        if let Some(strike) = self.strike {
+            style.strike = strike;
+        }
+        if let Some(superscript) = self.superscript {
+            style.superscript = superscript;
+        }
+    }
+}
+
+fn apply_text_properties(event: &BytesStart<'_>, definition: &mut TextStyleDef) {
+    if let Some(weight) = attribute(event, b"font-weight") {
+        definition.bold = Some(weight != "normal");
+    }
+    if let Some(font_style) = attribute(event, b"font-style") {
+        definition.italic = Some(matches!(font_style.as_str(), "italic" | "oblique"));
+    }
+    if let Some(line_through) = attribute(event, b"text-line-through-style") {
+        definition.strike = Some(line_through != "none");
+    }
+    if let Some(underline) = attribute(event, b"text-underline-style") {
+        definition.underline = Some(underline != "none");
+    }
+    match attribute(event, b"text-position").as_deref() {
+        Some(position) if position.starts_with("super") => {
+            definition.superscript = Some(Some(true))
+        }
+        Some(position) if position.starts_with("sub") => definition.superscript = Some(Some(false)),
+        _ => {}
+    }
+}
+
+/// Run properties a paragraph or heading inherits from its own style.
+fn paragraph_style(event: &BytesStart<'_>, styles: &HashMap<String, TextStyleDef>) -> Style {
+    let mut style = Style::default();
+    if let Some(name) = attribute(event, b"style-name") {
+        resolve_text_style(&name, styles).apply_to(&mut style);
+    }
+    style
+}
+
+/// Resolve a style name through its `parent-style-name` chain, parent first.
+fn resolve_text_style(name: &str, styles: &HashMap<String, TextStyleDef>) -> TextStyleDef {
+    let mut chain = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut current = name.to_owned();
+    for _ in 0..16 {
+        if !visited.insert(current.clone()) {
+            break;
+        }
+        let Some(definition) = styles.get(&current) else {
+            break;
+        };
+        chain.push(definition);
+        match definition.parent.as_deref() {
+            Some(parent) => current = parent.to_owned(),
+            None => break,
+        }
+    }
+    let mut resolved = TextStyleDef::default();
+    for definition in chain.into_iter().rev() {
+        resolved.overlay(definition);
+    }
+    resolved
 }
 
 fn contains_encryption(xml: &[u8]) -> bool {
@@ -201,6 +393,7 @@ fn load_assets(
                 filename: name.rsplit('/').next().map(ToOwned::to_owned),
                 byte_length: bytes.len(),
                 sha256,
+                path: None,
                 bytes: options.include_assets.then_some(bytes),
             });
         }
@@ -241,6 +434,11 @@ struct LinkBuilder {
 
 struct ListBuilder {
     marker: ListMarker,
+    /// The list style in force. A nested `<text:list>` usually omits
+    /// `text:style-name` and inherits its parent's, so the name has to be
+    /// carried down or every sub-list falls back to a plain bullet.
+    style_name: Option<String>,
+    start: Option<u64>,
     items: Vec<ListItem>,
 }
 
@@ -285,6 +483,13 @@ struct ParseState {
     expanded: u64,
     note: Option<NoteBuilder>,
     ignored_note_depth: usize,
+    /// Style in force for the text being collected, plus the saved styles of
+    /// enclosing `<text:span>` elements.
+    style: Style,
+    style_stack: Vec<Style>,
+    /// Where each `(list style, level)` sequence got to, for lists that
+    /// declare `text:continue-numbering`.
+    list_continuation: HashMap<(String, u8), u64>,
 }
 
 fn parse_content(
@@ -292,7 +497,8 @@ fn parse_content(
     format: DocumentFormat,
     options: &ParseOptions,
     asset_ids: &HashMap<String, AssetId>,
-    list_styles: &HashMap<String, ListMarker>,
+    list_styles: &HashMap<(String, u8), ListMarker>,
+    text_styles: &HashMap<String, TextStyleDef>,
     document: &mut CanonicalDocument,
 ) -> Result<(), DocumentError> {
     let mut state = ParseState {
@@ -307,6 +513,9 @@ fn parse_content(
         expanded: 0,
         note: None,
         ignored_note_depth: 0,
+        style: Style::default(),
+        style_stack: Vec::new(),
+        list_continuation: HashMap::new(),
     };
     let mut reader = Reader::from_reader(xml);
     reader.trim_text(false);
@@ -333,6 +542,7 @@ fn parse_content(
                     options,
                     asset_ids,
                     list_styles,
+                    text_styles,
                     document,
                     &mut state,
                 )?;
@@ -344,6 +554,7 @@ fn parse_content(
                     options,
                     asset_ids,
                     list_styles,
+                    text_styles,
                     document,
                     &mut state,
                 )?;
@@ -356,12 +567,19 @@ fn parse_content(
                 )?;
             }
             Event::Text(text) => {
+                let style = state.style.clone();
                 if let Some(paragraph) = state.paragraph.as_mut() {
                     let value = text.unescape().map_err(|error| DocumentError::Malformed {
                         part: Some(CONTENT_PART.to_owned()),
                         detail: error.to_string(),
                     })?;
-                    push_inline(paragraph, Inline::text(value));
+                    push_inline(
+                        paragraph,
+                        Inline::Text {
+                            text: value.into_owned(),
+                            style,
+                        },
+                    );
                 }
             }
             Event::End(event) => {
@@ -385,12 +603,14 @@ fn parse_content(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_element(
     event: &BytesStart<'_>,
     format: DocumentFormat,
     options: &ParseOptions,
     asset_ids: &HashMap<String, AssetId>,
-    list_styles: &HashMap<String, ListMarker>,
+    list_styles: &HashMap<(String, u8), ListMarker>,
+    text_styles: &HashMap<String, TextStyleDef>,
     document: &mut CanonicalDocument,
     state: &mut ParseState,
 ) -> Result<(), DocumentError> {
@@ -414,6 +634,7 @@ fn start_element(
             ));
         }
         b"h" => {
+            state.style = paragraph_style(event, text_styles);
             state.paragraph = Some(ParagraphBuilder {
                 heading_level: Some(
                     attribute(event, b"outline-level")
@@ -425,6 +646,7 @@ fn start_element(
             });
         }
         b"p" if state.paragraph.is_none() => {
+            state.style = paragraph_style(event, text_styles);
             state.paragraph = Some(ParagraphBuilder::default());
         }
         b"a" => {
@@ -442,18 +664,65 @@ fn start_element(
                 });
             }
         }
-        b"list" => state.lists.push(ListBuilder {
-            marker: list_marker(event, list_styles),
-            items: Vec::new(),
-        }),
+        b"list" => {
+            let level = state.lists.len().min(u8::MAX as usize) as u8;
+            let style_name = attribute(event, b"style-name")
+                .or_else(|| state.lists.last().and_then(|list| list.style_name.clone()));
+            // `text:continue-numbering` / `text:continue-list` mean this list
+            // resumes an earlier one rather than restarting — the standard way
+            // ODF expresses a list interrupted by a paragraph.
+            let continues = attribute(event, b"continue-numbering")
+                .is_some_and(|value| value == "true")
+                || attribute(event, b"continue-list").is_some();
+            let start = attribute(event, b"start-value")
+                .and_then(|value| value.parse().ok())
+                .or_else(|| {
+                    continues
+                        .then(|| {
+                            state
+                                .list_continuation
+                                .get(&(style_name.clone().unwrap_or_default(), level))
+                                .copied()
+                        })
+                        .flatten()
+                });
+            state.lists.push(ListBuilder {
+                marker: list_marker(style_name.as_deref(), list_styles, level),
+                style_name,
+                start,
+                items: Vec::new(),
+            });
+        }
         b"list-item" => {
             if let Some(list) = state.lists.last_mut() {
                 list.items.push(ListItem { blocks: Vec::new() });
             }
         }
+        // `<text:span>` is ODF's inline formatting carrier; the style it
+        // names is resolved and stacked so nested spans compose.
+        b"span" => {
+            state.style_stack.push(state.style.clone());
+            if let Some(name) = attribute(event, b"style-name") {
+                resolve_text_style(&name, text_styles).apply_to(&mut state.style);
+            }
+        }
         b"table" if state.table.is_none() => {
+            let name = attribute(event, b"name");
+            // In a spreadsheet each top-level table *is* a sheet, so it opens
+            // its own logical unit. In text/presentation documents a table is
+            // just a block inside the surrounding unit.
+            if format == DocumentFormat::Ods {
+                if let Some(unit) = state.current_unit.take() {
+                    state.units.push(unit);
+                }
+                state.current_unit = Some(DocumentUnit::new(
+                    UnitKind::Sheet,
+                    state.units.len(),
+                    name.clone(),
+                ));
+            }
             state.table = Some(TableBuilder {
-                name: attribute(event, b"name"),
+                name,
                 ..Default::default()
             });
         }
@@ -567,7 +836,12 @@ fn end_element(
                 });
             }
         }
+        b"span" => {
+            state.style = state.style_stack.pop().unwrap_or_default();
+        }
         b"p" | b"h" => {
+            state.style = Style::default();
+            state.style_stack.clear();
             if let Some(paragraph) = state.paragraph.take()
                 && !paragraph.content.is_empty()
             {
@@ -585,11 +859,18 @@ fn end_element(
         }
         b"list" => {
             if let Some(list) = state.lists.pop() {
+                // Remember where this sequence got to, so a later list that
+                // declares `continue-numbering` can pick it up.
+                let level = state.lists.len().min(u8::MAX as usize) as u8;
+                state.list_continuation.insert(
+                    (list.style_name.clone().unwrap_or_default(), level),
+                    list.start.unwrap_or(1) + list.items.len() as u64,
+                );
                 append_block(
                     Block::List {
                         list: List {
                             marker: list.marker,
-                            start: None,
+                            start: list.start,
                             items: list.items,
                         },
                     },
@@ -613,7 +894,11 @@ fn end_element(
         }
         b"table" => {
             if let Some(table) = state.table.take() {
-                let caption = table.name.clone().map(|name| vec![Inline::text(name)]);
+                // A spreadsheet sheet already carries its name as the unit
+                // label; repeating it as a table caption is noise.
+                let caption = (format != DocumentFormat::Ods)
+                    .then(|| table.name.clone().map(|name| vec![Inline::text(name)]))
+                    .flatten();
                 let table =
                     build_table(table, options, &mut state.expanded, &mut document.warnings)?;
                 append_block(
@@ -622,6 +907,11 @@ fn end_element(
                     },
                     state,
                 );
+                if format == DocumentFormat::Ods
+                    && let Some(unit) = state.current_unit.take()
+                {
+                    state.units.push(unit);
+                }
             }
         }
         b"page" if format == DocumentFormat::Odp => {
@@ -667,15 +957,27 @@ fn push_inline(paragraph: &mut ParagraphBuilder, inline: Inline) {
     }
 }
 
-fn list_marker(event: &BytesStart<'_>, styles: &HashMap<String, ListMarker>) -> ListMarker {
-    if let Some(marker) =
-        attribute(event, b"style-name").and_then(|name| styles.get(&name).copied())
+fn list_marker(
+    style_name: Option<&str>,
+    styles: &HashMap<(String, u8), ListMarker>,
+    level: u8,
+) -> ListMarker {
+    let Some(name) = style_name else {
+        return ListMarker::Bullet;
+    };
+    // The style's own level wins; styles that define only one level fall back
+    // to it for every depth.
+    if let Some(marker) = styles
+        .get(&(name.to_owned(), level))
+        .or_else(|| styles.get(&(name.to_owned(), 0)))
+        .copied()
     {
         return marker;
     }
-    match attribute(event, b"style-name").as_deref() {
-        Some(name) if name.to_ascii_lowercase().contains("number") => ListMarker::Decimal,
-        _ => ListMarker::Bullet,
+    if name.to_ascii_lowercase().contains("number") {
+        ListMarker::Decimal
+    } else {
+        ListMarker::Bullet
     }
 }
 
@@ -696,6 +998,24 @@ fn repeat(
         });
     }
     usize::try_from(value).map_err(|_| limit("max_expansion", value))
+}
+
+/// ODF marks header rows with `<table:table-header-rows>`, which producers
+/// often omit. Fall back to the same convention every other tabular frontend
+/// uses: a fully-populated, unspanned first row above at least one more row
+/// is a header.
+fn infer_header_rows(grid: &[Vec<CellSlot>]) -> usize {
+    let Some(first) = grid.first() else { return 0 };
+    if grid.len() < 2 || first.is_empty() {
+        return 0;
+    }
+    let all_labelled = first.iter().all(|slot| match slot {
+        CellSlot::Origin(cell) => {
+            cell.row_span == 1 && cell.column_span == 1 && !cell.blocks.is_empty()
+        }
+        CellSlot::Covered { .. } => false,
+    });
+    usize::from(all_labelled)
 }
 
 fn span(event: &BytesStart<'_>, name: &[u8]) -> usize {
@@ -795,11 +1115,12 @@ fn build_table(
                 .collect()
         })
         .collect();
+    let header_rows = infer_header_rows(&grid);
     Ok(Table {
         kind: TableKind::Data,
         rows: grid.len(),
         columns,
-        header_rows: 0,
+        header_rows,
         grid,
         caption: None,
     })

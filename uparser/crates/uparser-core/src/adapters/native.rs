@@ -35,6 +35,27 @@ use uparser_native_engine::types::{ItemType, TextItem};
 pub struct NativeAdapter;
 
 impl NativeAdapter {
+    /// Parse once, whatever the input is.
+    ///
+    /// This is the entry point callers should use when they may need more
+    /// than one output format from the same file: the returned value carries
+    /// enough to render Markdown, `document-json` and the compatibility
+    /// `ParseResult` without touching the source bytes again.
+    pub async fn parse_native(
+        &self,
+        source_path: &str,
+        bytes: &[u8],
+        options: &uparser_document_engine::ParseOptions,
+    ) -> Result<NativeParse, PageError> {
+        let format = uparser_document_engine::detect_format(bytes, Some(source_path));
+        if format == uparser_document_engine::DocumentFormat::Pdf {
+            return Ok(NativeParse::Pdf(self.parse_pdf(source_path, bytes)?));
+        }
+        Ok(NativeParse::Structured(parse_structured(
+            bytes, format, options,
+        )?))
+    }
+
     /// Parse a whole PDF via the native engine's positioned-text extraction —
     /// zero model calls, zero external services, no PDFium.
     pub async fn parse_document(
@@ -42,11 +63,22 @@ impl NativeAdapter {
         source_path: &str,
         pdf_bytes: &[u8],
     ) -> Result<ParseResult, PageError> {
-        let format = uparser_document_engine::detect_format(pdf_bytes, Some(source_path));
-        if format != uparser_document_engine::DocumentFormat::Pdf {
-            return parse_structured_document(source_path, pdf_bytes, format);
+        match self
+            .parse_native(
+                source_path,
+                pdf_bytes,
+                &uparser_document_engine::ParseOptions::default(),
+            )
+            .await?
+        {
+            NativeParse::Pdf(result) => Ok(result),
+            NativeParse::Structured(parsed) => {
+                Ok(structured_to_parse_result(&parsed, source_path, pdf_bytes))
+            }
         }
+    }
 
+    fn parse_pdf(&self, source_path: &str, pdf_bytes: &[u8]) -> Result<ParseResult, PageError> {
         let items = uparser_native_engine::extractor::extract_text_with_positions_mem(pdf_bytes)
             .map_err(|e| PageError {
                 page_num: 0,
@@ -149,22 +181,65 @@ impl NativeAdapter {
     }
 }
 
-fn parse_structured_document(
-    source_path: &str,
+/// A structured (non-PDF) document, parsed exactly once.
+///
+/// Every output surface — Markdown, `document-json`, and the compatibility
+/// `ParseResult` — is derived from this one value. Each used to re-parse the
+/// source independently, so asking for `document-json` parsed the same bytes
+/// twice.
+pub struct StructuredDocument {
+    pub document: uparser_document_engine::CanonicalDocument,
+    pub format: uparser_document_engine::DocumentFormat,
+}
+
+/// What a native parse produced: PDFs go through the PDF engine, everything
+/// else through the structured-document engine.
+pub enum NativeParse {
+    Pdf(ParseResult),
+    Structured(StructuredDocument),
+}
+
+/// Machine-readable failure kind, carried on `PageError::stage`.
+///
+/// The CLI turns this into a semantic exit code. Without it every structured
+/// failure surfaced as "internal error", which told an agent to retry — the
+/// wrong advice for an encrypted file or an input over its size budget.
+pub fn document_error_stage(error: &uparser_document_engine::DocumentError) -> &'static str {
+    use uparser_document_engine::DocumentError as E;
+    match error {
+        E::UnsupportedFormat(_) => "native_document.unsupported_format",
+        E::Encrypted => "native_document.encrypted",
+        E::ResourceLimit { .. } => "native_document.resource_limit",
+        E::MissingPart { .. } => "native_document.missing_part",
+        E::Malformed { .. } => "native_document.malformed",
+        E::Io(_) => "native_document.io",
+        _ => "native_document",
+    }
+}
+
+fn parse_structured(
     bytes: &[u8],
     format: uparser_document_engine::DocumentFormat,
-) -> Result<ParseResult, PageError> {
-    let document = uparser_document_engine::parse_document(
-        bytes,
-        format,
-        &uparser_document_engine::ParseOptions::default(),
-    )
-    .map_err(|error| PageError {
-        page_num: 0,
-        message: format!("native structured document parsing failed: {error}"),
-        stage: Some("native_document".into()),
-    })?;
+    options: &uparser_document_engine::ParseOptions,
+) -> Result<StructuredDocument, PageError> {
+    let document =
+        uparser_document_engine::parse_document(bytes, format, options).map_err(|error| {
+            PageError {
+                page_num: 0,
+                message: format!("native structured document parsing failed: {error}"),
+                stage: Some(document_error_stage(&error).into()),
+            }
+        })?;
+    Ok(StructuredDocument { document, format })
+}
 
+/// Lower a structured document onto the page/block `ParseResult` contract.
+pub fn structured_to_parse_result(
+    parsed: &StructuredDocument,
+    source_path: &str,
+    bytes: &[u8],
+) -> ParseResult {
+    let StructuredDocument { document, format } = parsed;
     let pages = document
         .units
         .iter()
@@ -176,10 +251,12 @@ fn parse_structured_document(
             blocks: unit
                 .blocks
                 .iter()
-                .map(|block| compatibility_block(block, format))
+                .enumerate()
+                .map(|(order, block)| compatibility_block(document, block, order))
                 .collect(),
         })
         .collect();
+    let format = *format;
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let protocol_format = match format {
@@ -195,7 +272,7 @@ fn parse_structured_document(
         uparser_document_engine::DocumentFormat::Pptx => "pptx",
         _ => "document",
     };
-    Ok(ParseResult {
+    ParseResult {
         source_path: source_path.to_owned(),
         source_sha256: format!("{:x}", hasher.finalize()),
         protocol: format!("native:{protocol_format}"),
@@ -214,55 +291,89 @@ fn parse_structured_document(
             .map(|warning| warning.message.clone())
             .collect(),
         timing: Default::default(),
-    })
+    }
 }
 
 fn compatibility_block(
+    document: &uparser_document_engine::CanonicalDocument,
     block: &uparser_document_engine::Block,
-    format: uparser_document_engine::DocumentFormat,
+    order: usize,
 ) -> Block {
+    use uparser_document_engine::Block as DocBlock;
+
     let category_raw = match block {
-        uparser_document_engine::Block::Heading { .. } => "title",
-        uparser_document_engine::Block::List { .. } => "list",
-        uparser_document_engine::Block::Table { .. } => "table",
-        uparser_document_engine::Block::Figure { .. } => "image",
+        DocBlock::Heading { .. } => "title",
+        DocBlock::List { .. } => "list",
+        DocBlock::Table { .. } => "table",
+        DocBlock::Figure { .. } => "image",
         _ => "text",
     };
-    let mut document = uparser_document_engine::CanonicalDocument::new(format);
-    let mut unit = uparser_document_engine::DocumentUnit::new(
-        uparser_document_engine::UnitKind::Flow,
-        0,
-        None,
-    );
-    unit.blocks.push(block.clone());
-    document.units.push(unit);
-    let mut rendered = uparser_document_engine::render::markdown(&document)
-        .trim()
-        .to_owned();
-    let category = match block {
-        uparser_document_engine::Block::Heading { .. } => {
-            rendered = rendered.trim_start_matches('#').trim_start().to_owned();
-            "title"
+
+    let mut text = None;
+    let mut html = None;
+    let mut asset_bytes = None;
+    // A list renders as multi-line Markdown that already carries its own
+    // markers; the compatibility renderer would prefix another `- ` if the
+    // normalized category said "list", so it is lowered as text.
+    let mut category = category_raw;
+
+    match block {
+        // A table keeps its merged cells by going out as HTML — the
+        // compatibility renderer prefers `html` over `text`, and a GFM pipe
+        // table cannot express a rowspan at all.
+        DocBlock::Table { table } => {
+            html = Some(uparser_document_engine::render::table_html(document, table));
         }
-        uparser_document_engine::Block::List { .. } => "text",
-        _ => category_raw,
-    };
+        DocBlock::Figure { asset_id, .. } => {
+            // Hand the raw bytes to the shared asset writer, which
+            // content-addresses them and fills in `asset_path`.
+            asset_bytes = asset_id
+                .as_deref()
+                .and_then(|id| document.assets.iter().find(|asset| asset.id == id))
+                .and_then(|asset| asset.bytes.clone());
+            if asset_bytes.is_none() {
+                text = Some(uparser_document_engine::render::block_markdown(
+                    document, block,
+                ));
+            }
+        }
+        DocBlock::Heading { .. } => {
+            // The IR carries the level in `category`; the `#` prefix is the
+            // renderer's job, so it is stripped here rather than emitted twice.
+            let rendered = uparser_document_engine::render::block_markdown(document, block);
+            text = Some(rendered.trim_start_matches('#').trim_start().to_owned());
+        }
+        DocBlock::List { .. } => {
+            category = "text";
+            text = Some(uparser_document_engine::render::block_markdown(
+                document, block,
+            ));
+        }
+        _ => {
+            text = Some(uparser_document_engine::render::block_markdown(
+                document, block,
+            ));
+        }
+    }
+
     Block {
         geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
         geom_frame: CoordFrame::Page,
         bbox_px: None,
         category_raw: category_raw.to_owned(),
         category: Some(category.to_owned()),
-        reading_order: None,
-        text: Some(rendered),
-        html: None,
+        // A structured document has no geometry to derive order from, but its
+        // source order *is* the reading order.
+        reading_order: Some(order as u32),
+        text,
+        html,
         latex: None,
         spans: Vec::new(),
         merge_hint: None,
         confidence: Some(1.0),
         source: BlockSource::StructuredNative,
         error: None,
-        asset_bytes: None,
+        asset_bytes,
         asset_path: None,
     }
 }
@@ -612,24 +723,24 @@ mod tests {
             .expect("native CSV parse succeeds");
         assert_eq!(result.protocol, "native:csv");
         assert_eq!(result.pages.len(), 1);
-        assert_eq!(
-            result.pages[0].blocks[0].source,
-            BlockSource::StructuredNative
-        );
-        assert!(
-            result.pages[0].blocks[0]
-                .text
-                .as_deref()
-                .unwrap()
-                .contains("alpha")
-        );
+        let block = &result.pages[0].blocks[0];
+        assert_eq!(block.source, BlockSource::StructuredNative);
+        assert_eq!(block.category_raw, "table");
+        // Source order is the reading order for a document with no geometry.
+        assert_eq!(block.reading_order, Some(0));
+        // A table lowers to `html`, not `text`: the compatibility renderer
+        // prefers `html`, and only HTML can carry a merged cell.
+        assert!(block.text.is_none(), "{:?}", block.text);
+        assert!(block.html.as_deref().unwrap().contains("alpha"));
 
         let markdown = NativeAdapter
             .native_markdown("sample.csv", bytes)
             .await
             .expect("native CSV markdown succeeds");
-        assert!(markdown.contains("# Sheet 1"));
-        assert!(markdown.contains("| name | value |"));
+        // Delimited text has one anonymous table; naming it "Sheet 1" would
+        // inject a heading the source does not contain.
+        assert!(!markdown.contains("# Sheet 1"), "{markdown}");
+        assert!(markdown.contains("| name | value |"), "{markdown}");
     }
 
     #[tokio::test]
@@ -676,7 +787,12 @@ mod tests {
             .expect("native EPUB parse succeeds");
         assert_eq!(result.protocol, "native:epub");
         assert_eq!(result.pages.len(), 1);
-        assert_eq!(result.pages[0].blocks[0].text.as_deref(), Some("Chapter"));
+        // The first block carries the chapter-start anchor, so a link to the
+        // whole chapter file resolves once the spine is flattened; the
+        // heading's own text follows it.
+        let first = result.pages[0].blocks[0].text.as_deref().unwrap();
+        assert!(first.contains("<a id="), "{first}");
+        assert!(first.ends_with("Chapter"), "{first}");
     }
 
     #[tokio::test]

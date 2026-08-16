@@ -85,6 +85,403 @@ mod integration_tests {
         bytes
     }
 
+    /// Render a document straight to Markdown, for tests that care about the
+    /// end-to-end result rather than the IR shape.
+    fn to_markdown(bytes: &[u8], hint: &str) -> String {
+        parse_to_markdown(bytes, Some(hint), &ParseOptions::default()).unwrap()
+    }
+
+    // -- OPC package resolution ------------------------------------------
+
+    #[test]
+    fn docx_main_part_is_found_through_the_root_relationship_not_a_fixed_path() {
+        // A conforming package may place its main part anywhere; only the
+        // root `officeDocument` relationship names it.
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override PartName=\"/content/main.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="content/main.xml"/></Relationships>"#,
+            ),
+            (
+                "content/main.xml",
+                r#"<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Relocated body</w:t></w:r></w:p></w:body></w:document>"#,
+            ),
+        ]);
+        assert!(to_markdown(&bytes, "altpath.docx").contains("Relocated body"));
+    }
+
+    #[test]
+    fn presentation_is_not_misread_as_a_document_from_an_embedded_word_content_type() {
+        // A deck that embeds a Word object declares wordprocessingml content
+        // types for that object. Substring-scanning `[Content_Types].xml`
+        // classified the whole package as DOCX and then failed looking for
+        // `word/document.xml`.
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types>\
+                 <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
+                 <Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\
+                 </Types>",
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>"#,
+            ),
+            (
+                "ppt/presentation.xml",
+                r#"<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst><p:sldId id="256" r:id="rSlide"/></p:sldIdLst></p:presentation>"#,
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                r#"<Relationships><Relationship Id="rSlide" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>"#,
+            ),
+            (
+                "ppt/slides/slide1.xml",
+                r#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Deck body</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+        ]);
+        assert_eq!(
+            detect_format(&bytes, Some("deck.pptx")),
+            DocumentFormat::Pptx
+        );
+        assert!(to_markdown(&bytes, "deck.pptx").contains("Deck body"));
+    }
+
+    #[test]
+    fn slide_order_follows_the_relationship_id_not_the_numeric_slide_id() {
+        // `<p:sldId id="256" r:id="rId4"/>` carries two `id`-named
+        // attributes. Matching on local name alone picked `256`, no
+        // relationship matched, and slide order silently degraded to
+        // filename order.
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/></Types>",
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships><Relationship Id="r0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>"#,
+            ),
+            (
+                "ppt/presentation.xml",
+                r#"<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst><p:sldId id="257" r:id="rSecond"/><p:sldId id="256" r:id="rFirst"/></p:sldIdLst></p:presentation>"#,
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                r#"<Relationships>
+                <Relationship Id="rFirst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+                <Relationship Id="rSecond" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+                </Relationships>"#,
+            ),
+            (
+                "ppt/slides/slide1.xml",
+                r#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Second in order</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+            (
+                "ppt/slides/slide2.xml",
+                r#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>First in order</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+        ]);
+        let document =
+            parse_document_auto(&bytes, Some("deck.pptx"), &ParseOptions::default()).unwrap();
+        assert_eq!(document.units[0].label.as_deref(), Some("First in order"));
+        assert_eq!(document.units[1].label.as_deref(), Some("Second in order"));
+    }
+
+    // -- Resource budgets and recovery ------------------------------------
+
+    #[test]
+    fn deeply_nested_docx_body_hits_the_depth_budget() {
+        let mut body = String::from(r#"<w:document xmlns:w="w"><w:body>"#);
+        for _ in 0..400 {
+            body.push_str("<w:sdt>");
+        }
+        body.push_str("<w:p><w:r><w:t>deep</w:t></w:r></w:p>");
+        for _ in 0..400 {
+            body.push_str("</w:sdt>");
+        }
+        body.push_str("</w:body></w:document>");
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            ("word/document.xml", body.as_str()),
+        ]);
+        assert!(matches!(
+            parse_document_auto(&bytes, Some("deep.docx"), &ParseOptions::default()),
+            Err(DocumentError::ResourceLimit {
+                limit: "max_xml_depth",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_mismatched_end_tag_keeps_the_content_parsed_so_far() {
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/document.xml",
+                r#"<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Kept text</w:t></w:r></w:p><w:p><w:r><w:t>Second</w:t></w:r></w:q></w:body></w:document>"#,
+            ),
+        ]);
+        let document =
+            parse_document_auto(&bytes, Some("mismatched.docx"), &ParseOptions::default()).unwrap();
+        assert!(render::markdown(&document).contains("Kept text"));
+        assert!(
+            document
+                .warnings
+                .iter()
+                .any(|warning| warning.code == WarningCode::TruncatedContent)
+        );
+    }
+
+    #[test]
+    fn a_corrupt_optional_part_is_skipped_rather_than_failing_the_document() {
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            ("word/styles.xml", "<w:styles xmlns:w=\"w\"><w:style"),
+            (
+                "word/document.xml",
+                r#"<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Body survives</w:t></w:r></w:p></w:body></w:document>"#,
+            ),
+        ]);
+        let document =
+            parse_document_auto(&bytes, Some("corrupt.docx"), &ParseOptions::default()).unwrap();
+        assert!(render::markdown(&document).contains("Body survives"));
+        assert!(
+            document
+                .warnings
+                .iter()
+                .any(|warning| warning.code == WarningCode::OptionalPartSkipped)
+        );
+    }
+
+    // -- DOCX fidelity ----------------------------------------------------
+
+    #[test]
+    fn character_styles_produce_inline_emphasis() {
+        // Word applies most emphasis through `<w:rStyle>`, not direct
+        // `<w:b/>`; reading only direct properties dropped it entirely.
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/styles.xml",
+                r#"<w:styles xmlns:w="w">
+                <w:style w:type="character" w:styleId="StrongRun"><w:rPr><w:b/></w:rPr></w:style>
+                <w:style w:type="character" w:styleId="DerivedRun"><w:basedOn w:val="StrongRun"/><w:rPr><w:i/></w:rPr></w:style>
+                </w:styles>"#,
+            ),
+            (
+                "word/document.xml",
+                r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:r><w:rPr><w:rStyle w:val="DerivedRun"/></w:rPr><w:t>emphasised</w:t></w:r></w:p>
+                </w:body></w:document>"#,
+            ),
+        ]);
+        assert!(to_markdown(&bytes, "styled.docx").contains("***emphasised***"));
+    }
+
+    #[test]
+    fn list_numbering_continues_across_an_interrupting_paragraph() {
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/numbering.xml",
+                r#"<w:numbering xmlns:w="w">
+                <w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum>
+                <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+                </w:numbering>"#,
+            ),
+            (
+                "word/document.xml",
+                r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>
+                <w:p><w:r><w:t>Interrupting paragraph.</w:t></w:r></w:p>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>three</w:t></w:r></w:p>
+                </w:body></w:document>"#,
+            ),
+        ]);
+        let markdown = to_markdown(&bytes, "list.docx");
+        assert!(markdown.contains("1. one"), "{markdown}");
+        assert!(markdown.contains("2. two"), "{markdown}");
+        // The counter resumes rather than restarting at 1.
+        assert!(markdown.contains("3. three"), "{markdown}");
+    }
+
+    #[test]
+    fn deeper_list_levels_nest_under_their_parent_item() {
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/numbering.xml",
+                r#"<w:numbering xmlns:w="w">
+                <w:abstractNum w:abstractNumId="1">
+                  <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl>
+                  <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/></w:lvl>
+                </w:abstractNum>
+                <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+                </w:numbering>"#,
+            ),
+            (
+                "word/document.xml",
+                r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>outer</w:t></w:r></w:p>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>inner</w:t></w:r></w:p>
+                </w:body></w:document>"#,
+            ),
+        ]);
+        let markdown = to_markdown(&bytes, "nested.docx");
+        assert!(markdown.contains("1. outer"), "{markdown}");
+        assert!(markdown.contains("\n   - a. inner"), "{markdown}");
+    }
+
+    // -- ODF / spreadsheet -------------------------------------------------
+
+    #[test]
+    fn a_minimal_ods_package_parses_through_the_odf_walker() {
+        // Routing ODS through calamine rejected valid packages that carry
+        // only `mimetype` and `content.xml`.
+        let bytes = package(&[
+            ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+            (
+                "content.xml",
+                r#"<office:document-content xmlns:office="office" xmlns:table="table" xmlns:text="text"><office:body><office:spreadsheet>
+                <table:table table:name="Metrics">
+                  <table:table-row><table:table-cell><text:p>Kind</text:p></table:table-cell><table:table-cell><text:p>Value</text:p></table:table-cell></table:table-row>
+                  <table:table-row><table:table-cell><text:p>Bolts</text:p></table:table-cell><table:table-cell><text:p>12</text:p></table:table-cell></table:table-row>
+                </table:table>
+                </office:spreadsheet></office:body></office:document-content>"#,
+            ),
+        ]);
+        let document =
+            parse_document_auto(&bytes, Some("min.ods"), &ParseOptions::default()).unwrap();
+        assert_eq!(document.units.len(), 1);
+        assert_eq!(document.units[0].kind, UnitKind::Sheet);
+        assert_eq!(document.units[0].label.as_deref(), Some("Metrics"));
+        let markdown = render::markdown(&document);
+        assert!(markdown.contains("| Kind | Value |"), "{markdown}");
+        assert!(markdown.contains("| Bolts | 12 |"), "{markdown}");
+    }
+
+    #[test]
+    fn odf_span_styles_apply_and_can_switch_emphasis_back_off() {
+        let bytes = package(&[
+            ("mimetype", "application/vnd.oasis.opendocument.text"),
+            (
+                "content.xml",
+                r#"<office:document-content xmlns:office="office" xmlns:text="text" xmlns:style="style" xmlns:fo="fo"><office:automatic-styles>
+                <style:style style:name="P1" style:family="paragraph"><style:text-properties fo:font-weight="bold"/></style:style>
+                <style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="normal"/></style:style>
+                </office:automatic-styles><office:body><office:text>
+                <text:p text:style-name="P1">bold start <text:span text:style-name="T1">plain middle</text:span> bold end</text:p>
+                </office:text></office:body></office:document-content>"#,
+            ),
+        ]);
+        let markdown = to_markdown(&bytes, "styled.odt");
+        assert!(markdown.contains("**bold start**"), "{markdown}");
+        assert!(markdown.contains("plain middle"), "{markdown}");
+        assert!(!markdown.contains("**plain middle**"), "{markdown}");
+    }
+
+    #[test]
+    fn csv_first_row_becomes_the_table_header() {
+        let bytes = b"Kind,Value\nBolts,twelve\nNuts,thirty\n";
+        let markdown = to_markdown(bytes, "data.csv");
+        let lines: Vec<&str> = markdown.lines().collect();
+        assert_eq!(lines[0], "| Kind | Value |");
+        assert_eq!(lines[1], "| --- | --- |");
+    }
+
+    // -- EPUB --------------------------------------------------------------
+
+    #[test]
+    fn epub_table_cells_keep_their_text() {
+        // XHTML cells hold bare text rather than a wrapped `<p>`, and text was
+        // only collected while a paragraph was open — every cell rendered
+        // empty while the table's shape still looked correct.
+        let bytes = package(&[
+            ("mimetype", "application/epub+zip"),
+            (
+                "META-INF/container.xml",
+                r#"<container><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            ),
+            (
+                "book.opf",
+                r#"<package xmlns:dc="dc"><metadata><dc:title>T</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#,
+            ),
+            (
+                "c.xhtml",
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
+                <table><tr><th>Name</th><th>Qty</th></tr><tr><td>Bolts</td><td>12</td></tr></table>
+                <ul><li>outer text<ul><li>inner text</li></ul></li></ul>
+                </body></html>"#,
+            ),
+        ]);
+        let markdown = to_markdown(&bytes, "book.epub");
+        assert!(markdown.contains("| Name | Qty |"), "{markdown}");
+        assert!(markdown.contains("| Bolts | 12 |"), "{markdown}");
+        // Text preceding a nested list stays on the parent item.
+        assert!(markdown.contains("- outer text"), "{markdown}");
+        assert!(markdown.contains("inner text"), "{markdown}");
+    }
+
+    // -- RTF ---------------------------------------------------------------
+
+    #[test]
+    fn rtf_stylesheet_properties_do_not_leak_into_the_body() {
+        // `\outlinelevel`/`\ilvl` inside a `\stylesheet` entry describe that
+        // style, not the next paragraph. Applying them turned ordinary
+        // paragraphs into headings and list items.
+        // Deliberately no `\pard` after the stylesheet: `\pard` resets
+        // paragraph properties and would mask the leak.
+        let bytes = br#"{\rtf1\ansi
+        {\stylesheet{\s1\ilvl0\outlinelevel0 heading 1;}}
+        Ordinary paragraph.\par
+        }"#;
+        let document =
+            parse_document_auto(bytes, Some("styles.rtf"), &ParseOptions::default()).unwrap();
+        assert!(
+            matches!(document.units[0].blocks[0], Block::Paragraph { .. }),
+            "{:?}",
+            document.units[0].blocks[0]
+        );
+        let markdown = render::markdown(&document);
+        assert_eq!(markdown.trim(), "Ordinary paragraph.", "{markdown}");
+    }
+
+    #[test]
+    fn rtf_source_line_breaks_do_not_split_styled_runs() {
+        // CR/LF carry no meaning in an RTF stream. Emitting them put newlines
+        // inside styled runs, producing `**\nbold**` — not emphasis at all.
+        let bytes = b"{\\rtf1\\ansi\n\\pard Plain \\b bold\\b0\n and more.\\par\n}";
+        let markdown = to_markdown(bytes, "wrapped.rtf");
+        assert!(markdown.contains("**bold**"), "{markdown}");
+        assert!(!markdown.contains("**\n"), "{markdown}");
+    }
+
     #[test]
     fn parses_docx_headings_lists_and_tables() {
         let bytes = package(&[
@@ -168,7 +565,7 @@ mod integration_tests {
             </w:body></w:document>"#,
             ),
         ]);
-        let document =
+        let mut document =
             parse_document_auto(&bytes, Some("rich.docx"), &ParseOptions::default()).unwrap();
         let Block::Heading { level, content } = &document.units[0].blocks[0] else {
             panic!()
@@ -194,7 +591,12 @@ mod integration_tests {
         let markdown = render::markdown(&document);
         assert!(markdown.contains("[linked item](https://example.com)"));
         assert!(markdown.contains("[^footnote-2]"));
-        assert!(markdown.contains("asset-"));
+        // An asset with no recorded location yields no link at all — a
+        // `![](asset-1f3c…)` would resolve to nothing.
+        assert!(!markdown.contains("asset-"), "{markdown}");
+        // …and becomes a real link once a caller writes the asset out.
+        document.assets[0].path = Some("images/one.png".to_owned());
+        assert!(render::markdown(&document).contains("(images/one.png)"));
         assert!(markdown.contains("rowspan=\"2\" colspan=\"2\""));
     }
 
@@ -363,7 +765,7 @@ mod integration_tests {
                 </office:text></office:body></office:document-content>"##,
             ),
         ]);
-        let document =
+        let mut document =
             parse_document_auto(&bytes, Some("report.odt"), &ParseOptions::default()).unwrap();
         assert_eq!(document.metadata.format, DocumentFormat::Odt);
         assert_eq!(
@@ -401,7 +803,12 @@ mod integration_tests {
         assert_eq!((cell.row_span, cell.column_span), (2, 2));
         let markdown = render::markdown(&document);
         assert!(markdown.contains("[example](https://example.com)"));
-        assert!(markdown.contains("asset-"));
+        // An asset with no recorded location yields no link at all — a
+        // `![](asset-1f3c…)` would resolve to nothing.
+        assert!(!markdown.contains("asset-"), "{markdown}");
+        // …and becomes a real link once a caller writes the asset out.
+        document.assets[0].path = Some("images/one.png".to_owned());
+        assert!(render::markdown(&document).contains("(images/one.png)"));
     }
 
     #[test]
@@ -494,7 +901,7 @@ mod integration_tests {
                 </body></html>"##,
             ),
         ]);
-        let document =
+        let mut document =
             parse_document_auto(&bytes, Some("book.epub"), &ParseOptions::default()).unwrap();
         assert_eq!(document.metadata.title.as_deref(), Some("Example book"));
         assert_eq!(document.metadata.author.as_deref(), Some("A. Writer"));
@@ -525,8 +932,24 @@ mod integration_tests {
         assert_eq!(cell.row_span, 2);
         let markdown = render::markdown(&document);
         assert!(markdown.contains("**Bold**"));
-        assert!(markdown.contains("[linked](first.xhtml#next)"));
-        assert!(markdown.contains("asset-"));
+        // A cross-chapter href resolves to an anchor in the flattened
+        // document. `first.xhtml#next` names a file that no longer exists
+        // once the spine is merged into one Markdown document.
+        assert!(
+            markdown.contains("[linked](#ops-text-first-xhtml-next)"),
+            "{markdown}"
+        );
+        // Every chapter gets an anchor so a whole-file link lands somewhere.
+        assert!(
+            markdown.contains("<a id=\"ops-text-first-xhtml-\"></a>"),
+            "{markdown}"
+        );
+        // An asset with no recorded location yields no link at all — a
+        // `![](asset-1f3c…)` would resolve to nothing.
+        assert!(!markdown.contains("asset-"), "{markdown}");
+        // …and becomes a real link once a caller writes the asset out.
+        document.assets[0].path = Some("images/one.png".to_owned());
+        assert!(render::markdown(&document).contains("(images/one.png)"));
         assert!(markdown.contains("[^OPS/text/second.xhtml#fn1]"));
         assert!(markdown.contains("x+1"));
         assert!(markdown.contains("> Quoted"));

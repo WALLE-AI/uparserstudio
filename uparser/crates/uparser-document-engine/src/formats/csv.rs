@@ -68,7 +68,10 @@ pub(crate) fn parse(
     };
     let mut document = CanonicalDocument::new(format);
     document.metadata.variant = Some(if delimiter == b'\t' { "tsv" } else { "csv" }.to_owned());
-    let mut unit = DocumentUnit::new(UnitKind::Sheet, 0, Some("Sheet 1".to_owned()));
+    // A delimited-text file has exactly one anonymous table. Naming it
+    // "Sheet 1" would inject a heading the source does not contain, which
+    // shows up as a spurious document title downstream.
+    let mut unit = DocumentUnit::new(UnitKind::Sheet, 0, None);
     unit.blocks.push(Block::Table { table });
     document.units.push(unit);
     Ok(document)
@@ -111,23 +114,25 @@ fn delimiter_score(bytes: &[u8], delimiter: u8) -> (usize, usize) {
     (consistent, median)
 }
 
+/// Whether the first row is a header.
+///
+/// Delimited text carries a header row by overwhelming convention, so the
+/// default is "yes" and the test is for evidence *against* it — a first row
+/// that already contains typed values is data, not labels. The earlier rule
+/// required the second row to be typed as well, which classified an
+/// all-text table as headerless and pushed its label row into the body.
 fn infer_header_rows(rows: &[Vec<String>]) -> usize {
     let Some(first) = rows.first() else { return 0 };
-    let Some(second) = rows.get(1) else { return 0 };
-    let text_headers = first
-        .iter()
-        .filter(|value| infer_value_kind(value) == CellValueKind::Text)
-        .count();
-    let typed_data = second
-        .iter()
-        .filter(|value| {
-            matches!(
-                infer_value_kind(value),
-                CellValueKind::Number | CellValueKind::Boolean
-            )
-        })
-        .count();
-    usize::from(text_headers == first.len() && typed_data > 0)
+    if rows.len() < 2 {
+        return 0;
+    }
+    let looks_like_data = first.iter().any(|value| {
+        matches!(
+            infer_value_kind(value),
+            CellValueKind::Number | CellValueKind::Boolean | CellValueKind::DateTime
+        )
+    });
+    usize::from(!looks_like_data)
 }
 
 fn infer_value_kind(value: &str) -> CellValueKind {

@@ -25,9 +25,9 @@ pub(crate) fn parse(
 
     let mut document = CanonicalDocument::new(DocumentFormat::Epub);
     document.metadata.variant = Some("epub".to_owned());
-    document.metadata.title = publication.title;
-    document.metadata.author = publication.author;
-    document.metadata.language = publication.language;
+    document.metadata.title = publication.title.clone();
+    document.metadata.author = publication.author.clone();
+    document.metadata.language = publication.language.clone();
     if let Some(navigation) = load_navigation(&mut package, &opf_part, &publication, options)? {
         document
             .metadata
@@ -70,6 +70,7 @@ pub(crate) fn parse(
                 filename: part.rsplit('/').next().map(ToOwned::to_owned),
                 byte_length: asset_bytes.len(),
                 sha256,
+                path: None,
                 bytes: options.include_assets.then_some(asset_bytes),
             });
         }
@@ -244,7 +245,11 @@ fn load_navigation(
     let item = publication
         .manifest
         .values()
-        .find(|item| item.properties.split_whitespace().any(|value| value == "nav"))
+        .find(|item| {
+            item.properties
+                .split_whitespace()
+                .any(|value| value == "nav")
+        })
         .or_else(|| {
             publication
                 .toc
@@ -272,7 +277,10 @@ fn load_navigation(
         parse_xhtml_navigation(&xml, &part, options)?
     };
     (!entries.is_empty())
-        .then(|| serde_json::to_string(&entries).map_err(|error| DocumentError::malformed(error.to_string())))
+        .then(|| {
+            serde_json::to_string(&entries)
+                .map_err(|error| DocumentError::malformed(error.to_string()))
+        })
         .transpose()
 }
 
@@ -446,9 +454,11 @@ fn extract_notes(
                         notes.push(Note {
                             id,
                             kind,
-                            blocks: (!content.trim().is_empty())
-                                .then(|| vec![Block::paragraph(content.trim())])
-                                .unwrap_or_default(),
+                            blocks: if content.trim().is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![Block::paragraph(content.trim())]
+                            },
                         });
                     }
                 }
@@ -482,6 +492,8 @@ fn parse_xhtml(
 ) -> Result<DocumentUnit, DocumentError> {
     let mut state = XhtmlState {
         unit: DocumentUnit::new(UnitKind::Chapter, index, None),
+        // A link to a whole chapter file (`ch02.xhtml`, no fragment) needs
+        // something to land on once the spine is flattened.
         paragraph: None,
         lists: Vec::new(),
         table: None,
@@ -547,6 +559,24 @@ fn parse_xhtml(
             _ => {}
         }
     }
+    // Chapter-start anchor, so `href="ch02.xhtml"` (no fragment) resolves in
+    // the flattened document. Attached to the first real block rather than
+    // added as one: an anchor-only block carries no content and would show up
+    // as an empty leading element in every consumer of the block list.
+    let chapter_anchor = Inline::Anchor {
+        id: anchor_id(part, ""),
+    };
+    match state.unit.blocks.first_mut() {
+        Some(Block::Heading { content, .. } | Block::Paragraph { content }) => {
+            content.insert(0, chapter_anchor)
+        }
+        _ => state.unit.blocks.insert(
+            0,
+            Block::Paragraph {
+                content: vec![chapter_anchor],
+            },
+        ),
+    }
     if state.unit.label.is_none() {
         state.unit.label = state.unit.blocks.iter().find_map(|block| match block {
             Block::Heading { content, .. } => Some(inline_text(content)),
@@ -595,21 +625,18 @@ fn xhtml_start(
                 heading: Some((name[1] - b'0').clamp(1, 6)),
                 ..Default::default()
             });
-            push_anchor(event, state);
+            push_anchor(event, part, state);
         }
         b"p" => {
             state.paragraph = Some(Paragraph::default());
-            push_anchor(event, state);
+            push_anchor(event, part, state);
         }
         b"a" => {
             if let (Some(paragraph), Some(href)) =
                 (state.paragraph.as_mut(), attribute(event, b"href"))
             {
-                let target = if let Some(anchor) = href.strip_prefix('#') {
-                    LinkTarget::Anchor(anchor.to_owned())
-                } else {
-                    LinkTarget::External(href.clone())
-                };
+                let target = internal_link_target(&href, part)
+                    .unwrap_or_else(|| LinkTarget::External(href.clone()));
                 paragraph.link = Some(Link {
                     target,
                     content: Vec::new(),
@@ -652,15 +679,24 @@ fn xhtml_start(
                 );
             }
         }
-        b"ul" | b"ol" => state.lists.push(ListBuilder {
-            marker: if name == b"ol" {
-                ListMarker::Decimal
-            } else {
-                ListMarker::Bullet
-            },
-            items: Vec::new(),
-        }),
+        b"ul" | b"ol" => {
+            // `<li>text<ul>…</ul></li>` is the common shape: the item's own
+            // text is still in an unflushed paragraph when the nested list
+            // opens. Flushing first keeps that text on the parent item
+            // instead of migrating it into the nested list.
+            flush_paragraph(state);
+            state.lists.push(ListBuilder {
+                marker: if name == b"ol" {
+                    ListMarker::Decimal
+                } else {
+                    ListMarker::Bullet
+                },
+                items: Vec::new(),
+            });
+        }
         b"li" => {
+            // Close out the previous item before starting a new one.
+            flush_paragraph(state);
             if let Some(list) = state.lists.last_mut() {
                 list.items.push(ListItem { blocks: Vec::new() });
             }
@@ -685,6 +721,13 @@ fn xhtml_start(
                     ..Default::default()
                 });
             }
+            // XHTML cells usually hold bare text (`<td>Bolts</td>`) rather
+            // than a wrapped `<p>`, and text is only collected while a
+            // paragraph is open — without this implicit one, every such cell
+            // rendered empty.
+            if state.paragraph.is_none() {
+                state.paragraph = Some(Paragraph::default());
+            }
         }
         b"strong" | b"b" | b"em" | b"i" | b"u" | b"s" | b"del" | b"code" | b"sup" | b"sub" => {
             state.style_stack.push(state.style.clone());
@@ -699,7 +742,7 @@ fn xhtml_start(
                 _ => {}
             }
         }
-        _ => push_anchor(event, state),
+        _ => push_anchor(event, part, state),
     }
 }
 
@@ -812,6 +855,16 @@ fn xhtml_end(
             }
         }
         b"td" | b"th" => {
+            // Flush the cell's implicit paragraph before the cell is closed,
+            // otherwise its inline content is discarded with it.
+            if let Some(paragraph) = state.paragraph.take()
+                && !paragraph.content.is_empty()
+                && let Some(cell) = state.table.as_mut().and_then(|table| table.cell.as_mut())
+            {
+                cell.blocks.push(Block::Paragraph {
+                    content: paragraph.content,
+                });
+            }
             if let Some(table) = state.table.as_mut()
                 && let (Some(row), Some(cell)) = (table.row.as_mut(), table.cell.take())
             {
@@ -843,6 +896,24 @@ fn xhtml_end(
     Ok(())
 }
 
+/// Emit whatever inline content is currently open as a block, if any.
+fn flush_paragraph(state: &mut XhtmlState) {
+    if let Some(paragraph) = state.paragraph.take()
+        && !paragraph.content.is_empty()
+    {
+        let block = match paragraph.heading {
+            Some(level) => Block::Heading {
+                level,
+                content: paragraph.content,
+            },
+            None => Block::Paragraph {
+                content: paragraph.content,
+            },
+        };
+        append(block, state);
+    }
+}
+
 fn append(block: Block, state: &mut XhtmlState) {
     if let Some(list) = state.lists.last_mut() {
         if list.items.is_empty() {
@@ -866,10 +937,55 @@ fn push_inline(paragraph: &mut Paragraph, inline: Inline) {
     }
 }
 
-fn push_anchor(event: &BytesStart<'_>, state: &mut XhtmlState) {
+fn push_anchor(event: &BytesStart<'_>, part: &str, state: &mut XhtmlState) {
     if let (Some(paragraph), Some(id)) = (state.paragraph.as_mut(), attribute(event, b"id")) {
-        push_inline(paragraph, Inline::Anchor { id });
+        push_inline(
+            paragraph,
+            Inline::Anchor {
+                id: anchor_id(part, &id),
+            },
+        );
     }
+}
+
+/// A document-wide anchor name for `id` within `part`.
+///
+/// Every chapter is a separate XHTML file, so ids are only unique per file —
+/// two chapters may both define `#notes`. Once the spine is flattened into a
+/// single Markdown document those ids collide, and a link written as
+/// `ch02.xhtml#notes` points at a file that no longer exists. Qualifying the
+/// id with its part makes both problems go away.
+fn anchor_id(part: &str, id: &str) -> String {
+    let mut anchor = String::with_capacity(part.len() + id.len() + 1);
+    for character in part.chars().chain(std::iter::once('#')).chain(id.chars()) {
+        if character.is_alphanumeric() {
+            anchor.extend(character.to_lowercase());
+        } else {
+            anchor.push('-');
+        }
+    }
+    anchor
+}
+
+/// Resolve an intra-publication href to an anchor in the flattened document.
+///
+/// Returns `None` for anything that genuinely leaves the publication (an
+/// absolute URL, a `mailto:`), which stays an external link.
+fn internal_link_target(href: &str, part: &str) -> Option<LinkTarget> {
+    if let Some(fragment) = href.strip_prefix('#') {
+        return Some(LinkTarget::Anchor(anchor_id(part, fragment)));
+    }
+    // A scheme means it leaves the publication.
+    if href.contains("://") || href.starts_with("mailto:") || href.starts_with("data:") {
+        return None;
+    }
+    let (target, fragment) = match href.split_once('#') {
+        Some((target, fragment)) => (target, fragment),
+        None => (href, ""),
+    };
+    // Relative to the *linking* part's folder, like any other package target.
+    let resolved = resolve_internal_target(part, target)?;
+    Some(LinkTarget::Anchor(anchor_id(&resolved, fragment)))
 }
 
 fn html_span(event: &BytesStart<'_>, name: &[u8]) -> usize {

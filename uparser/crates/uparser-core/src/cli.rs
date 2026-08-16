@@ -162,6 +162,21 @@ pub enum Command {
         /// introduces by default.
         #[arg(long)]
         no_assets: bool,
+        /// Drop footnotes, endnotes and speaker notes (`native` structured
+        /// formats only). They are extracted by default.
+        #[arg(long)]
+        no_notes: bool,
+        /// Include page headers and footers in the body (`native` structured
+        /// formats only). Excluded by default because they repeat on every
+        /// page and pollute extracted text.
+        #[arg(long)]
+        headers_footers: bool,
+        /// Reject an input larger than this many MiB before parsing it
+        /// (`native` structured formats only). Guards against a hostile or
+        /// accidental oversized document; defaults to the engine's own 256
+        /// MiB budget.
+        #[arg(long)]
+        max_input_mib: Option<u64>,
     },
     /// Run the Profiler only (no protocol adapter, no full parse) and
     /// print the resulting DocumentProfile as JSON. Per ARCHITECTURE.md
@@ -231,6 +246,9 @@ pub fn run(cli: Cli) -> i32 {
             pages,
             assets_dir,
             no_assets,
+            no_notes,
+            headers_footers,
+            max_input_mib,
         } => {
             let wanted_pages = match pages.as_deref().map(crate::page_range::parse_page_range) {
                 Some(Ok(pages)) => Some(pages),
@@ -293,6 +311,9 @@ pub fn run(cli: Cli) -> i32 {
                 wanted_pages,
                 assets_dir,
                 no_assets,
+                no_notes,
+                headers_footers,
+                max_input_mib,
             )
         }
         Command::Classify { path } => run_classify(path),
@@ -318,6 +339,9 @@ fn run_parse(
     wanted_pages: Option<Vec<u32>>,
     assets_dir: Option<String>,
     no_assets: bool,
+    no_notes: bool,
+    headers_footers: bool,
+    max_input_mib: Option<u64>,
 ) -> i32 {
     if !Path::new(&path).exists() {
         return emit_error(
@@ -426,7 +450,19 @@ fn run_parse(
         // scheduler entirely (see `run_parse_native`'s own doc comment),
         // and it has no network round-trip to amortize the way every
         // other protocol does — the main cost caching exists to avoid.
-        return run_parse_native(path, format, file_bytes, protocol == "auto");
+        return run_parse_native(
+            path,
+            format,
+            file_bytes,
+            protocol == "auto",
+            NativeOptions {
+                assets_dir: assets_dir.clone(),
+                no_assets,
+                include_notes: !no_notes,
+                include_headers_footers: headers_footers,
+                max_input_mib,
+            },
+        );
     }
 
     let fingerprint = ParamFingerprint {
@@ -782,6 +818,7 @@ fn run_parse_native(
     format: OutputFormat,
     file_bytes: Vec<u8>,
     routed_by_auto: bool,
+    options: NativeOptions,
 ) -> i32 {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -799,34 +836,19 @@ fn run_parse_native(
 
     let adapter = crate::adapters::native::NativeAdapter;
 
-    // Markdown output takes liteparse's OWN native markdown (full pipeline
-    // quality — headings/paragraphs/tables), bypassing the block-based
-    // `render::to_markdown` entirely. JSON keeps the coherent-line block IR
-    // from `parse_document`. Both are single parses; neither touches any
-    // other protocol's flow (this branch is `native`-only).
-    if let OutputFormat::Markdown = format {
-        return match runtime.block_on(adapter.native_markdown(&path, &file_bytes)) {
-            Ok(md) => {
-                println!("{md}");
-                EXIT_SUCCESS
-            }
-            Err(e) => emit_error(
-                format,
-                EXIT_INTERNAL,
-                "native_parse_failed",
-                &e.message,
-                "native",
-                e.stage.as_deref(),
-            ),
-        };
-    }
-
-    let mut result = match runtime.block_on(adapter.parse_document(&path, &file_bytes)) {
-        Ok(r) => r,
+    // One parse serves every output format. Previously Markdown, JSON and
+    // `document-json` each re-parsed the source, so asking for
+    // `document-json` read and parsed the same bytes twice.
+    let parsed = match runtime.block_on(adapter.parse_native(
+        &path,
+        &file_bytes,
+        &options.to_engine_options(),
+    )) {
+        Ok(parsed) => parsed,
         Err(e) => {
             return emit_error(
                 format,
-                EXIT_INTERNAL,
+                native_failure_exit_code(e.stage.as_deref()),
                 "native_parse_failed",
                 &e.message,
                 "native",
@@ -834,35 +856,179 @@ fn run_parse_native(
             );
         }
     };
-    if routed_by_auto {
-        result.routed_by = RoutedBy::Auto;
-    }
 
-    if let OutputFormat::DocumentJson = format {
-        return match runtime.block_on(adapter.native_document_json(&path, &file_bytes)) {
-            Ok(json) => {
-                println!("{json}");
+    match parsed {
+        crate::adapters::native::NativeParse::Pdf(mut result) => {
+            if routed_by_auto {
+                result.routed_by = RoutedBy::Auto;
+            }
+            if let OutputFormat::DocumentJson = format {
+                return emit_error(
+                    format,
+                    EXIT_USAGE,
+                    "unsupported_output_format",
+                    "document-json is available for structured native documents, not PDF",
+                    "native",
+                    Some("native_document"),
+                );
+            }
+            if let OutputFormat::Markdown = format {
+                // The PDF engine's own Markdown pipeline (headings, paragraph
+                // grouping, three-strategy tables) is richer than what the
+                // block IR can reconstruct, so Markdown comes from there.
+                return match runtime.block_on(adapter.native_markdown(&path, &file_bytes)) {
+                    Ok(md) => {
+                        emit_line(&md);
+                        EXIT_SUCCESS
+                    }
+                    Err(e) => emit_error(
+                        format,
+                        EXIT_INTERNAL,
+                        "native_parse_failed",
+                        &e.message,
+                        "native",
+                        e.stage.as_deref(),
+                    ),
+                };
+            }
+            let has_errors = !result.page_errors.is_empty();
+            emit_line(&render::to_json(&result));
+            if has_errors {
+                EXIT_PARTIAL
+            } else {
                 EXIT_SUCCESS
             }
-            Err(e) => emit_error(
-                format,
-                EXIT_USAGE,
-                "unsupported_output_format",
-                &e.message,
-                "native",
-                e.stage.as_deref(),
-            ),
+        }
+        crate::adapters::native::NativeParse::Structured(mut parsed) => {
+            // Embedded images are written before anything is rendered, so
+            // both the Markdown `![](…)` links and the JSON `asset_path`s
+            // point at files that exist.
+            if let Some(dir) = options.effective_assets_dir(&path)
+                && let Err(e) = crate::assets::write_document_assets(&mut parsed.document, &dir)
+            {
+                eprintln!("warning: failed to write image assets: {e}");
+            }
+
+            match format {
+                OutputFormat::Markdown => {
+                    emit_line(&uparser_document_engine::render::markdown(&parsed.document));
+                    EXIT_SUCCESS
+                }
+                OutputFormat::DocumentJson => {
+                    match uparser_document_engine::render::document_json(&parsed.document) {
+                        Ok(json) => {
+                            emit_line(&json);
+                            EXIT_SUCCESS
+                        }
+                        Err(e) => emit_error(
+                            format,
+                            EXIT_INTERNAL,
+                            "serialization_failed",
+                            &e.to_string(),
+                            "native",
+                            Some("native_document"),
+                        ),
+                    }
+                }
+                OutputFormat::Json => {
+                    let mut result = crate::adapters::native::structured_to_parse_result(
+                        &parsed,
+                        &path,
+                        &file_bytes,
+                    );
+                    if routed_by_auto {
+                        result.routed_by = RoutedBy::Auto;
+                    }
+                    if let Some(dir) = options.effective_assets_dir(&path)
+                        && let Err(e) = crate::assets::write_block_assets(&mut result, &dir)
+                    {
+                        eprintln!("warning: failed to write image assets: {e}");
+                    }
+                    emit_line(&render::to_json(&result));
+                    EXIT_SUCCESS
+                }
+            }
+        }
+    }
+}
+
+/// Map a structured-document failure onto the semantic exit code an agent
+/// should branch on.
+///
+/// A format we cannot parse is the caller's choice of input (usage); an
+/// encrypted file or one over its resource budget is an environment/input
+/// condition to fix and retry; only a genuinely unexpected failure is
+/// "internal", which is the code that tells an agent to retry blindly.
+#[cfg(feature = "native")]
+fn native_failure_exit_code(stage: Option<&str>) -> i32 {
+    match stage {
+        // Something about the input itself: retrying changes nothing.
+        Some(
+            "native_document.unsupported_format"
+            | "native_document.malformed"
+            | "native_document.missing_part",
+        ) => EXIT_USAGE,
+        // Fixable in the environment (a password, a bigger budget, a readable
+        // file), so retrying after fixing it is the right move.
+        Some(
+            "native_document.encrypted" | "native_document.resource_limit" | "native_document.io",
+        ) => EXIT_DEPENDENCY,
+        _ => EXIT_INTERNAL,
+    }
+}
+
+/// Native-only knobs, kept together so the parse entry point takes one value
+/// rather than five positional booleans.
+pub(crate) struct NativeOptions {
+    pub assets_dir: Option<String>,
+    pub no_assets: bool,
+    pub include_notes: bool,
+    pub include_headers_footers: bool,
+    pub max_input_mib: Option<u64>,
+}
+
+impl NativeOptions {
+    #[cfg(feature = "native")]
+    fn to_engine_options(&self) -> uparser_document_engine::ParseOptions {
+        let mut options = uparser_document_engine::ParseOptions {
+            include_notes: self.include_notes,
+            include_headers_footers: self.include_headers_footers,
+            // Assets are always retained in memory when we intend to write
+            // them; `--no-assets` is what turns the retention off.
+            include_assets: !self.no_assets,
+            ..uparser_document_engine::ParseOptions::default()
         };
+        if let Some(mib) = self.max_input_mib {
+            options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
+        }
+        options
     }
 
-    let has_errors = !result.page_errors.is_empty();
-    println!("{}", render::to_json(&result));
-
-    if has_errors {
-        EXIT_PARTIAL
-    } else {
-        EXIT_SUCCESS
+    #[cfg(feature = "native")]
+    fn effective_assets_dir(&self, source_path: &str) -> Option<std::path::PathBuf> {
+        (!self.no_assets).then(|| {
+            self.assets_dir
+                .clone()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| crate::assets::default_assets_dir(source_path))
+        })
     }
+}
+
+/// Print a result line to stdout, treating a closed pipe as a normal end of
+/// output rather than a panic.
+///
+/// `println!` panics when stdout is gone, which is exactly what happens under
+/// `uparser … | head` — an agent driving this as a subprocess would see a
+/// Rust panic trace on stderr for an entirely ordinary situation.
+fn emit_line(text: &str) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    if writeln!(handle, "{text}").is_err() {
+        return;
+    }
+    let _ = handle.flush();
 }
 
 #[cfg(not(feature = "native"))]
@@ -871,6 +1037,7 @@ fn run_parse_native(
     format: OutputFormat,
     _file_bytes: Vec<u8>,
     _routed_by_auto: bool,
+    _options: NativeOptions,
 ) -> i32 {
     emit_error(
         format,

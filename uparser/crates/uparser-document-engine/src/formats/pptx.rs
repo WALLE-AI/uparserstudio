@@ -1,5 +1,6 @@
 use crate::ooxml::{
-    Relationships, attribute, load_image_relationships, load_relationships, resolve_internal_target,
+    Relationships, attribute, load_image_relationships, load_relationships,
+    load_root_relationships, main_part, relationship_id, resolve_internal_target,
 };
 use crate::package::Package;
 use crate::{
@@ -10,6 +11,10 @@ use crate::{
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use std::collections::HashMap;
+
+/// Conventional presentation-part path, used only when the package declares
+/// no root `officeDocument` relationship.
+const PRESENTATION_PART: &str = "ppt/presentation.xml";
 
 pub(crate) fn parse(
     bytes: &[u8],
@@ -86,21 +91,26 @@ fn ordered_slide_parts(
     options: &ParseOptions,
     warnings: &mut Vec<ParseWarning>,
 ) -> Result<Vec<String>, DocumentError> {
-    if let Some(xml) = package.read("ppt/presentation.xml")? {
-        let relationships = load_relationships(package, "ppt/presentation.xml", options)?;
-        let ids = parse_slide_relationship_ids(&xml, options)?;
+    // The presentation part is named by the root `officeDocument`
+    // relationship; `ppt/presentation.xml` is only the convention.
+    let root_relationships = load_root_relationships(package, options)?;
+    let presentation_part =
+        main_part(&root_relationships).unwrap_or_else(|| PRESENTATION_PART.to_owned());
+
+    if let Some(xml) = package.read(&presentation_part)? {
+        let relationships = load_relationships(package, &presentation_part, options)?;
+        let ids = parse_slide_relationship_ids(&xml, &presentation_part, options)?;
         let mut parts = Vec::new();
         for id in ids {
             let Some(relationship) = relationships.get(&id) else {
                 warnings.push(ParseWarning {
                     code: WarningCode::BrokenRelationship,
-                    part: Some("ppt/presentation.xml".to_owned()),
+                    part: Some(presentation_part.clone()),
                     message: format!("slide relationship {id} is missing"),
                 });
                 continue;
             };
-            if let Some(target) =
-                resolve_internal_target("ppt/presentation.xml", &relationship.target)
+            if let Some(target) = resolve_internal_target(&presentation_part, &relationship.target)
             {
                 parts.push(target);
             }
@@ -108,6 +118,13 @@ fn ordered_slide_parts(
         if !parts.is_empty() {
             return Ok(parts);
         }
+        warnings.push(ParseWarning {
+            code: WarningCode::BrokenRelationship,
+            part: Some(presentation_part),
+            message: "no slide could be resolved through presentation relationships; \
+                      falling back to slide-part filename order"
+                .to_owned(),
+        });
     }
 
     let mut names = package
@@ -121,6 +138,7 @@ fn ordered_slide_parts(
 
 fn parse_slide_relationship_ids(
     xml: &[u8],
+    part: &str,
     options: &ParseOptions,
 ) -> Result<Vec<String>, DocumentError> {
     let mut reader = Reader::from_reader(xml);
@@ -128,17 +146,20 @@ fn parse_slide_relationship_ids(
     let mut nodes = 0usize;
     loop {
         nodes += 1;
-        enforce_node_limit(nodes, "ppt/presentation.xml", options)?;
+        enforce_node_limit(nodes, part, options)?;
         match reader.read_event() {
             Ok(Event::Start(event) | Event::Empty(event))
                 if event.local_name().as_ref() == b"sldId" =>
             {
-                if let Some(id) = attribute(&event, b"id") {
+                // `<p:sldId id="256" r:id="rId4"/>` carries two `id`-named
+                // attributes; only the namespace-prefixed one is the
+                // relationship reference.
+                if let Some(id) = relationship_id(&event) {
                     ids.push(id);
                 }
             }
             Ok(Event::Eof) => break,
-            Err(error) => return Err(malformed_part("ppt/presentation.xml", error)),
+            Err(error) => return Err(malformed_part(part, error)),
             _ => {}
         }
     }
@@ -207,26 +228,33 @@ fn parse_slide_xml(
     let mut paragraph: Option<Paragraph> = None;
     let mut in_text = false;
     let mut nodes = 0usize;
+    let mut depth = 0usize;
     loop {
         nodes += 1;
         enforce_node_limit(nodes, part, options)?;
         match reader.read_event() {
-            Ok(Event::Start(event)) => match event.local_name().as_ref() {
-                b"sp" => shape = Some(ShapeState::default()),
-                b"pic" => picture = Some(PictureState::default()),
-                b"tbl" => table = Some(RawTable::default()),
-                b"tr" if table.is_some() => table.as_mut().unwrap().row = Vec::new(),
-                b"tc" if table.is_some() => {
-                    table.as_mut().unwrap().cell = Some(raw_cell(&event));
+            Ok(Event::Start(event)) => {
+                depth += 1;
+                enforce_depth_limit(depth, part, options)?;
+                match event.local_name().as_ref() {
+                    b"sp" => shape = Some(ShapeState::default()),
+                    b"pic" => picture = Some(PictureState::default()),
+                    b"tbl" => table = Some(RawTable::default()),
+                    b"tr" if table.is_some() => table.as_mut().unwrap().row = Vec::new(),
+                    b"tc" if table.is_some() => {
+                        table.as_mut().unwrap().cell = Some(raw_cell(&event));
+                    }
+                    b"p" => paragraph = Some(Paragraph::default()),
+                    b"t" => in_text = true,
+                    b"pPr" => update_paragraph_properties(&event, &mut paragraph),
+                    b"ph" => mark_title(&event, &mut shape),
+                    b"cNvPr" => update_picture_alt(&event, &mut picture),
+                    b"blip" => {
+                        update_picture_asset(&event, image_ids, &mut picture, warnings, part)
+                    }
+                    _ => {}
                 }
-                b"p" => paragraph = Some(Paragraph::default()),
-                b"t" => in_text = true,
-                b"pPr" => update_paragraph_properties(&event, &mut paragraph),
-                b"ph" => mark_title(&event, &mut shape),
-                b"cNvPr" => update_picture_alt(&event, &mut picture),
-                b"blip" => update_picture_asset(&event, image_ids, &mut picture, warnings, part),
-                _ => {}
-            },
+            }
             Ok(Event::Empty(event)) => match event.local_name().as_ref() {
                 b"ph" => mark_title(&event, &mut shape),
                 b"pPr" => update_paragraph_properties(&event, &mut paragraph),
@@ -252,60 +280,92 @@ fn parse_slide_xml(
                     paragraph.text.push_str(&value);
                 }
             }
-            Ok(Event::End(event)) => match event.local_name().as_ref() {
-                b"t" => in_text = false,
-                b"p" => {
-                    if let Some(paragraph) = paragraph.take()
-                        && !paragraph.text.trim().is_empty()
-                    {
-                        if let Some(cell) = table.as_mut().and_then(|table| table.cell.as_mut()) {
-                            cell.blocks.push(Block::paragraph(paragraph.text));
-                        } else if let Some(shape) = shape.as_mut() {
-                            shape.paragraphs.push(paragraph);
+            Ok(Event::End(event)) => {
+                depth = depth.saturating_sub(1);
+                match event.local_name().as_ref() {
+                    b"t" => in_text = false,
+                    b"p" => {
+                        if let Some(paragraph) = paragraph.take()
+                            && !paragraph.text.trim().is_empty()
+                        {
+                            if let Some(cell) = table.as_mut().and_then(|table| table.cell.as_mut())
+                            {
+                                cell.blocks.push(Block::paragraph(paragraph.text));
+                            } else if let Some(shape) = shape.as_mut() {
+                                shape.paragraphs.push(paragraph);
+                            }
                         }
                     }
-                }
-                b"tc" => {
-                    if let Some(table) = table.as_mut()
-                        && let Some(cell) = table.cell.take()
-                    {
-                        table.row.push(cell);
+                    b"tc" => {
+                        if let Some(table) = table.as_mut()
+                            && let Some(cell) = table.cell.take()
+                        {
+                            table.row.push(cell);
+                        }
                     }
-                }
-                b"tr" => {
-                    if let Some(table) = table.as_mut() {
-                        table.rows.push(std::mem::take(&mut table.row));
+                    b"tr" => {
+                        if let Some(table) = table.as_mut() {
+                            table.rows.push(std::mem::take(&mut table.row));
+                        }
                     }
-                }
-                b"tbl" => {
-                    if let Some(table) = table.take() {
-                        output.push(build_table(table, part, warnings));
+                    b"tbl" => {
+                        if let Some(table) = table.take() {
+                            output.push(build_table(table, part, warnings));
+                        }
                     }
-                }
-                b"sp" => {
-                    if let Some(shape) = shape.take() {
-                        append_shape(&mut output, shape);
+                    b"sp" => {
+                        if let Some(shape) = shape.take() {
+                            append_shape(&mut output, shape);
+                        }
                     }
-                }
-                b"pic" => {
-                    if let Some(picture) = picture.take()
-                        && picture.asset_id.is_some()
-                    {
-                        output.push(Block::Figure {
-                            asset_id: picture.asset_id,
-                            alt: picture.alt,
-                            caption: Vec::new(),
-                        });
+                    b"pic" => {
+                        if let Some(picture) = picture.take()
+                            && picture.asset_id.is_some()
+                        {
+                            output.push(Block::Figure {
+                                asset_id: picture.asset_id,
+                                alt: picture.alt,
+                                caption: Vec::new(),
+                            });
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Ok(Event::Eof) => break,
-            Err(error) => return Err(malformed_part(part, error)),
+            Err(error) => {
+                // Same recovery policy as DOCX: a slide that already produced
+                // content keeps it; a slide that produced nothing is a real
+                // parse failure.
+                if output.is_empty() {
+                    return Err(malformed_part(part, error));
+                }
+                warnings.push(ParseWarning {
+                    code: WarningCode::TruncatedContent,
+                    part: Some(part.to_owned()),
+                    message: format!("slide truncated at a malformed node: {error}"),
+                });
+                break;
+            }
             _ => {}
         }
     }
     Ok(output)
+}
+
+fn enforce_depth_limit(
+    depth: usize,
+    part: &str,
+    options: &ParseOptions,
+) -> Result<(), DocumentError> {
+    if depth > options.limits.max_xml_depth {
+        Err(DocumentError::ResourceLimit {
+            limit: "max_xml_depth",
+            detail: format!("{part} nests elements {depth} deep"),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn raw_cell(event: &BytesStart<'_>) -> RawCell {
@@ -358,6 +418,20 @@ fn build_table(table: RawTable, part: &str, warnings: &mut Vec<ParseWarning>) ->
             }
             let row_span = raw.row_span.min(rows.saturating_sub(row_index)).max(1);
             let column_span = raw.column_span.min(columns.saturating_sub(column)).max(1);
+            // A span wider than the grid is bounded here rather than allowed
+            // to drive allocation, but it is still a source defect worth
+            // surfacing — silently clamping hides a malformed or hostile deck.
+            if row_span != raw.row_span || column_span != raw.column_span {
+                warnings.push(ParseWarning {
+                    code: WarningCode::InvalidSpanClamped,
+                    part: Some(part.to_owned()),
+                    message: format!(
+                        "table cell at row {row_index}, column {column} declares a \
+                         {}x{} span that exceeds the {rows}x{columns} grid and was clamped",
+                        raw.row_span, raw.column_span
+                    ),
+                });
+            }
             grid[row_index][column] = Some(CellSlot::Origin(Cell {
                 row_span,
                 column_span,

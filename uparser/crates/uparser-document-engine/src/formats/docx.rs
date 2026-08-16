@@ -1,4 +1,8 @@
-use crate::ooxml::{Relationships, attribute, load_image_relationships, load_relationships};
+use crate::ooxml::{
+    REL_ENDNOTES, REL_FOOTER, REL_FOOTNOTES, REL_HEADER, REL_NUMBERING, REL_STYLES,
+    ROOT_RELATIONSHIPS_PART, Relationships, attribute, load_image_relationships,
+    load_relationships, load_root_relationships, main_part, related_part,
+};
 use crate::package::Package;
 use crate::{
     AssetId, Block, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentError,
@@ -16,24 +20,55 @@ pub(crate) fn parse(
     options: &ParseOptions,
 ) -> Result<CanonicalDocument, DocumentError> {
     let mut package = Package::open(bytes, &options.limits)?;
-    let xml = package.read_required(DOCUMENT_PART)?;
-    let relationships = load_relationships(&mut package, DOCUMENT_PART, options)?;
-    let styles = package
-        .read("word/styles.xml")?
-        .map(|xml| parse_styles(&xml, options))
-        .transpose()?
-        .unwrap_or_default();
-    let numbering = package
-        .read("word/numbering.xml")?
-        .map(|xml| parse_numbering(&xml, options))
-        .transpose()?
-        .unwrap_or_default();
-
     let mut document = CanonicalDocument::new(DocumentFormat::Docx);
     document.metadata.variant = Some("docx".to_owned());
+
+    // The main part is whatever the package's root `officeDocument`
+    // relationship points at. `word/document.xml` is only a convention; real
+    // producers are free to place it elsewhere, and packages that do were
+    // previously rejected outright.
+    let root_relationships = load_root_relationships(&mut package, options)?;
+    let document_part = match main_part(&root_relationships) {
+        Some(part) => part,
+        None => {
+            document.warnings.push(ParseWarning {
+                code: WarningCode::BrokenRelationship,
+                part: Some(ROOT_RELATIONSHIPS_PART.to_owned()),
+                message: "package declares no officeDocument relationship; \
+                          falling back to the conventional main-part path"
+                    .to_owned(),
+            });
+            DOCUMENT_PART.to_owned()
+        }
+    };
+    let xml = package.read_required(&document_part)?;
+    let relationships = load_relationships(&mut package, &document_part, options)?;
+
+    let styles_part = related_part(&document_part, &relationships, REL_STYLES)
+        .unwrap_or_else(|| sibling_part(&document_part, "styles.xml"));
+    let numbering_part = related_part(&document_part, &relationships, REL_NUMBERING)
+        .unwrap_or_else(|| sibling_part(&document_part, "numbering.xml"));
+
+    // styles/numbering are optional parts: a corrupt one degrades formatting
+    // but must not fail the document (recovery policy rule 2).
+    let styles = optional_part(
+        &mut package,
+        &styles_part,
+        options,
+        &mut document.warnings,
+        parse_styles,
+    )?;
+    let numbering = optional_part(
+        &mut package,
+        &numbering_part,
+        options,
+        &mut document.warnings,
+        parse_numbering,
+    )?;
+
     let image_ids = load_image_relationships(
         &mut package,
-        DOCUMENT_PART,
+        &document_part,
         &relationships,
         options,
         &mut document.assets,
@@ -46,28 +81,158 @@ pub(crate) fn parse(
         image_ids: &image_ids,
     };
     let mut unit = DocumentUnit::new(UnitKind::Flow, 0, None);
+
+    // Running headers/footers live in their own parts, reached through the
+    // main part's relationships. They repeat on every page, so they stay out
+    // of the body unless the caller asks: a header emitted once per page
+    // would otherwise dominate the extracted text.
+    let (headers, footers) = if options.include_headers_footers {
+        collect_headers_and_footers(
+            &mut package,
+            &document_part,
+            &relationships,
+            options,
+            &context,
+            &mut document.warnings,
+        )?
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    unit.blocks.extend(headers);
     parse_document_xml(
         &xml,
+        &document_part,
         &mut unit.blocks,
         &mut document.warnings,
         options,
         &context,
     )?;
+    unit.blocks.extend(footers);
     document.units.push(unit);
 
     if options.include_notes {
-        for (part, kind, prefix) in [
-            ("word/footnotes.xml", NoteKind::Footnote, "footnote"),
-            ("word/endnotes.xml", NoteKind::Endnote, "endnote"),
+        for (rel, fallback, kind, prefix) in [
+            (
+                REL_FOOTNOTES,
+                "footnotes.xml",
+                NoteKind::Footnote,
+                "footnote",
+            ),
+            (REL_ENDNOTES, "endnotes.xml", NoteKind::Endnote, "endnote"),
         ] {
-            if let Some(xml) = package.read(part)? {
-                document
-                    .notes
-                    .extend(parse_notes(&xml, part, kind, prefix, options)?);
+            let part = related_part(&document_part, &relationships, rel)
+                .unwrap_or_else(|| sibling_part(&document_part, fallback));
+            let Some(xml) = package.read(&part)? else {
+                continue;
+            };
+            // Notes are optional content: a broken notes part loses the notes,
+            // not the document.
+            match parse_notes(&xml, &part, kind, prefix, options) {
+                Ok(notes) => document.notes.extend(notes),
+                Err(error @ DocumentError::ResourceLimit { .. }) => return Err(error),
+                Err(error) => document.warnings.push(ParseWarning {
+                    code: WarningCode::OptionalPartSkipped,
+                    part: Some(part),
+                    message: format!("notes part skipped: {error}"),
+                }),
             }
         }
     }
     Ok(document)
+}
+
+/// Parse every header and footer part related to the main document.
+///
+/// Returns them separately so the caller can place headers before the body
+/// and footers after it, which is the only ordering that reads sensibly once
+/// pagination is gone.
+fn collect_headers_and_footers(
+    package: &mut Package<'_>,
+    document_part: &str,
+    relationships: &Relationships,
+    options: &ParseOptions,
+    context: &DocxContext<'_>,
+    warnings: &mut Vec<ParseWarning>,
+) -> Result<(Vec<Block>, Vec<Block>), DocumentError> {
+    let mut headers = Vec::new();
+    let mut footers = Vec::new();
+    // Relationship ids are sorted so repeated runs place the parts in a
+    // stable order; the package itself imposes none.
+    let mut related: Vec<_> = relationships.iter().collect();
+    related.sort_by_key(|(id, _)| *id);
+
+    for (id, relationship) in related {
+        if relationship.external {
+            continue;
+        }
+        let target = if relationship.kind.ends_with(REL_HEADER) {
+            &mut headers
+        } else if relationship.kind.ends_with(REL_FOOTER) {
+            &mut footers
+        } else {
+            continue;
+        };
+        let Some(part) = crate::ooxml::resolve_internal_target(document_part, &relationship.target)
+        else {
+            warnings.push(ParseWarning {
+                code: WarningCode::BrokenRelationship,
+                part: Some(document_part.to_owned()),
+                message: format!("header/footer relationship {id} escapes the package"),
+            });
+            continue;
+        };
+        let Some(xml) = package.read(&part)? else {
+            continue;
+        };
+        // A broken header is not worth failing the document over.
+        let mut blocks = Vec::new();
+        match parse_document_xml(&xml, &part, &mut blocks, warnings, options, context) {
+            Ok(()) => target.extend(blocks),
+            Err(error @ DocumentError::ResourceLimit { .. }) => return Err(error),
+            Err(error) => warnings.push(ParseWarning {
+                code: WarningCode::OptionalPartSkipped,
+                part: Some(part),
+                message: format!("header/footer part skipped: {error}"),
+            }),
+        }
+    }
+    Ok((headers, footers))
+}
+
+/// A part next to `reference` in the same package folder. Used only as a
+/// fallback when the corresponding relationship is absent.
+fn sibling_part(reference: &str, filename: &str) -> String {
+    match reference.rsplit_once('/') {
+        Some((directory, _)) => format!("{directory}/{filename}"),
+        None => filename.to_owned(),
+    }
+}
+
+/// Read and parse an optional part, downgrading a parse failure to a warning.
+/// `ResourceLimit` is never downgraded — it is always fatal.
+fn optional_part<T: Default>(
+    package: &mut Package<'_>,
+    part: &str,
+    options: &ParseOptions,
+    warnings: &mut Vec<ParseWarning>,
+    parse: fn(&[u8], &ParseOptions) -> Result<T, DocumentError>,
+) -> Result<T, DocumentError> {
+    let Some(xml) = package.read(part)? else {
+        return Ok(T::default());
+    };
+    match parse(&xml, options) {
+        Ok(value) => Ok(value),
+        Err(error @ DocumentError::ResourceLimit { .. }) => Err(error),
+        Err(error) => {
+            warnings.push(ParseWarning {
+                code: WarningCode::OptionalPartSkipped,
+                part: Some(part.to_owned()),
+                message: format!("optional part skipped: {error}"),
+            });
+            Ok(T::default())
+        }
+    }
 }
 
 struct DocxContext<'a> {
@@ -82,6 +247,11 @@ struct StyleDef {
     name: Option<String>,
     based_on: Option<String>,
     outline_level: Option<u8>,
+    /// Run properties the style itself carries. Word expresses most emphasis
+    /// through styles rather than direct `<w:b/>` formatting, so a parser that
+    /// only reads direct properties loses it entirely.
+    run_style: Style,
+    is_paragraph_style: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +295,7 @@ struct HyperlinkBuilder {
 
 fn parse_document_xml(
     xml: &[u8],
+    part: &str,
     output: &mut Vec<Block>,
     warnings: &mut Vec<ParseWarning>,
     options: &ParseOptions,
@@ -138,58 +309,80 @@ fn parse_document_xml(
     let mut hyperlink: Option<HyperlinkBuilder> = None;
     let mut table: Option<TableBuilder> = None;
     let mut nodes = 0usize;
+    let mut depth = 0usize;
+    let mut counters = ListCounters::default();
     loop {
         nodes += 1;
-        enforce_node_limit(nodes, DOCUMENT_PART, options)?;
+        enforce_node_limit(nodes, part, options)?;
         match reader.read_event() {
-            Ok(Event::Start(event)) => match event.local_name().as_ref() {
-                b"p" => paragraph = Some(Paragraph::default()),
-                b"r" => run_style = Style::default(),
-                b"t" | b"instrText" => in_text = true,
-                b"hyperlink" => {
-                    hyperlink = Some(HyperlinkBuilder {
-                        target: hyperlink_target(&event, context.relationships, warnings),
-                        content: Vec::new(),
-                    });
-                }
-                b"pStyle" => set_paragraph_style(&event, &mut paragraph),
-                b"numPr" => set_numbering_present(&mut paragraph),
-                b"numId" => set_number_id(&event, &mut paragraph),
-                b"ilvl" => set_number_level(&event, &mut paragraph),
-                b"tbl" => {
-                    if let Some(table) = table.as_mut() {
-                        table.depth += 1;
-                        warnings.push(ParseWarning {
-                            code: WarningCode::UnsupportedFeature,
-                            part: Some(DOCUMENT_PART.to_owned()),
-                            message: "nested DOCX table is flattened into its containing cell"
-                                .to_owned(),
-                        });
-                    } else {
-                        table = Some(TableBuilder {
-                            depth: 1,
-                            ..Default::default()
-                        });
+            Ok(Event::Start(event)) => {
+                depth += 1;
+                enforce_depth_limit(depth, part, options)?;
+                match event.local_name().as_ref() {
+                    b"p" => paragraph = Some(Paragraph::default()),
+                    // A run starts from its paragraph style's run properties;
+                    // `<w:rStyle>` and direct properties then layer on top.
+                    b"r" => {
+                        run_style = paragraph
+                            .as_ref()
+                            .and_then(|paragraph| paragraph.style.as_deref())
+                            .map(|id| resolved_run_style(id, context.styles))
+                            .unwrap_or_default();
                     }
-                }
-                b"tr" => {
-                    if table.as_ref().is_some_and(|table| table.depth == 1) {
-                        table.as_mut().unwrap().row = Some(RawRow::default());
+                    b"rStyle" => {
+                        if let Some(id) = attribute(&event, b"val") {
+                            merge_run_style(
+                                &mut run_style,
+                                &resolved_run_style(&id, context.styles),
+                            );
+                        }
                     }
-                }
-                b"tc" => {
-                    if table.as_ref().is_some_and(|table| table.depth == 1) {
-                        table.as_mut().unwrap().cell = Some(RawCell {
-                            column_span: 1,
-                            ..Default::default()
+                    b"t" | b"instrText" => in_text = true,
+                    b"hyperlink" => {
+                        hyperlink = Some(HyperlinkBuilder {
+                            target: hyperlink_target(&event, context.relationships, warnings),
+                            content: Vec::new(),
                         });
                     }
+                    b"pStyle" => set_paragraph_style(&event, &mut paragraph),
+                    b"numPr" => set_numbering_present(&mut paragraph),
+                    b"numId" => set_number_id(&event, &mut paragraph),
+                    b"ilvl" => set_number_level(&event, &mut paragraph),
+                    b"tbl" => {
+                        if let Some(table) = table.as_mut() {
+                            table.depth += 1;
+                            warnings.push(ParseWarning {
+                                code: WarningCode::UnsupportedFeature,
+                                part: Some(part.to_owned()),
+                                message: "nested DOCX table is flattened into its containing cell"
+                                    .to_owned(),
+                            });
+                        } else {
+                            table = Some(TableBuilder {
+                                depth: 1,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    b"tr" => {
+                        if table.as_ref().is_some_and(|table| table.depth == 1) {
+                            table.as_mut().unwrap().row = Some(RawRow::default());
+                        }
+                    }
+                    b"tc" => {
+                        if table.as_ref().is_some_and(|table| table.depth == 1) {
+                            table.as_mut().unwrap().cell = Some(RawCell {
+                                column_span: 1,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    b"gridSpan" => set_grid_span(&event, &mut table),
+                    b"vMerge" => set_vertical_merge(&event, &mut table),
+                    b"tblHeader" => set_header(&mut table),
+                    _ => update_run_style(&event, &mut run_style),
                 }
-                b"gridSpan" => set_grid_span(&event, &mut table),
-                b"vMerge" => set_vertical_merge(&event, &mut table),
-                b"tblHeader" => set_header(&mut table),
-                _ => update_run_style(&event, &mut run_style),
-            },
+            }
             Ok(Event::Empty(event)) => match event.local_name().as_ref() {
                 b"tab" => append_inline(
                     &mut paragraph,
@@ -200,6 +393,11 @@ fn parse_document_xml(
                     },
                 ),
                 b"br" | b"cr" => append_inline(&mut paragraph, &mut hyperlink, Inline::LineBreak),
+                b"rStyle" => {
+                    if let Some(id) = attribute(&event, b"val") {
+                        merge_run_style(&mut run_style, &resolved_run_style(&id, context.styles));
+                    }
+                }
                 b"pStyle" => set_paragraph_style(&event, &mut paragraph),
                 b"numPr" => set_numbering_present(&mut paragraph),
                 b"numId" => set_number_id(&event, &mut paragraph),
@@ -218,7 +416,7 @@ fn parse_document_xml(
             },
             Ok(Event::Text(text)) if in_text => {
                 let value = text.unescape().map_err(|error| DocumentError::Malformed {
-                    part: Some(DOCUMENT_PART.to_owned()),
+                    part: Some(part.to_owned()),
                     detail: error.to_string(),
                 })?;
                 append_inline(
@@ -230,55 +428,81 @@ fn parse_document_xml(
                     },
                 );
             }
-            Ok(Event::End(event)) => match event.local_name().as_ref() {
-                b"t" | b"instrText" => in_text = false,
-                b"hyperlink" => finish_hyperlink(&mut paragraph, &mut hyperlink),
-                b"p" => {
-                    if let Some(paragraph) = paragraph.take()
-                        && let Some(block) = paragraph_block(paragraph, context, warnings)
-                    {
-                        if let Some(cell) = table.as_mut().and_then(|table| table.cell.as_mut()) {
-                            append_block(&mut cell.blocks, block);
-                        } else {
-                            append_block(output, block);
+            Ok(Event::End(event)) => {
+                depth = depth.saturating_sub(1);
+                match event.local_name().as_ref() {
+                    b"t" | b"instrText" => in_text = false,
+                    b"hyperlink" => finish_hyperlink(&mut paragraph, &mut hyperlink),
+                    b"p" => {
+                        if let Some(paragraph) = paragraph.take()
+                            && let Some(produced) =
+                                paragraph_block(paragraph, context, &mut counters)
+                        {
+                            let container =
+                                match table.as_mut().and_then(|table| table.cell.as_mut()) {
+                                    Some(cell) => &mut cell.blocks,
+                                    None => &mut *output,
+                                };
+                            place_paragraph_output(produced, container);
                         }
                     }
-                }
-                b"tc" => {
-                    if table.as_ref().is_some_and(|table| table.depth == 1)
-                        && let Some(table) = table.as_mut()
-                        && let Some(cell) = table.cell.take()
-                        && let Some(row) = table.row.as_mut()
-                    {
-                        row.cells.push(cell);
+                    b"tc" => {
+                        if table.as_ref().is_some_and(|table| table.depth == 1)
+                            && let Some(table) = table.as_mut()
+                            && let Some(cell) = table.cell.take()
+                            && let Some(row) = table.row.as_mut()
+                        {
+                            row.cells.push(cell);
+                        }
                     }
-                }
-                b"tr" => {
-                    if table.as_ref().is_some_and(|table| table.depth == 1)
-                        && let Some(table) = table.as_mut()
-                        && let Some(row) = table.row.take()
-                    {
-                        table.rows.push(row);
+                    b"tr" => {
+                        if table.as_ref().is_some_and(|table| table.depth == 1)
+                            && let Some(table) = table.as_mut()
+                            && let Some(row) = table.row.take()
+                        {
+                            table.rows.push(row);
+                        }
                     }
-                }
-                b"tbl" => {
-                    if let Some(table_builder) = table.as_mut() {
-                        table_builder.depth = table_builder.depth.saturating_sub(1);
+                    b"tbl" => {
+                        if let Some(table_builder) = table.as_mut() {
+                            table_builder.depth = table_builder.depth.saturating_sub(1);
+                        }
+                        if table.as_ref().is_some_and(|table| table.depth == 0)
+                            && let Some(table) = table.take()
+                        {
+                            output.push(build_table(table, warnings));
+                        }
                     }
-                    if table.as_ref().is_some_and(|table| table.depth == 0)
-                        && let Some(table) = table.take()
-                    {
-                        output.push(build_table(table, warnings));
-                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Ok(Event::Eof) => break,
             Err(error) => {
-                return Err(DocumentError::Malformed {
-                    part: Some(DOCUMENT_PART.to_owned()),
-                    detail: error.to_string(),
+                // Producers emit subtly non-well-formed bodies often enough
+                // that discarding everything already recovered is the wrong
+                // trade. Flush whatever is in flight, keep the blocks parsed
+                // so far, and record why parsing stopped; only a body that
+                // yielded nothing at all is fatal.
+                if let Some(pending) = paragraph.take()
+                    && let Some(produced) = paragraph_block(pending, context, &mut counters)
+                {
+                    place_paragraph_output(produced, output);
+                }
+                if let Some(pending) = table.take() {
+                    output.push(build_table(pending, warnings));
+                }
+                if output.is_empty() {
+                    return Err(DocumentError::Malformed {
+                        part: Some(part.to_owned()),
+                        detail: error.to_string(),
+                    });
+                }
+                warnings.push(ParseWarning {
+                    code: WarningCode::TruncatedContent,
+                    part: Some(part.to_owned()),
+                    message: format!("document body truncated at a malformed node: {error}"),
                 });
+                break;
             }
             _ => {}
         }
@@ -286,7 +510,7 @@ fn parse_document_xml(
     if table.is_some() {
         warnings.push(ParseWarning {
             code: WarningCode::TruncatedContent,
-            part: Some(DOCUMENT_PART.to_owned()),
+            part: Some(part.to_owned()),
             message: "unterminated table was discarded".to_owned(),
         });
     }
@@ -450,50 +674,181 @@ fn set_number_level(event: &BytesStart<'_>, paragraph: &mut Option<Paragraph>) {
     }
 }
 
+/// What a `<w:p>` turned into. List paragraphs are kept separate from plain
+/// blocks because placing them needs the surrounding block list (to nest under
+/// a parent item and to continue a run of items), which `paragraph_block`
+/// cannot see.
+enum ParagraphOutput {
+    Block(Block),
+    ListItem {
+        level: u8,
+        marker: ListMarker,
+        ordinal: u64,
+        content: Vec<Inline>,
+    },
+}
+
 fn paragraph_block(
     paragraph: Paragraph,
     context: &DocxContext<'_>,
-    warnings: &mut Vec<ParseWarning>,
-) -> Option<Block> {
+    counters: &mut ListCounters,
+) -> Option<ParagraphOutput> {
     if paragraph.content.is_empty() {
         return None;
     }
     if let Some(level) = heading_level(paragraph.style.as_deref(), context.styles) {
-        Some(Block::Heading {
+        return Some(ParagraphOutput::Block(Block::Heading {
             level,
             content: paragraph.content,
-        })
-    } else if let Some((number_id, level)) = paragraph.numbering {
-        if level > 0 {
-            warnings.push(ParseWarning {
-                code: WarningCode::UnsupportedFeature,
-                part: Some("word/numbering.xml".to_owned()),
-                message: format!("list level {level} is retained as a flat list"),
-            });
-        }
+        }));
+    }
+    if let Some((number_id, level)) = paragraph.numbering {
         let definition = context
             .numbering
-            .get(&(number_id, level))
+            .get(&(number_id.clone(), level))
             .cloned()
             .unwrap_or(NumberDef {
                 marker: ListMarker::Bullet,
                 start: 1,
             });
-        Some(Block::List {
-            list: List {
-                marker: definition.marker,
-                start: Some(definition.start),
-                items: vec![ListItem {
-                    blocks: vec![Block::Paragraph {
-                        content: paragraph.content,
-                    }],
-                }],
-            },
-        })
-    } else {
-        Some(Block::Paragraph {
-            content: paragraph.content,
-        })
+        let ordinal = counters.next(&number_id, level, definition.start);
+        let mut content = paragraph.content;
+        // Word separates the generated number from the item text with a tab
+        // stop. The number is regenerated by the renderer, so that tab is
+        // layout residue, not content.
+        trim_leading_whitespace(&mut content);
+        return Some(ParagraphOutput::ListItem {
+            level,
+            marker: definition.marker,
+            ordinal,
+            content,
+        });
+    }
+    Some(ParagraphOutput::Block(Block::Paragraph {
+        content: paragraph.content,
+    }))
+}
+
+fn trim_leading_whitespace(content: &mut Vec<Inline>) {
+    while let Some(Inline::Text { text, .. }) = content.first_mut() {
+        let trimmed = text.trim_start().to_owned();
+        if trimmed.is_empty() {
+            content.remove(0);
+            continue;
+        }
+        *text = trimmed;
+        break;
+    }
+}
+
+/// Running position of every `(numId, level)` sequence in the document.
+///
+/// Word numbering continues across intervening body paragraphs, so the
+/// ordinal cannot be derived from a list block's own item count — a list
+/// interrupted by a paragraph and then resumed has to pick the counter back
+/// up where it left off.
+#[derive(Default)]
+struct ListCounters {
+    next: HashMap<(String, u8), u64>,
+}
+
+impl ListCounters {
+    fn next(&mut self, number_id: &str, level: u8, start: u64) -> u64 {
+        let ordinal = *self
+            .next
+            .entry((number_id.to_owned(), level))
+            .or_insert(start);
+        self.next.insert((number_id.to_owned(), level), ordinal + 1);
+        // Entering a level restarts every deeper level beneath it.
+        self.next
+            .retain(|(id, other), _| id != number_id || *other <= level);
+        ordinal
+    }
+}
+
+/// Place a list item, nesting it under the enclosing item chain when its
+/// level is deeper than the surrounding block list.
+fn push_list_item(
+    container: &mut Vec<Block>,
+    level: u8,
+    marker: ListMarker,
+    ordinal: u64,
+    content: Vec<Inline>,
+) {
+    if level > 0
+        && let Some(Block::List { list }) = container.last_mut()
+    {
+        if list.items.is_empty() {
+            list.items.push(ListItem { blocks: Vec::new() });
+        }
+        let inner = &mut list.items.last_mut().unwrap().blocks;
+        push_list_item(inner, level - 1, marker, ordinal, content);
+        return;
+    }
+    let item = ListItem {
+        blocks: vec![Block::Paragraph { content }],
+    };
+    // Continue the preceding list only when this item is genuinely its next
+    // element; otherwise a new sequence starts.
+    if let Some(Block::List { list }) = container.last_mut()
+        && list.marker == marker
+        && list.start.unwrap_or(1) + list.items.len() as u64 == ordinal
+    {
+        list.items.push(item);
+        return;
+    }
+    container.push(Block::List {
+        list: List {
+            marker,
+            start: Some(ordinal),
+            items: vec![item],
+        },
+    });
+}
+
+/// Collapse a style's `basedOn` chain into the run properties it implies.
+///
+/// The chain is walked base-first so a derived style's own properties win,
+/// matching ECMA-376's cascade. A cycle terminates the walk rather than
+/// hanging.
+fn resolved_run_style(id: &str, styles: &HashMap<String, StyleDef>) -> Style {
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+    let mut current = id.to_owned();
+    for _ in 0..16 {
+        if !visited.insert(current.clone()) {
+            break;
+        }
+        let Some(definition) = styles.get(&current) else {
+            break;
+        };
+        chain.push(definition);
+        match definition.based_on.as_deref() {
+            Some(parent) => current = parent.to_owned(),
+            None => break,
+        }
+    }
+    let mut style = Style::default();
+    for definition in chain.into_iter().rev() {
+        merge_run_style(&mut style, &definition.run_style);
+    }
+    style
+}
+
+/// Apply the set properties of `source` over `target`. `Style` has no
+/// tri-state per property, so only enabled flags propagate — a derived style
+/// cannot currently switch an inherited property back off.
+fn merge_run_style(target: &mut Style, source: &Style) {
+    target.bold |= source.bold;
+    target.italic |= source.italic;
+    target.underline |= source.underline;
+    target.strike |= source.strike;
+    target.code |= source.code;
+    if source.superscript.is_some() {
+        target.superscript = source.superscript;
+    }
+    if source.language.is_some() {
+        target.language = source.language.clone();
     }
 }
 
@@ -508,6 +863,11 @@ fn heading_level(style: Option<&str>, styles: &HashMap<String, StyleDef>) -> Opt
             return Some(level);
         }
         let definition = styles.get(current)?;
+        // A character style named "Heading 1 Char" must not turn its
+        // paragraph into a heading.
+        if !definition.is_paragraph_style {
+            return None;
+        }
         if let Some(level) = definition.outline_level {
             return Some(level.saturating_add(1).clamp(1, 6));
         }
@@ -527,19 +887,15 @@ fn heading_level_from_name(value: &str) -> Option<u8> {
     Some(suffix.parse::<u8>().unwrap_or(1).clamp(1, 6))
 }
 
-fn append_block(output: &mut Vec<Block>, block: Block) {
-    match block {
-        Block::List { list } => {
-            if let Some(Block::List { list: previous }) = output.last_mut()
-                && previous.marker == list.marker
-                && previous.start == list.start
-            {
-                previous.items.extend(list.items);
-            } else {
-                output.push(Block::List { list });
-            }
-        }
-        other => output.push(other),
+fn place_paragraph_output(produced: ParagraphOutput, container: &mut Vec<Block>) {
+    match produced {
+        ParagraphOutput::Block(block) => container.push(block),
+        ParagraphOutput::ListItem {
+            level,
+            marker,
+            ordinal,
+            content,
+        } => push_list_item(container, level, marker, ordinal, content),
     }
 }
 
@@ -663,10 +1019,15 @@ fn parse_styles(
         enforce_node_limit(nodes, "word/styles.xml", options)?;
         match reader.read_event() {
             Ok(Event::Start(event)) if event.local_name().as_ref() == b"style" => {
-                if attribute(&event, b"type").as_deref() == Some("paragraph") {
-                    current_id = attribute(&event, b"styleId");
-                    current = StyleDef::default();
-                }
+                // Character styles matter as much as paragraph styles here:
+                // `<w:rStyle>` resolves against them, and dropping them was
+                // why style-driven bold/italic/strike never reached the IR.
+                let kind = attribute(&event, b"type");
+                current_id = attribute(&event, b"styleId");
+                current = StyleDef {
+                    is_paragraph_style: kind.as_deref() == Some("paragraph"),
+                    ..StyleDef::default()
+                };
             }
             Ok(Event::Start(event) | Event::Empty(event)) if current_id.is_some() => {
                 match event.local_name().as_ref() {
@@ -676,7 +1037,7 @@ fn parse_styles(
                         current.outline_level =
                             attribute(&event, b"val").and_then(|value| value.parse().ok())
                     }
-                    _ => {}
+                    _ => update_run_style(&event, &mut current.run_style),
                 }
             }
             Ok(Event::End(event)) if event.local_name().as_ref() == b"style" => {
@@ -873,6 +1234,24 @@ fn parse_notes(
         }
     }
     Ok(notes)
+}
+
+/// Guard against deeply nested XML, which turns recursive descent (and, for
+/// the tolerant reader below, quick-xml's own bookkeeping) into a CPU/memory
+/// amplifier for an attacker-controlled package.
+fn enforce_depth_limit(
+    depth: usize,
+    part: &str,
+    options: &ParseOptions,
+) -> Result<(), DocumentError> {
+    if depth > options.limits.max_xml_depth {
+        Err(DocumentError::ResourceLimit {
+            limit: "max_xml_depth",
+            detail: format!("{part} nests elements {depth} deep"),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn enforce_node_limit(

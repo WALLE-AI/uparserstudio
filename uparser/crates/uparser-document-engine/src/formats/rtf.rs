@@ -25,7 +25,12 @@ struct State {
     ignorable: bool,
     codepage: u16,
     unicode_skip: usize,
-    list_level: Option<u8>,
+    /// List membership comes from `\ls` (a `\listoverridetable` index) alone.
+    /// `\ilvl` only names a level *within* a list and is emitted by producers
+    /// on ordinary styled paragraphs too — treating it as membership turned
+    /// every heading and body paragraph into a numbered item.
+    list_id: Option<i64>,
+    list_level: u8,
 }
 
 impl Default for State {
@@ -37,7 +42,8 @@ impl Default for State {
             ignorable: false,
             codepage: 1252,
             unicode_skip: 1,
-            list_level: None,
+            list_id: None,
+            list_level: 0,
         }
     }
 }
@@ -53,7 +59,7 @@ impl Paragraph {
         Self {
             content: Vec::new(),
             heading: None,
-            list_level: state.list_level,
+            list_level: state.list_id.map(|_| state.list_level),
         }
     }
 }
@@ -277,6 +283,14 @@ impl Parser<'_> {
     }
 
     fn apply_control(&mut self, word: &str, parameter: Option<i64>) -> Result<(), DocumentError> {
+        // Control words inside a skipped destination describe that table's own
+        // entries, not the document body. A stylesheet entry such as
+        // `{\s1 …\ilvl0\outlinelevel0… heading 1;}` would otherwise mark the
+        // *next real paragraph* as a heading and a list item — which is
+        // exactly what turned every RTF paragraph into a numbered item.
+        if self.state.destination == Destination::Skip {
+            return Ok(());
+        }
         let enabled = parameter != Some(0);
         match word {
             "ansi" => self.state.codepage = 1252,
@@ -297,7 +311,8 @@ impl Parser<'_> {
             "nosupersub" => self.state.style.superscript = None,
             "plain" => self.state.style = Style::default(),
             "pard" => {
-                self.state.list_level = None;
+                self.state.list_id = None;
+                self.state.list_level = 0;
                 self.paragraph.heading = None;
                 self.paragraph.list_level = None;
             }
@@ -311,8 +326,10 @@ impl Parser<'_> {
             "outlinelevel" => {
                 self.paragraph.heading = Some((parameter.unwrap_or(0) + 1).clamp(1, 6) as u8)
             }
-            "ls" => self.state.list_level = Some(self.state.list_level.unwrap_or(0)),
-            "ilvl" => self.state.list_level = Some(parameter.unwrap_or(0).clamp(0, 8) as u8),
+            "ls" => self.state.list_id = Some(parameter.unwrap_or(0)),
+            "ilvl" | "listlevel" => {
+                self.state.list_level = parameter.unwrap_or(0).clamp(0, 8) as u8
+            }
             "trowd" => {
                 self.finish_paragraph();
                 self.table.active = true;
@@ -323,6 +340,10 @@ impl Parser<'_> {
             "fldinst" => self.set_destination(Destination::FieldInstruction),
             "fldrslt" => self.set_destination(Destination::FieldResult),
             "footnote" | "endnote" => {
+                if !self.options.include_notes {
+                    self.set_destination(Destination::Skip);
+                    return Ok(());
+                }
                 self.note_id += 1;
                 self.emit_inline(Inline::NoteRef {
                     id: format!("rtf-note-{}", self.note_id),
@@ -335,9 +356,17 @@ impl Parser<'_> {
             "jpegblip" => self.picture_type = "image/jpeg",
             "emfblip" => self.picture_type = "image/emf",
             "wmetafile" => self.picture_type = "image/wmf",
+            // Running headers and footers repeat on every page, so they are
+            // excluded from the body unless the caller asks for them.
+            "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr"
+            | "footerf" => {
+                if !self.options.include_headers_footers {
+                    self.set_destination(Destination::Skip);
+                }
+            }
             "fonttbl" | "colortbl" | "stylesheet" | "listtable" | "listoverridetable"
-            | "listtext" | "pntext" | "info" | "header" | "footer" | "generator" | "xmlnstbl"
-            | "datastore" | "themedata" => self.set_destination(Destination::Skip),
+            | "listtext" | "pntext" | "info" | "generator" | "xmlnstbl" | "datastore"
+            | "themedata" => self.set_destination(Destination::Skip),
             _ if self.state.ignorable => self.set_destination(Destination::Skip),
             _ => {}
         }
@@ -427,7 +456,23 @@ impl Parser<'_> {
         if bytes.contains(&b'\n') && bytes.iter().all(u8::is_ascii_whitespace) {
             return Ok(());
         }
-        let mut bytes = bytes;
+        // CR and LF carry no meaning in an RTF stream — only `\par` and
+        // `\line` break lines. Passing them through put raw newlines inside
+        // styled runs, which split emphasis markers across lines
+        // (`**\nbold**`) and stopped them rendering as emphasis at all.
+        // Stripping at byte level is safe for the multi-byte codepages here:
+        // no DBCS trail byte in the supported set is 0x0A or 0x0D.
+        let stripped: Vec<u8>;
+        let mut bytes = if bytes.contains(&b'\n') || bytes.contains(&b'\r') {
+            stripped = bytes
+                .iter()
+                .copied()
+                .filter(|byte| !matches!(byte, b'\n' | b'\r'))
+                .collect();
+            stripped.as_slice()
+        } else {
+            bytes
+        };
         if self.skip_fallback > 0 {
             let skip = self.skip_fallback.min(bytes.len());
             bytes = &bytes[skip..];
@@ -490,7 +535,7 @@ impl Parser<'_> {
     fn emit_inline(&mut self, inline: Inline) {
         if self.state.destination == Destination::Normal {
             if self.paragraph.content.is_empty() {
-                self.paragraph.list_level = self.state.list_level;
+                self.paragraph.list_level = self.state.list_id.map(|_| self.state.list_level);
             }
             self.paragraph.content.push(inline);
         }
@@ -513,11 +558,18 @@ impl Parser<'_> {
         };
         if self.table.active {
             self.table.cell_blocks.push(block);
+        } else if paragraph.heading.is_some() {
+            // A styled heading may also carry list properties from its style
+            // definition; the heading is the stronger signal.
+            if !self.table.rows.is_empty() {
+                self.finish_table();
+            }
+            self.unit.blocks.push(block);
         } else if paragraph.list_level.is_some() {
             if !self.table.rows.is_empty() {
                 self.finish_table();
             }
-            self.append_list_item(block);
+            self.append_list_item(block, paragraph.list_level.unwrap_or(0));
         } else {
             if !self.table.rows.is_empty() {
                 self.finish_table();
@@ -526,22 +578,8 @@ impl Parser<'_> {
         }
     }
 
-    fn append_list_item(&mut self, block: Block) {
-        if let Some(Block::List { list }) = self.unit.blocks.last_mut() {
-            list.items.push(ListItem {
-                blocks: vec![block],
-            });
-        } else {
-            self.unit.blocks.push(Block::List {
-                list: List {
-                    marker: ListMarker::Decimal,
-                    start: None,
-                    items: vec![ListItem {
-                        blocks: vec![block],
-                    }],
-                },
-            });
-        }
+    fn append_list_item(&mut self, block: Block, level: u8) {
+        push_nested_list_item(&mut self.unit.blocks, level, block);
     }
 
     fn finish_cell(&mut self) {
@@ -614,6 +652,7 @@ impl Parser<'_> {
                 filename: None,
                 byte_length: bytes.len(),
                 sha256,
+                path: None,
                 bytes: self.options.include_assets.then_some(bytes),
             });
         }
@@ -640,6 +679,38 @@ impl Parser<'_> {
             detail: detail.into(),
         }
     }
+}
+
+/// Place a list item at `level`, descending into the enclosing item chain so
+/// `\ilvl1` paragraphs nest under their `\ilvl0` parent instead of flattening
+/// into one sequence.
+fn push_nested_list_item(container: &mut Vec<Block>, level: u8, block: Block) {
+    if level > 0
+        && let Some(Block::List { list }) = container.last_mut()
+    {
+        if list.items.is_empty() {
+            list.items.push(ListItem { blocks: Vec::new() });
+        }
+        let inner = &mut list.items.last_mut().unwrap().blocks;
+        push_nested_list_item(inner, level - 1, block);
+        return;
+    }
+    let item = ListItem {
+        blocks: vec![block],
+    };
+    if let Some(Block::List { list }) = container.last_mut() {
+        list.items.push(item);
+        return;
+    }
+    container.push(Block::List {
+        list: List {
+            // RTF list *types* live in `\listtable`, which is not parsed yet;
+            // items are emitted as a decimal sequence until it is.
+            marker: ListMarker::Decimal,
+            start: None,
+            items: vec![item],
+        },
+    });
 }
 
 fn encoding(codepage: u16) -> &'static Encoding {

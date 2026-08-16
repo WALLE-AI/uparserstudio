@@ -78,6 +78,67 @@ pub fn write_block_assets(result: &mut ParseResult, assets_dir: &Path) -> std::i
     write_page_assets(&mut result.pages, assets_dir)
 }
 
+/// Write the embedded images of a structured document (DOCX/PPTX/ODF/EPUB/RTF)
+/// and record where each one landed on its `Asset::path`.
+///
+/// Same content-addressing and lazy-directory-creation rules as
+/// [`write_page_assets`]; the difference is that a structured document owns
+/// its assets centrally (one entry per distinct image, referenced by id from
+/// any number of blocks) rather than per block, so the path is recorded once
+/// and the Markdown renderer resolves ids through it.
+///
+/// The original file extension is preserved — unlike PDF crops, which this
+/// crate produces itself and therefore knows are PNG, an embedded asset can
+/// be a JPEG, GIF, SVG or EMF, and renaming it `.png` would leave a file no
+/// viewer can open.
+#[cfg(feature = "native")]
+pub fn write_document_assets(
+    document: &mut uparser_document_engine::CanonicalDocument,
+    assets_dir: &Path,
+) -> std::io::Result<usize> {
+    let mut written = 0;
+    let mut dir_created = false;
+    let dir_name = assets_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("images")
+        .to_string();
+
+    for asset in &mut document.assets {
+        let Some(bytes) = asset.bytes.take() else {
+            continue;
+        };
+        if !dir_created {
+            std::fs::create_dir_all(assets_dir)?;
+            dir_created = true;
+        }
+        let filename = format!("{}.{}", asset.sha256, asset_extension(&asset.media_type));
+        let file_path = assets_dir.join(&filename);
+        if !file_path.exists() {
+            std::fs::write(&file_path, &bytes)?;
+            written += 1;
+        }
+        asset.path = Some(format!("{dir_name}/{filename}"));
+    }
+    Ok(written)
+}
+
+#[cfg(feature = "native")]
+fn asset_extension(media_type: &str) -> &'static str {
+    match media_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        "image/webp" => "webp",
+        "image/tiff" => "tiff",
+        "image/bmp" => "bmp",
+        "image/emf" => "emf",
+        "image/wmf" => "wmf",
+        _ => "bin",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

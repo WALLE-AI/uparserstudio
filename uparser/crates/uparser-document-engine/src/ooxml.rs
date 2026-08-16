@@ -14,9 +14,31 @@ pub(crate) struct Relationship {
 
 pub(crate) type Relationships = HashMap<String, Relationship>;
 
+/// The package-level relationship part. Its `officeDocument` relationship is
+/// the only authoritative way to find a package's main part: OOXML does not
+/// require the conventional `word/document.xml` / `ppt/presentation.xml`
+/// paths, and a `[Content_Types].xml` can name parts that do not exist.
+pub(crate) const ROOT_RELATIONSHIPS_PART: &str = "_rels/.rels";
+
+/// Relationship type suffixes. Both the transitional
+/// (`http://schemas.openxmlformats.org/officeDocument/2006/relationships/...`)
+/// and strict (`http://purl.oclc.org/ooxml/officeDocument/relationships/...`)
+/// namespaces end with the same segment, so suffix matching covers both.
+pub(crate) const REL_OFFICE_DOCUMENT: &str = "/officeDocument";
+pub(crate) const REL_STYLES: &str = "/styles";
+pub(crate) const REL_NUMBERING: &str = "/numbering";
+pub(crate) const REL_FOOTNOTES: &str = "/footnotes";
+pub(crate) const REL_ENDNOTES: &str = "/endnotes";
+pub(crate) const REL_HEADER: &str = "/header";
+pub(crate) const REL_FOOTER: &str = "/footer";
+
 pub(crate) fn relationships_part(part: &str) -> Option<String> {
-    let (directory, filename) = part.rsplit_once('/')?;
-    Some(format!("{directory}/_rels/{filename}.rels"))
+    match part.rsplit_once('/') {
+        Some((directory, filename)) => Some(format!("{directory}/_rels/{filename}.rels")),
+        // A part at the package root still has a rels part: `_rels/<name>.rels`.
+        None if !part.is_empty() => Some(format!("_rels/{part}.rels")),
+        None => None,
+    }
 }
 
 pub(crate) fn parse_relationships(
@@ -84,7 +106,145 @@ pub(crate) fn load_relationships(
         .map(Option::unwrap_or_default)
 }
 
+/// Package `[Content_Types].xml`: the authoritative part → media-type map.
+#[derive(Debug, Default)]
+pub(crate) struct ContentTypes {
+    defaults: HashMap<String, String>,
+    overrides: HashMap<String, String>,
+}
+
+impl ContentTypes {
+    pub(crate) fn load(
+        package: &mut Package<'_>,
+        options: &ParseOptions,
+    ) -> Result<Self, DocumentError> {
+        let Some(xml) = package.read("[Content_Types].xml")? else {
+            return Ok(Self::default());
+        };
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut types = Self::default();
+        let mut nodes = 0usize;
+        loop {
+            nodes += 1;
+            if nodes > options.limits.max_xml_nodes {
+                return Err(DocumentError::ResourceLimit {
+                    limit: "max_xml_nodes",
+                    detail: "[Content_Types].xml contains too many XML events".to_owned(),
+                });
+            }
+            match reader.read_event() {
+                Ok(Event::Start(event) | Event::Empty(event)) => {
+                    match event.local_name().as_ref() {
+                        b"Default" => {
+                            if let (Some(extension), Some(content_type)) = (
+                                attribute(&event, b"Extension"),
+                                attribute(&event, b"ContentType"),
+                            ) {
+                                types
+                                    .defaults
+                                    .insert(extension.to_ascii_lowercase(), content_type);
+                            }
+                        }
+                        b"Override" => {
+                            if let (Some(part), Some(content_type)) = (
+                                attribute(&event, b"PartName"),
+                                attribute(&event, b"ContentType"),
+                            ) {
+                                types
+                                    .overrides
+                                    .insert(part.trim_start_matches('/').to_owned(), content_type);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Eof) => break,
+                // A malformed content-types part is recoverable: relationship
+                // resolution does not depend on it.
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        Ok(types)
+    }
+
+    /// Override wins over the extension default, per ECMA-376 Part 2.
+    pub(crate) fn for_part(&self, part: &str) -> Option<&str> {
+        let part = part.trim_start_matches('/');
+        if let Some(content_type) = self.overrides.get(part) {
+            return Some(content_type.as_str());
+        }
+        let extension = part.rsplit_once('.')?.1.to_ascii_lowercase();
+        self.defaults.get(&extension).map(String::as_str)
+    }
+}
+
+pub(crate) fn load_root_relationships(
+    package: &mut Package<'_>,
+    options: &ParseOptions,
+) -> Result<Relationships, DocumentError> {
+    match package.read(ROOT_RELATIONSHIPS_PART)? {
+        Some(xml) => parse_relationships(&xml, ROOT_RELATIONSHIPS_PART, options),
+        None => Ok(HashMap::new()),
+    }
+}
+
+/// The package's main part, resolved through the root `officeDocument`
+/// relationship. Returns `None` when the package declares no such
+/// relationship, so callers can fall back to a conventional path and warn.
+pub(crate) fn main_part(root_relationships: &Relationships) -> Option<String> {
+    let relationship = root_relationships.values().find(|relationship| {
+        !relationship.external && relationship.kind.ends_with(REL_OFFICE_DOCUMENT)
+    })?;
+    // Root-relationship targets are relative to the package root, not to the
+    // `_rels/` folder the rels part itself lives in.
+    resolve_internal_target("", &relationship.target)
+}
+
+/// The single part related to `source_part` by a relationship type suffix.
+pub(crate) fn related_part(
+    source_part: &str,
+    relationships: &Relationships,
+    type_suffix: &str,
+) -> Option<String> {
+    relationships
+        .values()
+        .find(|relationship| {
+            !relationship.external && relationship_kind_is(&relationship.kind, type_suffix)
+        })
+        .and_then(|relationship| resolve_internal_target(source_part, &relationship.target))
+}
+
+/// Exact type-segment match. Guards against `/slide` also matching
+/// `/slideLayout` and `/slideMaster`, which share the prefix.
+pub(crate) fn relationship_kind_is(kind: &str, type_suffix: &str) -> bool {
+    kind.ends_with(type_suffix)
+}
+
+/// Read a relationship id (`r:id`) attribute. OOXML always namespace-prefixes
+/// it, and a bare `id` attribute usually sits right next to it holding an
+/// unrelated numeric id (`<p:sldId id="256" r:id="rId4"/>`), so a plain
+/// local-name lookup picks the wrong one.
+pub(crate) fn relationship_id(event: &BytesStart<'_>) -> Option<String> {
+    let mut fallback = None;
+    for attribute in event.attributes().flatten() {
+        if attribute.key.local_name().as_ref() != b"id" {
+            continue;
+        }
+        let value = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
+        if attribute.key.as_ref().contains(&b':') {
+            return Some(value);
+        }
+        fallback.get_or_insert(value);
+    }
+    fallback
+}
+
 pub(crate) fn resolve_internal_target(source_part: &str, target: &str) -> Option<String> {
+    if target.contains("\\") || target.contains('\0') {
+        return None;
+    }
+    let target = &percent_decode(target)?;
     if target.contains("\\") || target.contains('\0') {
         return None;
     }
@@ -106,6 +266,37 @@ pub(crate) fn resolve_internal_target(source_part: &str, target: &str) -> Option
         }
     }
     (!components.is_empty()).then(|| components.join("/"))
+}
+
+/// Percent-decode a package-relative target, dropping any fragment.
+///
+/// Returns `None` when a decoded byte would introduce a path separator or a
+/// NUL: `%2F`/`%5C` are the standard way to smuggle traversal past a decoder
+/// that splits on `/` *before* decoding, so they are rejected rather than
+/// normalized.
+fn percent_decode(target: &str) -> Option<String> {
+    let target = target.split('#').next().unwrap_or(target);
+    if !target.contains('%') {
+        return Some(target.to_owned());
+    }
+    let bytes = target.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            let value = u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+            if matches!(value, b'/' | b'\\' | 0) {
+                return None;
+            }
+            decoded.push(value);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 pub(crate) fn load_image_relationships(
@@ -155,6 +346,7 @@ pub(crate) fn load_image_relationships(
                 filename: part.rsplit('/').next().map(str::to_owned),
                 byte_length: bytes.len(),
                 sha256,
+                path: None,
                 bytes: options.include_assets.then_some(bytes),
             });
         }

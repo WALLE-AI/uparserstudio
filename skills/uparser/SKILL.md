@@ -99,7 +99,8 @@ Decide with this table. When unsure, run `uparser classify <file>` first (cheap,
 | Scanned / image-only PDF | `mineru-vlm` (or another VLM) | `native` has no OCR → empty output on scans |
 | Complex tables / figures matter | `mineru-vlm` | best table (OTSL→HTML) + reading order |
 | Don't know the document type | `auto` or `classify` first | Profiler routes born-digital→native, else→VLM |
-| Office/image input (docx/pptx/xlsx/png) | any (ingest converts) | needs LibreOffice/ImageMagick for docx/pptx/img; xlsx/csv are read directly |
+| Office / OpenDocument / EPUB / RTF / CSV input | `native` | parsed in-process from the source structure — **no LibreOffice, no model, no network**. Covers doc, docx, ppt, pptx, xls/xlsx/xlsm/xlsb, odt/ods/odp, rtf, epub, csv/tsv |
+| Image input (png/jpg) | a VLM protocol | there is no text layer to read |
 
 Other protocols: `dots-ocr`, `monkeyocr-v2` (single/two-stage VLMs, need their own endpoint), `pipeline` (traditional layout→OCR→formula→table), `paddleocr`. Run `uparser protocols` to introspect every adapter's capabilities as JSON. See `references/protocols.md` for details on all of them.
 
@@ -112,8 +113,8 @@ Other protocols: `dots-ocr`, `monkeyocr-v2` (single/two-stage VLMs, need their o
 | Code | Meaning | Agent action |
 |---|---|---|
 | 0 | success | use the result |
-| 1 | usage error (bad flags/args) | fix the command |
-| 2 | dependency/environment error (e.g. LibreOffice missing, endpoint unreachable) | install/fix env, retry |
+| 1 | the request can't be served as given — bad flags/args, or a document that is corrupt or of an unsupported format | fix the command, or stop feeding this file; **retrying unchanged will not help** |
+| 2 | dependency/environment condition (LibreOffice missing, endpoint unreachable, file encrypted, input over a resource budget) | fix the environment (supply a password, raise `--max-input-mib`, start the endpoint), then retry |
 | 3 | partial success (some pages failed) | result is usable; inspect `page_errors` in JSON |
 | 4 | internal error | report; retry with `--no-cache` |
 
@@ -146,6 +147,8 @@ uparser parse --protocol mineru-vlm --endpoint <url> --model <m> --stream huge.p
 
 By default, image/figure regions are cropped and written to `<source_stem>_images/` next to the source, and referenced in the Markdown as `![](images/<hash>.png)` (MinerU-style). Override the folder with `--assets-dir <dir>`, or pass `--no-assets` to skip the filesystem side effect entirely (no `![]()` links).
 
+The same applies to images *embedded* in a structured document (DOCX/PPTX/ODF/EPUB/RTF): they are written out content-addressed, keeping their original extension, and both the Markdown link and the `document-json` `assets[].path` point at the written file. A link is only emitted when the asset was actually written — you will never get an `![](asset-1f3c…)` that resolves to nothing.
+
 ## Key flags (see `parse --help` for all)
 
 - `--protocol <native|mineru-vlm|dots-ocr|monkeyocr-v2|pipeline|paddleocr|auto|mock>`
@@ -155,6 +158,12 @@ By default, image/figure regions are cropped and written to `<source_stem>_image
 - `--max-concurrency <N>` — concurrent model requests (default 16; raise to 32–100 for a beefy endpoint)
 - `--window-size <N>` — pages processed together before buffers drop (default 64; lower only to cap memory on huge docs)
 - `--no-cache`, `--stream`, `--assets-dir`, `--no-assets`, `--no-postprocess`
+- `native` structured formats only: `--no-notes` (drop footnotes/endnotes/speaker notes),
+  `--headers-footers` (include running headers/footers, excluded by default because they
+  repeat on every page), `--max-input-mib <N>` (reject an oversized input before parsing it)
+- `--format document-json` — the lossless structured contract for those formats
+  (nested lists, table grids with `rowspan`/`colspan`, notes, assets, per-format warnings);
+  `--format json` is the page/block IR, `--format markdown` the flattened text
 
 ## Configuring endpoints (avoid retyping `--endpoint`/`--model`)
 

@@ -308,7 +308,18 @@ pub struct Asset {
     pub filename: Option<String>,
     pub byte_length: usize,
     pub sha256: String,
+    /// Where the caller wrote this asset, relative to the output document.
+    /// Empty until something materialises it; the Markdown renderer points
+    /// `![](…)` here when it is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Raw bytes, for a caller that wants to write the asset out.
+    ///
+    /// **Never serialized.** `Vec<u8>` round-trips through JSON as an array
+    /// of numbers, which inflates a document's JSON by several times its own
+    /// size for content the consumer cannot use as an image anyway; callers
+    /// take the bytes from the in-memory model and reference `path` instead.
+    #[serde(skip)]
     pub bytes: Option<Vec<u8>>,
 }
 

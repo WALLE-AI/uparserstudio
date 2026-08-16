@@ -208,12 +208,61 @@ fn data_value(data: &Data) -> (String, CellValueKind) {
         Data::Empty => (String::new(), CellValueKind::Empty),
         Data::String(value) => (value.clone(), CellValueKind::Text),
         Data::Int(value) => (value.to_string(), CellValueKind::Number),
-        Data::Float(value) => (value.to_string(), CellValueKind::Number),
-        Data::Bool(value) => (value.to_string(), CellValueKind::Boolean),
-        Data::DateTime(value) => (value.to_string(), CellValueKind::DateTime),
+        Data::Float(value) => (format_number(*value), CellValueKind::Number),
+        // Spreadsheets render booleans uppercase; `true`/`false` is Rust's
+        // spelling, not the workbook's.
+        Data::Bool(value) => (
+            if *value { "TRUE" } else { "FALSE" }.to_owned(),
+            CellValueKind::Boolean,
+        ),
+        // A date/duration cell holds a serial number. Emitting it raw
+        // (`46096`, `1.10434027777778`) loses the value a reader sees, so it
+        // is rendered back to the ISO date or an elapsed-time string.
+        Data::DateTime(value) => (format_datetime(value), CellValueKind::DateTime),
         Data::DateTimeIso(value) | Data::DurationIso(value) => {
             (value.clone(), CellValueKind::DateTime)
         }
         Data::Error(value) => (value.to_string(), CellValueKind::Error),
+    }
+}
+
+/// Format a float the way a spreadsheet shows it: no exponent, no trailing
+/// zeros, and no artefacts of binary rounding.
+fn format_number(value: f64) -> String {
+    if value == value.trunc() && value.abs() < 1e15 {
+        return format!("{}", value as i64);
+    }
+    let mut text = format!("{value:.10}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+fn format_datetime(value: &calamine::ExcelDateTime) -> String {
+    if value.is_duration() {
+        // Durations may legitimately exceed 24 hours, so they are formatted as
+        // elapsed `[h]:mm:ss` rather than a clock time.
+        let total_seconds = (value.as_f64() * 86_400.0).round().max(0.0) as u64;
+        return format!(
+            "{}:{:02}:{:02}",
+            total_seconds / 3600,
+            (total_seconds % 3600) / 60,
+            total_seconds % 60
+        );
+    }
+    match value.as_datetime() {
+        Some(datetime) => {
+            // `NaiveDateTime`'s Display is `YYYY-MM-DD HH:MM:SS`; a pure date
+            // cell should not carry a midnight time component.
+            let text = datetime.to_string();
+            text.strip_suffix(" 00:00:00")
+                .map(str::to_owned)
+                .unwrap_or(text)
+        }
+        None => format_number(value.as_f64()),
     }
 }

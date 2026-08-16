@@ -692,12 +692,15 @@ fn csv_input_auto_routes_to_native_document_engine() {
         parsed["pages"][0]["blocks"][0]["source"],
         "structured_native"
     );
+    // A table block carries its content as HTML so merged cells survive the
+    // lowering; `text` is deliberately unset for it.
     assert!(
-        parsed["pages"][0]["blocks"][0]["text"]
+        parsed["pages"][0]["blocks"][0]["html"]
             .as_str()
             .unwrap()
             .contains("Alice")
     );
+    assert_eq!(parsed["pages"][0]["blocks"][0]["reading_order"], 0);
 }
 
 #[cfg(feature = "native")]
