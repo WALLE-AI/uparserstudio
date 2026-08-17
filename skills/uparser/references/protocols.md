@@ -12,13 +12,13 @@ Read this when you need to choose a protocol beyond `native`/`mineru-vlm`, confi
 7. `auto` — profiler + router
 8. Endpoints & serving
 9. JSON `ParseResult` shape
-10. Multi-format ingestion
+10. Multi-format input (Office / OpenDocument / EPUB / RTF / CSV)
 
 ## 1. Protocols at a glance
 
 | Protocol | Model? | Needs endpoint | OCR/scans | Strengths | Cost |
 |---|---|---|---|---|---|
-| `native` | none | no | no | fastest, born-digital text/headings/tables | ~ms/page |
+| `native` | none | no | no | fastest; born-digital PDFs **and** all Office/OpenDocument/EPUB/RTF/CSV input | ~ms/page |
 | `mineru-vlm` | VLM (MinerU2.5) | yes (OpenAI-compatible) | yes | best reading order + tables | ~1–2 s/page |
 | `dots-ocr` | VLM | yes | yes | single-round OCR VLM | ~1–2 s/page |
 | `monkeyocr-v2` | VLM | yes | yes | two-stage layout→recognize | ~1–2 s/page |
@@ -28,9 +28,13 @@ Read this when you need to choose a protocol beyond `native`/`mineru-vlm`, confi
 | `mock` | none | no | no | smoke test only (not real output) | trivial |
 
 ## 2. `native`
-Pure-Rust engine (internalized from pdf-inspector; lopdf-based, no PDFium, no OCR). Extracts the PDF text layer and renders full Markdown (headings, paragraphs, three-strategy tables). Whole-document, bypasses the network scheduler.
-- Build: `--features native` (no PDFium download). 
-- Best for: born-digital PDFs, speed, offline/no-GPU environments.
+One protocol name, **two pure-Rust engines**, both whole-document (they bypass the network scheduler, the cache and `--pages`/`--stream`/`--max-concurrency`/`--window-size` — passing those prints a "no effect" warning on stderr):
+
+- **PDF engine** (internalized from pdf-inspector; lopdf-based, no PDFium, no OCR). Extracts the PDF text layer and renders full Markdown (headings, paragraphs, three-strategy tables).
+- **Structured-document engine** (`uparser-document-engine`) for every non-PDF document format — see §10. It reads each format's *own* structure, so nothing is rasterized and nothing is guessed.
+
+- Build: `--features native` (no PDFium download).
+- Best for: born-digital PDFs, all Office/OpenDocument/EPUB/RTF/CSV input, speed, offline/no-GPU environments.
 - Limitation: scanned/image-only pages produce little/no text (no OCR) — route those to a VLM.
 
 ## 3. `mineru-vlm`
@@ -54,7 +58,7 @@ Traditional layout→OCR→formula→table, each stage independently `Local` (in
 Detect+recognize OCR with a from-scratch XY-cut geometric reading-order fallback. Single fixed `text` category. Needs a PaddleOCR-style REST endpoint (`--endpoint`).
 
 ## 7. `auto` (the default protocol)
-Runs the Profiler (L1 format + L2 structural, no model) then the Router to pick a protocol, logs the choice to stderr, then parses. This is the **default** when `--protocol` is omitted, so a bare `uparser parse doc.pdf` does the right thing. Inspect the decision first with `uparser classify <file>` (prints a `DocumentProfile`: `kind`, `dominant_content`, per-page `has_table_region`/`needs_ocr`, etc.).
+Non-PDF document formats (§10) short-circuit straight to `native` — they are always readable offline, so no profiling is needed and no endpoint is ever required. Everything else runs the Profiler (L1 format + L2 structural, no model) then the Router to pick a protocol, logs the choice to stderr, then parses. This is the **default** when `--protocol` is omitted, so a bare `uparser parse doc.pdf` does the right thing. Inspect the decision first with `uparser classify <file>` (prints a `DocumentProfile`: `kind`, `dominant_content`, per-page `has_table_region`/`needs_ocr`, etc.).
 
 Two caveats: (1) the L2 structural signal that recognizes born-digital docs requires the `native`-enabled build (the shipped prebuilt is; without it, unclassifiable docs fall to the VLM fallback row). (2) if `auto` routes to a VLM, that VLM still needs an endpoint — resolved from `--endpoint` / `$UPARSER_ENDPOINT` / config; the binary prints a clear stderr hint if none is configured.
 
@@ -85,5 +89,28 @@ VLM protocols talk to an **OpenAI-compatible `/v1/chat/completions`** endpoint (
 ```
 Categories are normalized (`title`, `text`, `list`, `table`, `figure`/`image`, `formula`, `header`, `footer`, `page_number`, …). In Markdown output, `title`→`# `, `list`→`- `, tables→HTML, formulas→`$$…$$`, images→`![]()`.
 
-## 10. Multi-format ingestion
-`uparser` accepts PDF, DOCX, PPTX, XLSX, CSV, and images. DOCX/PPTX/images are converted to PDF first via **LibreOffice** (`soffice`) / **ImageMagick** (`magick`) — those must be installed for those inputs (a missing tool → exit code 2). XLSX/CSV are read as structured data directly (no rasterization, no model). PDFs go straight through.
+## 10. Multi-format input
+
+Two entirely different paths, chosen by protocol — this is the single most common thing to get wrong:
+
+**`native` (and therefore `auto`, the default): source-semantic, fully offline.** No LibreOffice, no ImageMagick, no rasterization, no model, no network. Covers:
+
+| Input | Extensions | Units produced |
+|---|---|---|
+| Word | `.docx`, `.doc` | one `flow` unit |
+| PowerPoint | `.pptx`, `.ppt` | one `slide` unit per slide |
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.xla`, `.xlam` | one `sheet` unit per sheet |
+| OpenDocument | `.odt`, `.ods`, `.odp` | as their OOXML counterparts |
+| EPUB | `.epub` | one `chapter` unit per spine item |
+| RTF | `.rtf` | one `flow` unit |
+| Delimited text | `.csv`, `.tsv`, `.tab` | one `sheet` unit |
+
+Detection is signature-first with an extension fallback, so a misnamed `.docx` still parses correctly. CSV/TSV are the exception — no magic bytes, so they are recognized **by extension only**.
+
+Output shapes for these: `--format markdown` (flattened), `--format json` (the same page/block IR as the PDF protocols — one page per unit, `category` of `title`/`text`/`table`, tables as HTML with `rowspan`/`colspan`), `--format document-json` (lossless: units with `kind`/`label`, nested lists, table grids with covered-cell slots, `notes[]`, `assets[]`, structured `warnings[]`). `document-json` on a PDF is a usage error (exit 1).
+
+Structured-only flags: `--no-notes`, `--headers-footers`, `--max-input-mib`.
+
+Exit codes on this path: corrupt/unhandled format → 1; encrypted or over a resource budget → 2; parsed with losses → 0 with `warnings` populated.
+
+**Forcing a VLM/OCR protocol on a non-PDF input: conversion-based.** DOCX/PPTX/images are converted to PDF first via **LibreOffice** (`soffice`) / **ImageMagick** (`magick`), which must be installed (missing tool → exit code 2). Only worth it when the file is really a wrapper around scanned images; for ordinary Office files it is slower, needs a GPU endpoint, and discards structure the source already states.

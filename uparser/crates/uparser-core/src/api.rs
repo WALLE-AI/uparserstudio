@@ -260,6 +260,12 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
                     | uparser_document_engine::DocumentFormat::Rtf
                     | uparser_document_engine::DocumentFormat::Docx
                     | uparser_document_engine::DocumentFormat::Pptx
+                    // The legacy binary formats parse fully offline too;
+                    // leaving them out sent a `.doc`/`.ppt` to a VLM — and,
+                    // with no endpoint configured, to a dead end — even
+                    // though the native engine reads them directly.
+                    | uparser_document_engine::DocumentFormat::Doc
+                    | uparser_document_engine::DocumentFormat::Ppt
             ) {
                 "native".to_owned()
             } else {

@@ -1,6 +1,6 @@
 ---
 name: uparser
-description: Parse documents (PDF, Word/PPT/Excel, and images) into structured Markdown or JSON with the `uparser` CLI — a Rust tool built specifically for coding agents to invoke as a subprocess. Use this skill WHENEVER the user wants to extract text, tables, formulas, reading order, or images from a PDF or Office/image document; convert a document to Markdown; OCR or VLM-parse a scanned document; classify a document's type/layout before parsing; or feed document content into a RAG/LLM pipeline — even if they don't say "uparser" by name. Also use it when choosing between a fast local text-layer parse and a high-accuracy vision-model parse, or when a previous document-parsing attempt gave garbled/empty output.
+description: Parse documents into structured Markdown or JSON with the `uparser` CLI — a Rust tool built specifically for coding agents to invoke as a subprocess. Handles PDF, Word (.docx/.doc), PowerPoint (.pptx/.ppt), Excel (.xlsx/.xls/.xlsm/.xlsb), OpenDocument (.odt/.ods/.odp), EPUB, RTF, CSV/TSV and images — every non-PDF format parses fully offline, with no LibreOffice, no model and no network. Use this skill WHENEVER the user wants to extract text, tables, formulas, reading order, slides, spreadsheet cells or images from any of those; convert a document to Markdown; OCR or VLM-parse a scanned document; classify a document before parsing; or feed document content into a RAG/LLM pipeline — even if they don't say "uparser" by name. Also use it when choosing between a fast local parse and a high-accuracy vision-model parse, or when a previous document-parsing attempt gave garbled/empty output.
 ---
 
 # uparser
@@ -9,10 +9,10 @@ description: Parse documents (PDF, Word/PPT/Excel, and images) into structured M
 
 Pick the parsing engine with `--protocol`. The two you'll use most:
 
-- **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per page. Best for **born-digital (electronic) PDFs** where you just need the text/structure fast. Cannot read scanned/image-only pages (no OCR).
+- **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per document. Two engines share this one name: a PDF text-layer engine for **born-digital PDFs**, and a **structured-document engine** that reads Word/PowerPoint/Excel/OpenDocument/EPUB/RTF/CSV *from their own source structure* (see [Non-PDF documents](#non-pdf-documents-office--opendocument--epub--rtf--csv)). Cannot read scanned/image-only pages (no OCR).
 - **`mineru-vlm`** — highest accuracy (best reading order + tables). Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
 
-> **`--protocol` defaults to `auto`** (a Profiler+Router picks the engine: born-digital PDF → `native` offline; scan/complex → a VLM). So `uparser parse doc.pdf` with no flags does the right thing on a born-digital PDF. `mock` (placeholder output, *not* your document) is now **explicit-only** — request it deliberately with `--protocol mock`. Note: for `auto` to reach the offline `native` path the binary must be the `native`-enabled build (the shipped prebuilt is); if `auto` routes to a VLM it still needs an endpoint (it prints a clear stderr hint when none is configured).
+> **`--protocol` defaults to `auto`** (a Profiler+Router picks the engine: any non-PDF document format → `native` offline, always; born-digital PDF → `native`; scan/complex PDF → a VLM). So `uparser parse doc.pdf` or `uparser parse deck.pptx` with no flags does the right thing. `mock` (placeholder output, *not* your document) is now **explicit-only** — request it deliberately with `--protocol mock`. Note: for `auto` to reach the offline `native` path the binary must be the `native`-enabled build (the shipped prebuilt is); if `auto` routes to a VLM it still needs an endpoint (it prints a clear stderr hint when none is configured).
 
 ## Agent helper scripts (one call, correct defaults)
 
@@ -39,9 +39,10 @@ Windows equivalents: `scripts\uparser-parse.ps1`, `scripts\uparser-check.ps1`.
 Endpoint/model for `uparser-parse` are resolved from `--endpoint`/`--model`,
 then `$UPARSER_ENDPOINT`/`$UPARSER_MODEL`, then the config file (below).
 
-Batch a folder (Markdown per file) with a plain loop:
+Batch a folder (Markdown per file) with a plain loop — mixed formats are fine, each one
+routes itself:
 ```bash
-for f in docs/*.pdf; do scripts/uparser-parse.sh "$f" > "${f%.pdf}.md"; done
+for f in docs/*; do scripts/uparser-parse.sh "$f" > "${f%.*}.md"; done
 ```
 
 Prefer the raw `uparser` binary directly when you want full control — the
@@ -87,22 +88,117 @@ uparser parse --protocol mineru-vlm \
 
 # Let uparser choose the engine automatically:
 uparser parse --protocol auto --format markdown mystery.pdf > out.md
+
+# Any Office/OpenDocument/EPUB/RTF/CSV file — offline, no flags needed:
+uparser parse --format markdown deck.pptx > deck.md
+uparser parse --format document-json report.docx > report.json   # lossless structure
 ```
 
 ## Choosing a protocol
 
-Decide with this table. When unsure, run `uparser classify <file>` first (cheap, no model) or use `--protocol auto`.
+Decide with this table. When unsure, use `--protocol auto` (the default), or run `uparser classify <file>` first — but note `classify` profiles **PDFs**; on a non-PDF document it reports `unknown` and tells you nothing, because those never need routing in the first place.
 
 | Situation | Use | Why |
 |---|---|---|
 | Born-digital PDF, need speed, no GPU | `native` | ms/page, zero deps; text-layer extraction |
 | Scanned / image-only PDF | `mineru-vlm` (or another VLM) | `native` has no OCR → empty output on scans |
 | Complex tables / figures matter | `mineru-vlm` | best table (OTSL→HTML) + reading order |
-| Don't know the document type | `auto` or `classify` first | Profiler routes born-digital→native, else→VLM |
-| Office / OpenDocument / EPUB / RTF / CSV input | `native` | parsed in-process from the source structure — **no LibreOffice, no model, no network**. Covers doc, docx, ppt, pptx, xls/xlsx/xlsm/xlsb, odt/ods/odp, rtf, epub, csv/tsv |
+| Don't know the document type | `auto` (the default) or `classify` first | non-PDF formats → `native` always; born-digital PDF → `native`; else → VLM |
+| Office / OpenDocument / EPUB / RTF / CSV input | `native` (the `auto` default already picks it) | parsed in-process from the source structure — **no LibreOffice, no model, no network**. See the next section |
 | Image input (png/jpg) | a VLM protocol | there is no text layer to read |
 
 Other protocols: `dots-ocr`, `monkeyocr-v2` (single/two-stage VLMs, need their own endpoint), `pipeline` (traditional layout→OCR→formula→table), `paddleocr`. Run `uparser protocols` to introspect every adapter's capabilities as JSON. See `references/protocols.md` for details on all of them.
+
+## Non-PDF documents (Office / OpenDocument / EPUB / RTF / CSV)
+
+These do **not** go through PDF conversion, rasterization or a model. `native` reads
+each format's own structure in-process, so a `.docx` heading is a heading because the
+file says so — not because a layout model guessed it from pixels. **No LibreOffice, no
+`soffice`, no network, no GPU.** This is also what plain `uparser parse <file>` does:
+`auto` routes every format below straight to `native`.
+
+| Input | Extensions | Read as |
+|---|---|---|
+| Word | `.docx`, `.doc` (legacy binary) | headings, paragraphs, lists, tables, footnotes/endnotes, images (`.doc` is text/paragraphs/tables only — see gaps) |
+| PowerPoint | `.pptx`, `.ppt` (legacy binary) | one unit per slide, outline lists, speaker notes, images |
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.xla`, `.xlam` | one unit per sheet, cells as a table (no rasterization at all) |
+| OpenDocument | `.odt`, `.ods`, `.odp` | same shapes as their OOXML counterparts |
+| EPUB | `.epub` | one unit per chapter, spine order, internal links resolved |
+| RTF | `.rtf` | paragraphs, character styles, tables, images |
+| Delimited text | `.csv`, `.tsv`, `.tab` | a single table |
+
+Format detection is **signature-first, extension-second**: a `.docx` misnamed `report.pdf`
+is still parsed as DOCX. The exception is delimited text — CSV/TSV have no magic bytes,
+so they are recognized **by extension only**. A CSV named `data.txt` will not be
+recognized (it falls through to the PDF/VLM path); rename it or pass the real extension.
+
+### Pick the output format deliberately
+
+| `--format` | What you get | Use it for |
+|---|---|---|
+| `markdown` | flattened Markdown: headings, nested lists, GFM tables, `![]()` images | reading, RAG chunks, diffing |
+| `json` (default) | the **page/block IR** shared with the PDF/VLM protocols: one page per unit, blocks with `category` (`title`/`text`/`table`), tables as HTML (with `rowspan`/`colspan`), inline emphasis kept as Markdown inside `text` | uniform handling across PDF *and* Office in one pipeline |
+| `document-json` | the **lossless canonical document**: `units[]` with `kind` (`page`/`slide`/`sheet`/`chapter`/`flow`) and `label`, nested list structure, table grids with explicit covered-cell slots, `notes[]`, `assets[]`, and per-format `warnings[]` | anything that needs real structure — slide-by-slide, sheet-by-sheet, footnote linkage, table geometry |
+
+`--format document-json` is only valid for these formats; on a PDF it exits 1 with
+`unsupported_output_format`.
+
+```bash
+uparser parse --format markdown       deck.pptx > deck.md
+uparser parse --format document-json  book.epub > book.json   # units[].kind == "chapter"
+uparser parse --format json           sheet.xlsx               # page IR, one page per sheet
+```
+
+### Flags that only apply here
+
+- `--no-notes` — drop footnotes, endnotes and speaker notes (extracted by default).
+- `--headers-footers` — include running headers/footers (excluded by default: they repeat on every page and pollute extracted text).
+- `--max-input-mib <N>` — reject an oversized input *before* parsing it.
+
+`--pages`, `--stream`, `--max-concurrency` and `--window-size` belong to the
+model/scheduler path and have **no effect** on `native` — the whole document is parsed in
+one pass and returned whole. Passing one prints a `warning:` line on stderr saying so, so
+you never mistake "returned everything" for "selected what I asked for". To keep only some
+slides/sheets/chapters, filter `units[]` (or `pages[]`) yourself from the JSON.
+
+`uparser classify` is not useful here — it is a PDF profiler and reports
+`source_format: "unknown"` for these. There is nothing to decide: they always parse
+offline with `native`.
+
+### Read the `warnings` array
+
+Every structured parse reports what it could *not* recover, as a warning rather than
+silently. Surface these to the user when they matter — e.g. a legacy `.ppt` reports that
+table cells came back as separate paragraphs. In `--format document-json` they are
+`{code, part, message}` objects (`UnsupportedFeature`, `AssetDropped`,
+`BrokenRelationship`, `TruncatedContent`, …); in `--format json` they are strings in
+`warnings`.
+
+Known gaps worth knowing before you promise a user something:
+
+| Format | Gap |
+|---|---|
+| `.doc` (legacy) | text, paragraphs and tables only — **no bold/italic, no heading levels** |
+| `.ppt` (legacy) | table cells come back as separate paragraphs, not a table; EMF/WMF pictures are not decoded (bitmap ones are) |
+| `.rtf` | list *types* are not parsed; every list renders as an ordered list |
+
+### Failure modes and exit codes
+
+| Situation | Exit | What to do |
+|---|---|---|
+| corrupt file, or a format nothing here handles | 1 | stop feeding this file — retrying unchanged will not help |
+| password-protected / encrypted | 2 | it is not readable without the password; uparser cannot decrypt it |
+| larger than the input budget, or a resource limit tripped (deeply nested records, huge spans) | 2 | raise `--max-input-mib`, or accept the file is hostile/degenerate |
+| parsed with recoverable losses | 0 | check `warnings` |
+
+### When you *would* want a VLM on an Office file
+
+Only when the file is a wrapper around scanned images (e.g. a DOCX whose "content" is a
+full-page photo). Forcing a VLM protocol converts the file to PDF first via **LibreOffice**
+(`soffice`) — if it is not installed you get exit code 2 and
+`required conversion tool "soffice" was not found on PATH`. For ordinary Office files
+this path is strictly worse: slower, needs a GPU endpoint, and throws away structure the
+source file already states.
 
 ## Output contract (important for agents)
 
@@ -147,23 +243,22 @@ uparser parse --protocol mineru-vlm --endpoint <url> --model <m> --stream huge.p
 
 By default, image/figure regions are cropped and written to `<source_stem>_images/` next to the source, and referenced in the Markdown as `![](images/<hash>.png)` (MinerU-style). Override the folder with `--assets-dir <dir>`, or pass `--no-assets` to skip the filesystem side effect entirely (no `![]()` links).
 
-The same applies to images *embedded* in a structured document (DOCX/PPTX/ODF/EPUB/RTF): they are written out content-addressed, keeping their original extension, and both the Markdown link and the `document-json` `assets[].path` point at the written file. A link is only emitted when the asset was actually written — you will never get an `![](asset-1f3c…)` that resolves to nothing.
+The same applies to images *embedded* in a structured document (DOCX/PPTX/ODF/EPUB/RTF, and bitmap pictures in legacy `.ppt`): they are written out content-addressed, keeping their original extension, and both the Markdown link and the `document-json` `assets[].path` point at the written file. A link is only emitted when the asset was actually written — you will never get an `![](asset-1f3c…)` that resolves to nothing.
 
 ## Key flags (see `parse --help` for all)
 
 - `--protocol <native|mineru-vlm|dots-ocr|monkeyocr-v2|pipeline|paddleocr|auto|mock>`
-- `--format <markdown|json>` (default `json`)
+- `--format <markdown|json|document-json>` (default `json`; `document-json` is the lossless
+  structured contract for non-PDF documents — see that section)
 - `--endpoint <url>` / `--model <name>` — for the VLM/OCR protocols
-- `--pages <1-5,7>` — 1-indexed page selection
-- `--max-concurrency <N>` — concurrent model requests (default 16; raise to 32–100 for a beefy endpoint)
-- `--window-size <N>` — pages processed together before buffers drop (default 64; lower only to cap memory on huge docs)
-- `--no-cache`, `--stream`, `--assets-dir`, `--no-assets`, `--no-postprocess`
-- `native` structured formats only: `--no-notes` (drop footnotes/endnotes/speaker notes),
+- `--assets-dir <dir>`, `--no-assets` — where embedded/cropped images go, or skip them
+- `--no-cache`, `--no-postprocess`
+- **Model/scheduler path only** (no effect on `native`, which warns if you pass them):
+  `--pages <1-5,7>`, `--stream`, `--max-concurrency <N>` (default 16; 32–100 for a beefy
+  endpoint), `--window-size <N>` (default 64; lower only to cap memory on huge docs)
+- **Non-PDF documents only:** `--no-notes` (drop footnotes/endnotes/speaker notes),
   `--headers-footers` (include running headers/footers, excluded by default because they
   repeat on every page), `--max-input-mib <N>` (reject an oversized input before parsing it)
-- `--format document-json` — the lossless structured contract for those formats
-  (nested lists, table grids with `rowspan`/`colspan`, notes, assets, per-format warnings);
-  `--format json` is the page/block IR, `--format markdown` the flattened text
 
 ## Configuring endpoints (avoid retyping `--endpoint`/`--model`)
 

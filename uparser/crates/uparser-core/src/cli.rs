@@ -39,6 +39,11 @@ const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// entirely for forced re-verification.
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Defaults for the two scheduler-tuning flags, named so the `native`
+/// path can tell "the user asked for this" from "clap filled it in".
+const DEFAULT_WINDOW_SIZE: usize = 64;
+const DEFAULT_MAX_CONCURRENCY: usize = 16;
+
 pub const EXIT_SUCCESS: i32 = 0;
 pub const EXIT_USAGE: i32 = 1;
 pub const EXIT_DEPENDENCY: i32 = 2;
@@ -90,7 +95,7 @@ pub enum Command {
         /// effective window is raised to at least `--max-concurrency`
         /// (a window smaller than the concurrency budget can never
         /// saturate it). Lower it only to cap memory on huge documents.
-        #[arg(long, default_value_t = 64)]
+        #[arg(long, default_value_t = DEFAULT_WINDOW_SIZE)]
         window_size: usize,
         /// Max concurrent model requests in flight across the whole
         /// document (page-level + per-block, sharing one budget).
@@ -99,7 +104,7 @@ pub enum Command {
         /// badly under-fed; MinerU's own http client defaults to 100).
         /// Raise toward 32-100 for a beefier endpoint, lower for a
         /// fragile/shared one.
-        #[arg(long, default_value_t = 16)]
+        #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENCY)]
         max_concurrency: usize,
         /// `pipeline`-only per-stage backend/endpoint overrides
         /// (ARCHITECTURE.md §11.2/T-5.1). Ignored by every other
@@ -450,6 +455,27 @@ fn run_parse(
         // scheduler entirely (see `run_parse_native`'s own doc comment),
         // and it has no network round-trip to amortize the way every
         // other protocol does — the main cost caching exists to avoid.
+        //
+        // The same bypass means the page/window/concurrency flags do not
+        // reach this path. Silently accepting them is worse than useless to
+        // an Agent: `--pages 2` on a deck looks like it selected slide 2 and
+        // actually returns the whole document.
+        for (flag, given) in [
+            ("--pages", wanted_pages.is_some()),
+            ("--stream", stream),
+            ("--window-size", window_size != DEFAULT_WINDOW_SIZE),
+            (
+                "--max-concurrency",
+                max_concurrency != DEFAULT_MAX_CONCURRENCY,
+            ),
+        ] {
+            if given {
+                eprintln!(
+                    "warning: {flag} has no effect on the `native` protocol — it parses the \
+                     whole document in one pass; the full result is returned"
+                );
+            }
+        }
         return run_parse_native(
             path,
             format,
@@ -1133,6 +1159,10 @@ fn resolve_auto_protocol(path: &str, bytes: &[u8]) -> (String, String) {
                 | uparser_document_engine::DocumentFormat::Rtf
                 | uparser_document_engine::DocumentFormat::Docx
                 | uparser_document_engine::DocumentFormat::Pptx
+                // See the same list in `api.rs`: the legacy binary formats
+                // are read by the same offline engine.
+                | uparser_document_engine::DocumentFormat::Doc
+                | uparser_document_engine::DocumentFormat::Ppt
         ) {
             return (
                 "native".to_owned(),
@@ -1391,4 +1421,47 @@ fn run_protocols() -> i32 {
         serde_json::to_string_pretty(&list).expect("protocol list is serializable")
     );
     EXIT_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every format the offline document engine can read must route to
+    /// `native` under `--protocol auto`. The legacy binary formats were
+    /// missing from that list, so `uparser parse deck.ppt` — with no flags,
+    /// which is the common Agent call — routed to a VLM and dead-ended on
+    /// "no endpoint configured", despite the deck parsing fine offline.
+    #[cfg(feature = "native")]
+    #[test]
+    fn auto_routes_every_offline_readable_format_to_native() {
+        for name in [
+            "deck.ppt",
+            "letter.doc",
+            "deck.pptx",
+            "letter.docx",
+            "book.epub",
+            "notes.rtf",
+            "sheet.xlsx",
+            "sheet.ods",
+            "text.odt",
+            "slides.odp",
+            "data.csv",
+            "data.tsv",
+        ] {
+            // Bytes no signature sniffer recognises, so the decision rests on
+            // the format alone rather than on fixture contents.
+            let (protocol, reason) = resolve_auto_protocol(name, b"not a real document");
+            assert_eq!(protocol, "native", "{name} routed to {protocol} ({reason})");
+        }
+    }
+
+    /// A PDF must *not* take that shortcut: it goes through the profiler, so
+    /// a scanned one can still reach a VLM.
+    #[cfg(feature = "native")]
+    #[test]
+    fn auto_still_profiles_a_pdf_rather_than_shortcutting_it() {
+        let (protocol, _) = resolve_auto_protocol("scan.pdf", b"%PDF-1.7\n");
+        assert_ne!(protocol, "native");
+    }
 }

@@ -101,9 +101,9 @@ uparser parse --protocol native --headers-footers report.docx # 包含页眉页�
 uparser parse --protocol native --max-input-mib 64 report.docx  # 解析前拒绝超过 64MiB 的输入
 ```
 
-嵌入图片(DOCX/PPTX/ODF/EPUB/RTF 内嵌的图)默认按内容寻址写入 `<源文件名>_images/` 并在 Markdown 中生成 `![]()` 链接,`--no-assets` 关闭该副作用。
+嵌入图片(DOCX/PPTX/ODF/EPUB/RTF/`.ppt` 内嵌的图)默认按内容寻址写入 `<源文件名>_images/` 并在 Markdown 中生成 `![]()` 链接,`--no-assets` 关闭该副作用。
 
-**已知差距**(详见 [`NATIVE_VS_ANYDOC_IMPROVEMENT_REPORT.md`](NATIVE_VS_ANYDOC_IMPROVEMENT_REPORT.md) 末尾清单):legacy `.doc` 目前只恢复文本/段落/表格,不恢复字符样式与标题层级;RTF 的 `\listtable` 未解析,列表类型统一按有序列表呈现。
+**已知差距**(详见 [`NATIVE_VS_ANYDOC_IMPROVEMENT_REPORT.md`](NATIVE_VS_ANYDOC_IMPROVEMENT_REPORT.md) 末尾清单):legacy `.doc` 目前只恢复文本/段落/表格,不恢复字符样式与标题层级;legacy `.ppt` 的表格按单元格文本摊平(不还原为表格),metafile(EMF/WMF)图片不解码;RTF 的 `\listtable` 未解析,列表类型统一按有序列表呈现。
 
 ---
 

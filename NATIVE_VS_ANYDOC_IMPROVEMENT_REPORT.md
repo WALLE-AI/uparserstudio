@@ -322,9 +322,98 @@ lint          clippy -D warnings 干净（engine + core --features native）；f
 | 项 | 说明 |
 |---|---|
 | **DOC 字符/段落样式** | 当前 DOC 只恢复文本、段落和表格，**不恢复粗体/斜体/标题层级**——那需要 STSH + PlcfBteChpx/Papx + SPRM 解析。anydoc 在 `text.doc` 上能给出 `# Fixture Document` 和 `**bold**`，native 给的是纯文本。这是 native 与 anydoc 在 DOC 上仅剩的实质差距，已在 `doc.rs` 模块文档和运行时 warning 里明说 |
-| **PPT master/layout 继承、表格、图片** | 同样只恢复片内文本与备注，warning 里明说 |
+| **PPT master/layout 继承、表格、图片** | ~~同样只恢复片内文本与备注~~ —— **第三轮已做（见 §13）**，仅表格与 metafile 图片仍未做 |
 | **RTF `\listtable`** | 未解析，列表类型统一按 decimal 呈现 |
 | **PPTX/PPT 的 `# Slide N` 合成标题** | 无真实标题占位符时用合成标签分隔幻灯片；anydoc 直接拼接。这是刻意的差异（扁平化后需要片间分隔），不是缺陷 |
 | **`hugespan` 的钳制 vs 报错** | 保持钳制+告警（执行方案 §5.3 规定的行为），未为了对齐分数改成硬报错 |
 | **工作区级 clippy** | 仍有失败，全部在本轮未触碰的 vendored `uparser-native-engine` 与缺 Python 的 `pyo3-ffi` |
 | **cargo-fuzz target** | 未建。本机是 Windows/MSVC，libfuzzer 跑不起来，写了也无法验证；mutation 语料是可在本机真实运行的替代 |
+
+# 第三轮：PPT master/layout 继承与图片（2026-08-17）
+
+针对 §12 的 **PPT master/layout 继承、表格、图片** 一行。本轮只做 PPT，DOC 样式（STSH + PlcfBteChpx/Papx + SPRM）按计划留到下一轮。
+
+`formats/ppt.rs` 拆成 `formats/ppt/{mod,styletext,pictures}.rs`。
+
+## 13. 做了什么
+
+### 13.1 master 继承：`TxMasterStyleAtom` + `StyleTextPropAtom`（新 `styletext.rs`）
+
+这两条记录是同一组变长结构（`TextPFException` / `TextCFException`）的两种容器，所以放在一个模块里。三个必须做对的点：
+
+1. **字段顺序不是 mask 位顺序**。掩码说明哪些字段在场，字段则按规范声明顺序排列。顺序错了不会报错，只会把之后每个字段整体错位——所以走位是显式写死的，每一步注释掉自己跳过的字段。
+2. **属性是三态而不是布尔**。"未指定"不等于"关闭"：某一 run 没写 bold，它继承的是 master 对应缩进层级的默认值。提前塌缩成 `false`，master 继承就整个丢了——这正是本轮要修的东西本身。
+3. **run 长度按 UTF-16 code unit 计**，不是按 `char`。一个星平面字符消耗两个单位。
+
+`TxMasterStyleAtom` 的 `recInstance` 既是它作用的 text type，也是"每个 level 前是否多一个 indentLevel 字段"（instance ≥ 5）的判据。
+
+幻灯片经 `SlideAtom.masterIdRef`（偏移 12）选 master，找不到时退到第一个 master——对绝对多数的单 master 演示文稿这也是正确答案。
+
+**实测**：`handmade-multimaster.ppt`（专为这条造的 fixture）现在输出 `- **Alpha master body text**` 和 `*Beta master body text*`，与 anydoc 快照**逐字节一致**——两张片各自继承了不同 master 的 bullet / bold / italic 默认值。`pres.ppt` 的大纲现在是 `- Top level point` / `  - Nested detail` / `- Second point with emphasis`，同样与 anydoc 一致（缩进层级来自 `TextPFRun.indentLevel`，bullet 来自 master 默认值）。
+
+顺带查证了一件事：`pres.ppt` 里 "emphasis" 的加粗，native 和 anydoc 都没给出。直接解码该 shape 的 `StyleTextPropAtom` 确认**文件本身就没有这个 run**（三个 character run 的掩码都只有 0x40000=颜色）——是 LibreOffice 导出 PPT 时丢的，不是读取端的问题。
+
+### 13.2 顺带修掉的两个真实缺陷（都不是本轮任务，是做的过程中撞出来的）
+
+- **`SlideListWithText` 的 instance 没有校验**。同一个 document 容器里有三份 `SlideListWithText`（instance 0=幻灯片、1=母版、2=备注页），三份装的都是同型的 `SlidePersistAtom`。原实现把三份的条目**全部**收进同一个列表，靠后面"只保留真的是 RT_Slide 的偏移"过滤掉母版/备注——偏移是滤干净了，但 `slide_ids` 没有，于是**只要一份 deck 有母版列表（也就是几乎所有真实 deck），slideId → 放映序号的映射就整体错位**，备注就会挂到错的幻灯片上。现在按容器 instance 分流。
+- **有备注却一条也没输出**。原实现只接受 text type 2（notes 占位符）的 shape 作为备注。LibreOffice 导出的 PPT 把**每一个** text shape 都标成 type 4（other），于是 `pres.ppt` 的两条演讲者备注被静默丢弃（rc 0、无告警）。改为"排除标题占位符，其余都算备注"——备注页里重复的标题/正文占位符本来就是空的，`collect_shapes` 已经会丢弃空 shape。现在 `pres.ppt` 输出 `Speaker note for the intro slide.` 和 `Second slide notes mention the table.`，与 anydoc 一致；`handmade-sparsenotes.ppt` 的稀疏挂载仍然正确（只有第 2 张片有备注）。
+
+### 13.3 图片（新 `pictures.rs`）
+
+一张 PPT 图片跨**两个 OLE 流、三层记录**，三层缺一不可：
+
+```
+shape 的 OfficeArtFOPT 属性 pib（1-based 索引，不是偏移也不是 id）
+  → 文档 drawing group 里的 blip store：第 pib 个 OfficeArtFBSE 的 foDelay（偏移 28）
+    → Pictures 流该偏移处的 blip 记录 → 真正的 JPEG/PNG 字节
+```
+
+anydoc 只做到"把 Pictures 流里的所有 blip 当作文档级 asset 倒出来"，不做定位，因此 Markdown 里没有 `![]()`。本轮把 `pib → FBSE → Pictures` 整条链走通，图片按出现顺序落在 `Block::Figure`，复用引擎既有的内容寻址 asset 机制，因此和 DOCX/PPTX 的图片走同一条落盘与 `![]()` 渲染路径。
+
+两个容易出错、都写了针对性测试的点：
+
+- **blip 的数据起点取决于记录自己的 `recInstance`**，某些 instance 前面是两个 16 字节 UID 而不是一个，长度字段里看不出来。取错会在图片数据前多 16 字节垃圾，落盘得到一个任何看图器都打不开的文件。
+- **blip store 必须限定在"当前"document 容器内**。编辑过的 deck 会把被取代的旧世代留在同一个流里；按流序取第一个 store 可能取到旧的，于是每个 `pib` 索引整体错位，**幻灯片静默配到别人的图**。回归测试 `a_superseded_generations_blip_store_does_not_shift_the_picture_index` 构造了这个形状，并**验证过它确实抓得住**：临时改回全流扫描，该测试立刻拿到 `STALEPNG` 而不是 `PNGBYTES`。
+
+metafile（EMF/WMF）blip 不解码——它们通常是 deflate 压缩的矢量图，要在 Markdown 里有意义还得渲染，代价与收益不成比例；现在按 `AssetDropped` 告警，而不是静默消失。
+
+### 13.4 实测
+
+仓库里 5 份 `.ppt` 语料全部重跑：`pres.ppt` / `handmade-multimaster.ppt` / `handmade-sparsenotes.ppt` / `brokenpersist--recovers.ppt` 均 rc 0 且内容如上；`deepnest--errors.ppt` 仍 rc 2 并点名 `max_record_depth`（预算语义未回归）。
+
+**图片是这轮唯一没有真实语料的东西**——仓库里没有任何一份带图的 `.ppt`（`pres.ppt` 的 `Pictures` 流长度为 0），本机也没有 LibreOffice 可以现造。所以做了两级验证：Rust 单元测试用 `cfb` 现搭一份合成 deck 走**真实 `parse()` 入口**；另外用一个**独立写的 Python 生成器**（不复用 Rust 那份构造代码，避免"生成器和解析器犯同一个错"）造了一份含真实 1×1 PNG 的 deck，跑完整 CLI：
+
+```
+$ uparser parse --protocol native --format markdown /tmp/picture-deck.ppt
+![](picture-deck_images/b1ff9c8e….png)
+
+Text under the picture
+
+$ file picture-deck_images/b1ff9c8e….png
+PNG image data, 1 x 1, 8-bit/color RGB, non-interlaced
+```
+
+测试：引擎 85 单元（+27）+ 4 mutation；workspace 全绿(321 core 单元 + 29 CLI + 2 contract + 7 native-document + 755 native-engine)。`clippy -D warnings` 与 `fmt --check` 干净。
+（注：`transport::tests` 的 9 个 wiremock 用例在本机需要 `NO_PROXY=127.0.0.1,localhost`，否则公司代理会把 localhost 请求劫持成 nginx 404——与本轮改动无关。）
+
+## 14. 第三轮之后仍未做的
+
+| 项 | 说明 |
+|---|---|
+| **DOC 字符/段落样式** | 未做，下一轮的目标。需要 STSH + PlcfBteChpx/Papx + SPRM，且要先把 `doc.rs::extract_text` 从"拼成一个 `String`"改成保留 CP→FC 映射（CHPX/PAPX 全按 FC 索引） |
+| **PPT 表格** | 未做，**anydoc 也没做**：PPT 表格是 OfficeArt 形状组，没有 DOC 那种 `TDefTable` 可依。两边都是把单元格文本摊平成独立段落 |
+| **PPT metafile 图片** | EMF/WMF 不解码，见 §13.3 |
+| **PPT 标题占位符** | 只有生产者真的标了占位符（`TextHeaderAtom` type 0/6）时才会成为标题。LibreOffice 导出的 PPT 把所有 shape 标成 type 4，此时无从判断——anydoc 同样如此 |
+| **RTF `\listtable`** | 未解析，列表类型统一按 decimal 呈现 |
+| **cargo-fuzz target** | 仍未建。原因已变化：本机现在是 Linux，libfuzzer 可以跑，不再有"写了也无法验证"的理由——这条现在是纯粹的待办 |
+
+# 第四轮：多格式的 CLI 路由与 skill（2026-08-17）
+
+改 skill 的过程中拿真实命令逐格式核对，撞出两个 CLI 层的真实缺陷，都已修：
+
+- **`.doc` / `.ppt` 在默认的 `--protocol auto` 下被路由到 VLM**。`cli.rs::resolve_auto_protocol` 和 `api.rs` 里那份"可离线解析的格式"清单是 P7/P8 时写的，两个 legacy 二进制格式是第二轮才加的，从没补进去。后果：`uparser parse deck.ppt`（不带任何 flag，也就是 Agent 最常见的调用方式）会打印 `routed to "mineru-vlm"` 然后卡在"没有配置 endpoint"，而这份 deck 本来完全可以离线解析完。两处清单都补上 `Doc` / `Ppt`，并加了回归测试 `auto_routes_every_offline_readable_format_to_native`（遍历 12 个扩展名）和 `auto_still_profiles_a_pdf_rather_than_shortcutting_it`（确保 PDF 仍走 profiler，扫描件才能进 VLM）。
+- **`--pages` / `--stream` / `--window-size` / `--max-concurrency` 在 `native` 路径上被静默忽略**。这条路径绕开 scheduler，这几个 flag 根本到不了。对 Agent 来说静默接受比不支持更糟：`--pages 2` 看起来像选了第 2 张片，实际返回整份文档。现在只要显式传了就在 stderr 打 `warning: ... has no effect on the native protocol`（默认值不触发）。
+
+`skills/uparser/SKILL.md` 新增 "Non-PDF documents" 一节（格式表、三种输出格式怎么选、只对该路径生效的 flag、`warnings` 怎么读、按格式的已知差距、退出码、什么时候才该对 Office 文件强上 VLM），frontmatter 的 description 也补全了格式列表（否则这个 skill 在"把 pptx 转 markdown"这类请求上不会被触发）。`references/protocols.md` 的 §10 原文写的是"DOCX/PPTX 先经 LibreOffice 转 PDF"——那只在强制 VLM 时成立，对默认路径是错的误导，已重写。
+
+11 种格式用裸 `uparser parse` 逐个实测：全部 rc 0、全部 `routed to "native" (source-semantic … parser is available locally)`。
