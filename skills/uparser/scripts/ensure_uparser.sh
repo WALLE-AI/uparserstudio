@@ -11,12 +11,12 @@
 # Env overrides: UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME (cache root).
 set -euo pipefail
 
-# Pinned to the last release that published a linux-x86_64 asset. v0.2.0
-# only shipped a Windows binary (built from a Windows machine with no Linux
-# cross-toolchain available); bumping this pin without a matching asset
-# would make every Linux/WSL skill user silently fall back to a from-source
-# build. Bump this once a linux-x86_64 asset exists for a newer release.
-VERSION="${UPARSER_VERSION:-0.1.1}"
+# Pinned to the last release that published a linux-x86_64 asset. This pin
+# is per-platform on purpose: v0.2.0 shipped Windows only, so the Linux pin
+# stayed at 0.1.1 until v0.3.0 published a linux-x86_64 asset. Bumping it
+# without a matching asset makes every Linux/WSL skill user silently fall
+# back to a from-source build, so only move it once the asset exists.
+VERSION="${UPARSER_VERSION:-0.3.0}"
 REPO="${UPARSER_REPO:-WALLE-AI/uparserstudio}"
 CACHE="${UPARSER_HOME:-$HOME/.cache/uparser}/bin"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

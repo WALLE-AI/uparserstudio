@@ -57,7 +57,9 @@ You only need to install this skill. The binary is fetched on first use:
 1. `uparser` already on PATH → use it;
 2. a previously downloaded copy in `~/.cache/uparser/bin/` → reuse it;
 3. otherwise **download the version-pinned prebuilt from GitHub Releases**
-   (`WALLE-AI/uparserstudio`, currently `v0.1.0`, Linux x86_64), trying the
+   (`WALLE-AI/uparserstudio`, currently `v0.3.0` on Linux x86_64 and `v0.2.0`
+   on Windows — the pins are per-platform, each tracking the newest release
+   that actually published an asset for it), trying the
    direct URL then the `ghfast.top` mirror, verifying `SHA256SUMS`, and
    smoke-testing it;
 4. if no prebuilt fits the platform (non-x86_64, glibc < 2.35, Windows with no
