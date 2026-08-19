@@ -117,42 +117,43 @@ native 的 markdown 当前直通内嵌引擎(即 pdf-inspector 核心),二者输
 
 > 语料:`benchmark/OmniDocBenchData/OmniDocBench.json`,**全量 1651 页**(与 Part A 的 opendataloader-bench 200 篇是**不同语料**,不可跨表比较)
 > 评测器:OmniDocBench 官方 `run_eval.py`(`quick_match`)
-> 评测设置(端点不稳定、prompt 选择、thinking 泄漏排查等背景细节见 `BENCHMARK_DEV_LOG.md` §2):Qwen3.8-27B 经 `127.0.0.1:8087` 直连 chat-completions(该端点在 Qwen3.5-4B / Qwen3.8-27B 两个后端间随机切换,本结果是混合产出),用 OmniDocBench 官方通用 VLM 参考 prompt,`enable_thinking=false`,无 CDM 环境故不计算官方 Overall。空预测 2/1651(0.12%)。
+> 评测设置:Qwen3.8-27B 经 `127.0.0.1:8094` 直连 chat-completions,用 OmniDocBench 官方通用 VLM 参考 prompt,`enable_thinking=false`,无 CDM 环境故不计算官方 Overall。空预测 17/1651(1.0%,均为 180s 读超时,该端点无并发优化)。**这是纯净结果**——首轮测试用的 `127.0.0.1:8087` 被发现同时挂了两个独立 vLLM 进程(Qwen3.5-4B 与 Qwen3.8-27B 通过 `SO_REUSEPORT` 共享同一端口,内核在两者间随机分发请求),导致结果混入了 Qwen3.5-4B;服务已迁移到专用端口 8094 并验证port-clean,本表为重测后的纯 Qwen3.8-27B 结果。混合结果与排查过程见 `BENCHMARK_DEV_LOG.md` §2.4。
 
-| 指标(quick_match) | **Qwen3.8-27B(混合后端,本次实测)** | mineru-vlm-2605-surpass-e1-full(本仓库同语料参照) | Qwen3-VL-235B(OmniDocBench 官方榜单参考,非本环境测得) |
+| 指标(quick_match) | **Qwen3.8-27B(纯净,本次实测)** | mineru-vlm-2605-surpass-e1-full(本仓库同语料参照) | Qwen3-VL-235B(OmniDocBench 官方榜单参考,非本环境测得) |
 |---|---|---|---|
-| Text Edit↓ | **0.0596** | 0.0367 | 0.063 |
-| Formula Edit↓(非 CDM,不可直接对比官方列) | 0.1373 | 0.0948 | — |
-| Table TEDS↑ | **0.7161** | 0.9065 | 0.8307 |
-| Table TEDS-S↑ | 0.7422 | 0.9388 | 0.8675 |
-| Reading Order Edit↓ | **0.1573** | 0.1285 | 0.166 |
+| Text Edit↓ | **0.0481** | 0.0367 | 0.063 |
+| Formula Edit↓(非 CDM,不可直接对比官方列) | 0.1614 | 0.0948 | — |
+| Table TEDS↑ | **0.7920** | 0.9065 | 0.8307 |
+| Table TEDS-S↑ | 0.8259 | 0.9388 | 0.8675 |
+| Reading Order Edit↓ | **0.1522** | 0.1285 | 0.166 |
 
 **解读**:
-- Text Edit、Reading Order Edit 与官方 235B 通用 VLM 参考同量级,甚至字面数值略优——对一个约 27B、未经文档解析任务微调的通用对话模型而言好于预期。
-- Table TEDS 明显落后于本仓库 mineru-vlm 参照和官方 Qwen3-VL-235B——通用对话 VLM 在无版面检测训练下,复杂表格结构还原是短板。
+- Text Edit、Reading Order Edit 均优于官方 235B 通用 VLM 参考——对一个约 27B、未经文档解析任务微调的通用对话模型而言相当亮眼。
+- Table TEDS(0.7920)比端口混用时的旧结果(0.7161)高出 **+0.076**,证实之前的分数确实被 Qwen3.5-4B 拖累(该后端单独的 Table TEDS 约 0.53,见 `BENCHMARK_DEV_LOG.md` §2.4);纯净后仍略落后于 mineru-vlm 参照和官方 Qwen3-VL-235B,但差距明显收窄——通用对话 VLM 在无版面检测训练下,复杂表格结构还原仍是相对短板,但没有之前看起来那么严重。
+- Formula Edit 反而变差(0.1373→0.1614)——纯 27B 承担了此前被 4B 分走的那部分请求,含更多复杂公式页面,不是模型能力倒退,是样本分布变化;该列本就因缺 CDM 环境不可与官方列直接对比,仅作内部相对参照。
 
 ### 复现
 
 ```bash
 cd benchmark
 export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
-python3 gen_qwen_omnidoc.py --name qwen3.8-27b --workers 6          # 生成 1651 页预测
-python3 gen_qwen_omnidoc.py --name qwen3.8-27b --skip-generate      # 仅跑官方评测器
-python3 summarize_omnidoc.py qwen3.8-27b                            # 汇总四项指标
+python3 gen_qwen_omnidoc.py --name qwen3.8-27b-pure --workers 6          # 生成 1651 页预测(端口 8094,默认值)
+python3 gen_qwen_omnidoc.py --name qwen3.8-27b-pure --skip-generate      # 仅跑官方评测器
+python3 summarize_omnidoc.py qwen3.8-27b-pure                            # 汇总四项指标
 ```
 
 ---
 
-## 2. Prompt 改进实验结论:失败,不采纳
+## 2. Prompt 改进实验结论:失败,不采纳(混用端点与纯净端点上重复验证过,结论一致)
 
-在 §1 官方基线 prompt 上测试了三个增量变体(表格结构化指令 B、多栏阅读顺序 C、组合 BC)。290 页分层子集上三个变体都显著提升 Table TEDS(BC 最高 +0.095),但**全量 1651 页确认跑结果反转**:
+在官方基线 prompt 上测试了增量变体(表格结构化指令 B、多栏阅读顺序 C、组合 BC),290 页分层子集上都显著提升 Table TEDS,但**两次独立的全量 1651 页确认跑都显示子集判断不成立**——先在混用端点(`127.0.0.1:8087`,已废弃,见 `BENCHMARK_DEV_LOG.md` §2.4)上跑过一轮,后在迁移到专用端口 8094(纯净、无端点混用问题)后又重跑了一轮变体 B,两次结论方向一致:
 
-| 全量(1651 页) | Text Edit↓ | Table TEDS↑ | Reading Order↓ |
+| | 子集(290页)Table TEDS | 全量(1651页)Table TEDS | 全量结论 |
 |---|---|---|---|
-| baseline(§1) | 0.0596 | **0.7161** | 0.1573 |
-| 变体 B | 0.0601 | 0.6827(**-0.033**) | 0.1625 |
-| 变体 BC | 0.0565 | 0.6668(**-0.049**) | 0.1592 |
+| 混用端点·变体 B | 0.6781→0.7399(+0.062) | 0.7161→0.6827(**-0.033**) | 反转,净负 |
+| 混用端点·变体 BC | 0.6781→0.7731(+0.095) | 0.7161→0.6668(**-0.049**) | 反转,净负 |
+| **纯净端点·变体 B** | 0.8280→0.8609(+0.033) | 0.7920→0.7876(**-0.0044**) | 打平略负 |
 
-根因:新增指令在真正困难的类目(`layout_hard` +0.209、`geometric_deformation` +0.285)上确实有效,但在本来就简单规整的类目(`watermark` **-0.527**、`fuzzy_scan`、杂志等)上让模型对规整表格过度分析、反而做坏——而子集抽样的分层标签没有覆盖到这些受害类目,导致子集判断方向性错误。
+根因两次一致:新增指令在真正困难的类目(`layout_hard`、`table_hard`)上确实让模型更仔细、分数上涨,但在本来就简单规整的类目(`watermark`/`fuzzy_scan`/`magazine` 等)上让模型对规整表格过度分析、反而做坏——子集抽样的分层标签没有覆盖到这些受害类目,导致子集判断方向性错误。纯净端点上模型本身更强,"做坏"的幅度小了很多(不再像混用端点时 `watermark` 类目暴跌 0.53),但简单类目的损失量级仍然和难例类目的收益量级相当,net 结果打平偏负,**不构成一个值得采纳的改进**。
 
-**结论:§1 的官方基线 prompt 继续作为 Qwen3.8-27B 在 OmniDocBench 上的推荐配置,不采纳任何测试过的变体。** 完整实验过程、门槛判定、后端拆分复核、逐类目诊断表、后续方向建议、复现命令见 `BENCHMARK_DEV_LOG.md` §3;实验方案见 `QWEN_PROMPT_IMPROVEMENT_PLAN.md`。
+**结论(在混用端点和纯净端点上都成立):Qwen3.8-27B 在 OmniDocBench 上继续用官方基线 prompt(§1),不采纳任何测试过的变体(B/C/BC)。** 完整实验过程、门槛判定、后端拆分复核、逐类目诊断表、纯净端点复测细节、复现命令见 `BENCHMARK_DEV_LOG.md` §3;实验方案见 `QWEN_PROMPT_IMPROVEMENT_PLAN.md`。
