@@ -1,0 +1,51 @@
+name: uparser-v2
+
+on:
+  push:
+    paths:
+      - "uparser/**"
+      - ".github/workflows/uparser-v2.yml"
+  pull_request:
+    paths:
+      - "uparser/**"
+      - ".github/workflows/uparser-v2.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [core-baseline, core-native, workspace]
+    env:
+      NO_PROXY: 127.0.0.1,localhost
+      no_proxy: 127.0.0.1,localhost
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: uparser
+      - name: Test core baseline
+        if: matrix.configuration == 'core-baseline'
+        run: cargo test --manifest-path uparser/Cargo.toml -p uparser-core --no-default-features
+      - name: Test core native
+        if: matrix.configuration == 'core-native'
+        run: cargo test --manifest-path uparser/Cargo.toml -p uparser-core --features native
+      - name: Test workspace
+        if: matrix.configuration == 'workspace'
+        run: cargo test --workspace --manifest-path uparser/Cargo.toml
+
+  pdfium-contract:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: uparser
+      - run: cargo check --manifest-path uparser/Cargo.toml -p uparser-core --all-targets --features pdfium

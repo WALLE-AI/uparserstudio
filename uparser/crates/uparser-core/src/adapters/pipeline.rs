@@ -43,7 +43,6 @@ use crate::otsl;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
 use base64::Engine as _;
-use futures::future::join_all;
 use std::time::Duration;
 
 /// Categories skipped entirely at the ocr/formula/table recognition
@@ -191,6 +190,13 @@ impl ProtocolAdapter for PipelineAdapter {
         page: &RenderedPage,
         ctx: &ParseCtx,
     ) -> Result<Vec<Block>, PageError> {
+        crate::stage_graph::PIPELINE_STAGE_GRAPH
+            .validate()
+            .map_err(|error| PageError {
+                page_num: page.page_num,
+                message: error.to_string(),
+                stage: Some("stage_graph".to_owned()),
+            })?;
         // Stage 1: layout, whole page, always Remote (no Local
         // implementation exists for this stage).
         let layout_req = serde_json::to_value(LayoutStageRequest {
@@ -198,14 +204,16 @@ impl ProtocolAdapter for PipelineAdapter {
         })
         .expect("LayoutStageRequest always serializable");
         let layout_endpoint = self.stage_endpoint(&self.layout_endpoint, "layout", None);
-        let layout_resp = ctx
-            .dispatch_rest(&layout_endpoint, layout_req, self.timeout, self.max_retries)
-            .await
-            .map_err(|e| PageError {
-                page_num: page.page_num,
-                message: e.to_string(),
-                stage: Some("layout".into()),
-            })?;
+        let layout_resp = crate::shape_executor::rest_stage(
+            page,
+            ctx,
+            &layout_endpoint,
+            layout_req,
+            self.timeout,
+            self.max_retries,
+            "layout",
+        )
+        .await?;
         let layout: LayoutStageResponse =
             serde_json::from_value(layout_resp).map_err(|e| PageError {
                 page_num: page.page_num,
@@ -262,12 +270,7 @@ impl ProtocolAdapter for PipelineAdapter {
                 (index, self.recognize_text(&crop_img, index, ctx).await)
             }
         });
-        let stage_results = join_all(futures_iter).await;
-
-        let mut outcome_by_index: std::collections::HashMap<
-            usize,
-            Result<Option<RecognizedContent>, String>,
-        > = stage_results.into_iter().collect();
+        let mut outcome_by_index = crate::shape_executor::collect_indexed(futures_iter).await;
 
         // §11.5/M8: MinerU's own pipeline reading order depends on
         // `para_split` heuristics this project doesn't port; per the

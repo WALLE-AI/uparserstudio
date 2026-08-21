@@ -3,11 +3,11 @@
   (Windows mirror of uparser-parse.sh). Give it a file; it returns Markdown on
   stdout and the binary's own semantic exit code.
 
-  It NEVER uses the `mock` protocol (the raw binary's silent default), picks
+  It never selects `mock`, picks
   `native` (offline) when no VLM endpoint is resolvable and `auto` (with the
   endpoint/model injected) when one is, and defaults --format to markdown.
   Endpoint is resolved from --endpoint / $env:UPARSER_ENDPOINT / config[mineru-vlm].
-  Anything you pass through (incl. an explicit --protocol/--endpoint/--format)
+  Anything you pass through (incl. an explicit --mode/--protocol/--endpoint/--format)
   is forwarded unchanged and always wins.
 
   Usage: .\uparser-parse.ps1 <file> [any uparser parse flags...]
@@ -32,6 +32,7 @@ function Read-Ini([string]$section, [string]$key) {
 }
 
 $a = @($Args)
+$hasMode = ($a -contains '--mode') -or [bool]($a | Where-Object { $_ -like '--mode=*' })
 $hasProto = ($a -contains '--protocol') -or [bool]($a | Where-Object { $_ -like '--protocol=*' })
 $hasEp = ($a -contains '--endpoint') -or [bool]($a | Where-Object { $_ -like '--endpoint=*' })
 $hasModel = ($a -contains '--model') -or [bool]($a | Where-Object { $_ -like '--model=*' })
@@ -40,7 +41,7 @@ $hasFormat = ($a -contains '--format') -or [bool]($a | Where-Object { $_ -like '
 $inject = @()
 if (-not $hasFormat) { $inject += @('--format', 'markdown') }
 
-if (-not $hasProto) {
+if (-not $hasMode -and -not $hasProto) {
   $ep = if ($env:UPARSER_ENDPOINT) { $env:UPARSER_ENDPOINT } else { Read-Ini 'mineru-vlm' 'endpoint' }
   $md = if ($env:UPARSER_MODEL) { $env:UPARSER_MODEL } else { Read-Ini 'mineru-vlm' 'model' }
   if ($hasEp -or $ep) {

@@ -26,7 +26,6 @@ use crate::robustness;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
-use futures::future::join_all;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -34,10 +33,11 @@ const LAYOUT_IMAGE_SIZE: u32 = 1036;
 const MAX_EDGE_RATIO: f32 = 50.0;
 const MIN_EDGE: u32 = 28;
 const IOU_DEDUPE_THRESHOLD: f32 = 0.8;
+const IMAGE_BLOCK_MEMBER_OVERLAP_THRESHOLD: f32 = 0.9;
 
 /// Native categories for which stage 2 (content extraction) is skipped
-/// entirely — confirmed from `mineru_vl_utils` v0.1.14.
-const SKIP_CONTENT: &[&str] = &["image", "list", "equation_block"];
+/// entirely: the v0.1.14 set plus 2605's composite `image_block` parent.
+const SKIP_CONTENT: &[&str] = &["image", "image_block", "list", "equation_block"];
 
 pub struct MineruVlmAdapter {
     /// Base chat-completions endpoint. Not reachable yet from the CLI
@@ -149,6 +149,44 @@ struct PendingBlock {
     angle: Option<u32>,
 }
 
+fn overlap_over_first_area(first: [i32; 4], second: [i32; 4]) -> f32 {
+    let first_width = (first[2] - first[0]).max(0) as f32;
+    let first_height = (first[3] - first[1]).max(0) as f32;
+    let first_area = first_width * first_height;
+    if first_area <= 0.0 {
+        return 0.0;
+    }
+
+    let intersection_width = (first[2].min(second[2]) - first[0].max(second[0])).max(0) as f32;
+    let intersection_height = (first[3].min(second[3]) - first[1].max(second[1])).max(0) as f32;
+    intersection_width * intersection_height / first_area
+}
+
+/// MinerU 2605 emits `image_block` as a composite-image parent and emits
+/// its component `image` regions separately. Keep the parent crop and absorb
+/// children that it contains, matching MinerU's 90% member-overlap rule.
+fn absorb_image_block_members(pending: Vec<PendingBlock>) -> Vec<PendingBlock> {
+    let absorbed: Vec<bool> = pending
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            block.category_raw == "image"
+                && pending.iter().enumerate().any(|(parent_index, parent)| {
+                    parent_index != index
+                        && parent.category_raw == "image_block"
+                        && overlap_over_first_area(block.bbox_px, parent.bbox_px)
+                            >= IMAGE_BLOCK_MEMBER_OVERLAP_THRESHOLD
+                })
+        })
+        .collect();
+
+    pending
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| (!absorbed[index]).then_some(block))
+        .collect()
+}
+
 #[async_trait]
 impl ProtocolAdapter for MineruVlmAdapter {
     fn name(&self) -> &'static str {
@@ -212,11 +250,8 @@ impl ProtocolAdapter for MineruVlmAdapter {
             &layout_data_url,
             Self::layout_sampling(),
         );
-        let layout_resp = ctx.dispatch(layout_req).await.map_err(|e| PageError {
-            page_num: page.page_num,
-            message: e.to_string(),
-            stage: Some("layout".into()),
-        })?;
+        let layout_resp =
+            crate::shape_executor::chat_stage(page, ctx, layout_req, "layout").await?;
         let layout_content = extract_chat_content(&layout_resp).map_err(|e| PageError {
             page_num: page.page_num,
             message: e,
@@ -258,6 +293,7 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 }
             })
             .collect();
+        let pending = absorb_image_block_members(pending);
 
         // Stage 2: per-block content extraction, concurrent within the
         // page (bounded by the shared document-level permit budget).
@@ -355,10 +391,7 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 (index, Ok(Some(content)))
             }
         });
-        let stage2_results = join_all(futures_iter).await;
-
-        let mut content_by_index: std::collections::HashMap<usize, Result<Option<String>, String>> =
-            stage2_results.into_iter().collect();
+        let mut content_by_index = crate::shape_executor::collect_indexed(futures_iter).await;
 
         let mut blocks = Vec::with_capacity(pending.len());
         for (index, p) in pending.iter().enumerate() {
@@ -394,7 +427,7 @@ impl ProtocolAdapter for MineruVlmAdapter {
             // separate decision MinerU makes unconditionally for image
             // spans — do that here so `render.rs` has pixels to link to
             // (see `image_link_gap_report.md`).
-            let asset_bytes = if p.category_raw == "image" {
+            let asset_bytes = if matches!(p.category_raw.as_str(), "image" | "image_block") {
                 imaging::crop(&page_rgb, p.bbox_px).and_then(|img| imaging::to_png_bytes(&img).ok())
             } else {
                 None
@@ -520,6 +553,37 @@ mod tests {
             .expect("image block must have cropped pixels attached");
         let decoded = image::load_from_memory(asset_bytes).expect("must be valid PNG bytes");
         assert_eq!((decoded.width(), decoded.height()), (80, 200));
+    }
+
+    #[tokio::test]
+    async fn image_block_absorbs_contained_images_without_stage2_dispatch() {
+        let adapter = MineruVlmAdapter::default();
+        let mock = Arc::new(MockDispatch::new());
+        let layout = "\
+<|box_start|>100 100 900 900<|box_end|><|ref_start|>image_block<|ref_end|>
+<|box_start|>200 200 400 400<|box_end|><|ref_start|>image<|ref_end|>
+<|box_start|>0 0 50 50<|box_end|><|ref_start|>image<|ref_end|>";
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        // No stage-2 responses are seeded: both retained image categories
+        // must skip content recognition entirely.
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let page = fake_page(1000, 1000);
+        let blocks = adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page succeeds");
+
+        assert_eq!(blocks.len(), 2, "contained child image must be absorbed");
+        assert_eq!(blocks[0].category_raw, "image_block");
+        assert_eq!(blocks[0].category.as_deref(), Some("image"));
+        assert_eq!(blocks[0].bbox_px, Some([100, 100, 900, 900]));
+        assert!(blocks[0].text.is_none());
+        assert!(blocks[0].error.is_none());
+        assert!(blocks[0].asset_bytes.is_some());
+        assert_eq!(blocks[1].category_raw, "image");
+        assert_eq!(blocks[1].bbox_px, Some([0, 0, 50, 50]));
+        assert!(ctx.warnings_snapshot().is_empty());
     }
 
     #[tokio::test]

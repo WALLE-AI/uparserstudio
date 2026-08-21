@@ -17,6 +17,18 @@ fn isolated_cache_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+fn fixture_png() -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(2, 2, image::Rgb([255, 255, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    bytes
+}
+
 #[test]
 fn bad_args_exit_usage_error() {
     Command::cargo_bin("uparser")
@@ -42,7 +54,7 @@ fn nonexistent_file_exits_dependency_unavailable() {
 #[test]
 fn unknown_protocol_exits_usage_error() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes").unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     Command::cargo_bin("uparser")
         .unwrap()
@@ -62,7 +74,7 @@ fn unknown_protocol_exits_usage_error() {
 #[test]
 fn mock_protocol_success_produces_valid_json_on_stdout() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes").unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     let output = Command::cargo_bin("uparser")
@@ -87,6 +99,80 @@ fn mock_protocol_success_produces_valid_json_on_stdout() {
     assert_eq!(parsed["protocol"], "mock");
     assert_eq!(parsed["pages"].as_array().unwrap().len(), 1);
     assert!(parsed["page_errors"].as_array().unwrap().is_empty());
+    assert_eq!(parsed["route_decision"]["protocol"], "mock");
+    assert_eq!(parsed["route_decision"]["origin"], "explicit");
+    assert_eq!(parsed["preprocess_plan"]["input_channel"], "visual_pages");
+}
+
+#[test]
+fn canonical_markdown_source_is_an_explicit_supported_mode() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "markdown",
+            "--markdown-source",
+            "canonical",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mock page 1"));
+}
+
+#[test]
+fn plan_reports_detection_profile_candidates_and_preprocessing() {
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    file.write_all(b"name,age\nAlice,30\n").unwrap();
+
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["plan", file.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).expect("plan is valid JSON");
+    assert_eq!(parsed["format"]["format"], "csv");
+    assert_eq!(parsed["profile"]["genre"]["primary"], "spreadsheet");
+    assert!(
+        parsed["plan"]["route"]["candidates"]
+            .as_array()
+            .is_some_and(|candidates| candidates.len() >= 3)
+    );
+    assert!(parsed["plan"]["preprocess"]["input_channel"].is_string());
+}
+
+#[test]
+fn unknown_content_is_rejected_before_adapter_execution() {
+    let mut file = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+    file.write_all(b"not actually a pdf").unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("preflight_failed"));
 }
 
 #[test]
@@ -102,9 +188,8 @@ fn classify_nonexistent_file_exits_dependency_unavailable() {
 
 #[test]
 fn classify_produces_valid_document_profile_json() {
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"not really a pdf, just bytes for L1 classification")
-        .unwrap();
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    file.write_all(b"name,age\nAlice,30\n").unwrap();
 
     let output = Command::cargo_bin("uparser")
         .unwrap()
@@ -187,7 +272,7 @@ fn mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial() 
 #[test]
 fn native_without_feature_is_usage_error() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes").unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     Command::cargo_bin("uparser")
         .unwrap()
@@ -208,8 +293,7 @@ fn native_without_feature_is_usage_error() {
 #[test]
 fn auto_protocol_routes_without_crashing() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"not a real pdf, just bytes for L1 routing")
-        .unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     let assert = Command::cargo_bin("uparser")
@@ -230,6 +314,61 @@ fn auto_protocol_routes_without_crashing() {
     assert!(stderr.contains("auto: routed to"), "stderr was: {stderr}");
 }
 
+#[test]
+fn mode_protocol_selects_a_declared_model_protocol_for_planning() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "plan",
+            file.path().to_str().unwrap(),
+            "--mode",
+            "protocol",
+            "--protocol",
+            "generic-vlm",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"protocol\": \"generic-vlm\""));
+}
+
+#[test]
+fn mode_protocol_requires_a_concrete_model_protocol() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["parse", file.path().to_str().unwrap(), "--mode", "protocol"])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("invalid_mode_selection"));
+}
+
+#[test]
+fn mode_and_legacy_protocol_must_not_conflict() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--mode",
+            "native",
+            "--protocol",
+            "mock",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("conflicts"));
+}
+
 /// `--protocol pipeline --layout-endpoint ...` proves the stage-endpoint
 /// override actually reaches `PipelineAdapter` (not silently ignored):
 /// pointing at a guaranteed-refused port surfaces a connection failure
@@ -238,7 +377,7 @@ fn auto_protocol_routes_without_crashing() {
 #[test]
 fn pipeline_with_overridden_layout_endpoint_surfaces_connection_failure_as_partial() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes").unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     let output = Command::cargo_bin("uparser")
@@ -327,7 +466,7 @@ fn paddleocr_with_overridden_endpoint_surfaces_connection_failure_as_partial() {
 #[test]
 fn pipeline_local_backend_for_layout_stage_is_usage_error() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes").unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     Command::cargo_bin("uparser")
         .unwrap()
@@ -351,7 +490,7 @@ fn pipeline_local_backend_for_layout_stage_is_usage_error() {
 #[test]
 fn stream_emits_ndjson_window_lines() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for streaming").unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     let output = Command::cargo_bin("uparser")
@@ -384,7 +523,7 @@ fn stream_emits_ndjson_window_lines() {
 #[test]
 fn cache_hits_on_second_identical_parse_and_no_cache_bypasses_it() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for caching").unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     let first = Command::cargo_bin("uparser")
@@ -451,7 +590,7 @@ fn cache_hits_on_second_identical_parse_and_no_cache_bypasses_it() {
 #[test]
 fn cache_stat_and_clear_reflect_real_entries() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for cache stat").unwrap();
+    file.write_all(&fixture_png()).unwrap();
     let cache_dir = isolated_cache_dir();
 
     Command::cargo_bin("uparser")
@@ -568,8 +707,10 @@ fn protocols_lists_every_builtin_adapter() {
         "mock",
         "mineru-vlm",
         "dots-ocr",
+        "generic-vlm",
         "monkeyocr-v2",
         "paddleocr",
+        "paddlex-structure",
         "pipeline",
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
@@ -582,8 +723,7 @@ fn protocols_lists_every_builtin_adapter() {
 #[test]
 fn postprocess_merges_by_default_and_no_postprocess_bypasses_it() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for postprocess cli test")
-        .unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     let merged_cache = isolated_cache_dir();
     let merged_output = Command::cargo_bin("uparser")
@@ -627,43 +767,6 @@ fn postprocess_merges_by_default_and_no_postprocess_bypasses_it() {
     assert_eq!(raw["pages"][0]["blocks"].as_array().unwrap().len(), 2);
 }
 
-/// Proves `structured_bypass` is genuinely wired into the real CLI
-/// `parse` path (previously: never called from any real code path — a
-/// `.csv` file would silently degrade to a 1x1 placeholder image fed to
-/// a protocol adapter). `--protocol mock` is passed deliberately to
-/// prove the bypass takes priority over whatever protocol was
-/// requested, per ARCHITECTURE.md §13.1a.
-#[cfg(not(feature = "native"))]
-#[test]
-fn csv_input_bypasses_to_structured_result_regardless_of_protocol() {
-    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
-    file.write_all(b"Name,Age\nAlice,30\n").unwrap();
-    let cache_dir = isolated_cache_dir();
-
-    let output = Command::cargo_bin("uparser")
-        .unwrap()
-        .env("UPARSER_CACHE_DIR", cache_dir.path())
-        .args([
-            "parse",
-            file.path().to_str().unwrap(),
-            "--protocol",
-            "mock",
-            "--format",
-            "json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(parsed["protocol"], "structured_bypass:csv");
-    let html = parsed["pages"][0]["blocks"][0]["html"].as_str().unwrap();
-    assert!(html.contains("Alice"));
-}
-
-#[cfg(feature = "native")]
 #[test]
 fn csv_input_auto_routes_to_native_document_engine() {
     let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
@@ -703,7 +806,6 @@ fn csv_input_auto_routes_to_native_document_engine() {
     assert_eq!(parsed["pages"][0]["blocks"][0]["reading_order"], 0);
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn document_json_outputs_canonical_contract_and_rejects_non_native_protocol() {
     let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
@@ -753,8 +855,18 @@ fn minimal_docx_bytes() -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("[Content_Types].xml", options).unwrap();
+        writer
+            .write_all(b"<Types><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>")
+            .unwrap();
+        writer.start_file("_rels/.rels", options).unwrap();
+        writer
+            .write_all(b"<Relationships><Relationship Id=\"r0\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>")
+            .unwrap();
         writer.start_file("word/document.xml", options).unwrap();
-        writer.write_all(b"<document/>").unwrap();
+        writer
+            .write_all(b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>hello</w:t></w:r></w:p></w:body></w:document>")
+            .unwrap();
         writer.finish().unwrap();
     }
     buf
@@ -961,8 +1073,7 @@ fn docx_input_without_libreoffice_is_a_clean_dependency_error() {
 #[test]
 fn pages_filter_keeps_only_requested_pages() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for pages filter cli test")
-        .unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     let keep_cache = isolated_cache_dir();
     let keep_output = Command::cargo_bin("uparser")
@@ -1014,8 +1125,7 @@ fn pages_filter_keeps_only_requested_pages() {
 #[test]
 fn invalid_pages_value_is_a_usage_error() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(b"fake pdf bytes for invalid pages test")
-        .unwrap();
+    file.write_all(&fixture_png()).unwrap();
 
     Command::cargo_bin("uparser")
         .unwrap()

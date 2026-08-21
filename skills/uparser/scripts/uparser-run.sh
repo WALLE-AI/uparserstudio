@@ -6,7 +6,7 @@
 # Config file (simple INI): $UPARSER_CONFIG, else ~/.config/uparser/config.toml
 #   [mineru-vlm]
 #   endpoint = http://10.0.0.5:19122/v1/chat/completions
-#   model    = MinerU2.5-2604-1.2B
+#   model    = MinerU2.5-Pro-2605-1.2B
 #
 # Precedence: an explicit --endpoint/--model on the command line ALWAYS wins;
 # the config only fills in what you omitted. --endpoint is injected for `parse`
@@ -19,7 +19,7 @@ CONFIG="${UPARSER_CONFIG:-$HOME/.config/uparser/config.toml}"
 
 # --- locate the real binary: PATH first, else ensure_uparser.sh downloads a
 #     version-pinned prebuilt from GitHub Releases (or builds from source) ---
-BIN="$(command -v uparser || true)"
+BIN="${UPARSER_BIN:-$(command -v uparser || true)}"
 if [ -z "$BIN" ]; then
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   BIN="$("$here/ensure_uparser.sh" | tail -1 || true)"
@@ -31,10 +31,10 @@ args=("$@")
 # --- scan args: subcommand, protocol, and whether endpoint/model were given ---
 # `parse` takes the protocol via --protocol; `doctor` takes it as the positional
 # token right after the subcommand (doctor <protocol> [--endpoint <url>]).
-sub=""; protocol="mock"; has_ep=0; has_model=0
+sub=""; protocol="auto"; has_ep=0; has_model=0
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
-    parse|classify|doctor|protocols|cache)
+    parse|classify|plan|doctor|protocols|cache)
       if [ -z "$sub" ]; then
         sub="${args[$i]}"
         # doctor's protocol is positional: the next non-flag token
@@ -43,7 +43,7 @@ for ((i=0; i<${#args[@]}; i++)); do
           case "$nxt" in ""|-*) ;; *) protocol="$nxt" ;; esac
         fi
       fi ;;
-    --protocol)   protocol="${args[$((i+1))]:-mock}" ;;
+    --protocol)   protocol="${args[$((i+1))]:-auto}" ;;
     --protocol=*) protocol="${args[$i]#--protocol=}" ;;
     --endpoint|--endpoint=*) has_ep=1 ;;
     --model|--model=*)       has_model=1 ;;

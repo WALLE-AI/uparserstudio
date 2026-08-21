@@ -2,6 +2,8 @@ use crate::ParseOptions;
 use crate::ooxml::{ContentTypes, load_root_relationships, main_part};
 use crate::package::Package;
 use file_format::FileFormat;
+use quick_xml::Reader;
+use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
@@ -26,6 +28,31 @@ pub enum DocumentFormat {
     Unknown,
 }
 
+impl DocumentFormat {
+    pub const ALL: [Self; 16] = [
+        Self::Pdf,
+        Self::Doc,
+        Self::Docx,
+        Self::Ppt,
+        Self::Pptx,
+        Self::Excel,
+        Self::Odt,
+        Self::Ods,
+        Self::Odp,
+        Self::Rtf,
+        Self::Epub,
+        Self::Csv,
+        Self::Tsv,
+        Self::Png,
+        Self::Jpeg,
+        Self::Unknown,
+    ];
+
+    pub const fn is_recognized(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
 pub fn detect_format(bytes: &[u8], filename_hint: Option<&str>) -> DocumentFormat {
     if bytes.starts_with(b"{\\rtf") {
         return DocumentFormat::Rtf;
@@ -41,12 +68,7 @@ pub fn detect_format(bytes: &[u8], filename_hint: Option<&str>) -> DocumentForma
         if let Some(format) = detect_zip_package(bytes) {
             return format;
         }
-        // A ZIP whose OPC/ODF identity we could not establish: trust the
-        // filename over a generic archive sniffer, which reports OOXML-shaped
-        // archives as whichever family it happens to guess first.
-        if let Some(format) = extension_format(filename_hint) {
-            return format;
-        }
+        return DocumentFormat::Unknown;
     }
 
     let detected = FileFormat::from_bytes(bytes);
@@ -70,7 +92,7 @@ pub fn detect_format(bytes: &[u8], filename_hint: Option<&str>) -> DocumentForma
         return from_signature;
     }
 
-    extension_format(filename_hint).unwrap_or(DocumentFormat::Unknown)
+    detect_delimited_text(bytes, filename_hint).unwrap_or(DocumentFormat::Unknown)
 }
 
 fn detect_ole_package(bytes: &[u8]) -> Option<DocumentFormat> {
@@ -86,7 +108,7 @@ fn detect_ole_package(bytes: &[u8]) -> Option<DocumentFormat> {
     }
 }
 
-fn extension_format(filename_hint: Option<&str>) -> Option<DocumentFormat> {
+pub fn format_from_extension(filename_hint: Option<&str>) -> Option<DocumentFormat> {
     let extension = filename_hint?
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase())?;
@@ -108,6 +130,45 @@ fn extension_format(filename_hint: Option<&str>) -> Option<DocumentFormat> {
         "jpg" | "jpeg" => DocumentFormat::Jpeg,
         _ => return None,
     })
+}
+
+fn detect_delimited_text(bytes: &[u8], filename_hint: Option<&str>) -> Option<DocumentFormat> {
+    let format = match format_from_extension(filename_hint)? {
+        DocumentFormat::Csv => DocumentFormat::Csv,
+        DocumentFormat::Tsv => DocumentFormat::Tsv,
+        _ => return None,
+    };
+    let delimiter = if format == DocumentFormat::Csv {
+        b','
+    } else {
+        b'\t'
+    };
+    if !bytes.contains(&delimiter) || std::str::from_utf8(bytes).is_err() {
+        return None;
+    }
+
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(false)
+        .flexible(false)
+        .from_reader(bytes);
+    let mut width = None;
+    let mut records = 0usize;
+    for record in reader.records().take(64) {
+        let record = record.ok()?;
+        if record.len() < 2 {
+            return None;
+        }
+        if let Some(expected) = width {
+            if record.len() != expected {
+                return None;
+            }
+        } else {
+            width = Some(record.len());
+        }
+        records += 1;
+    }
+    (records > 0).then_some(format)
 }
 
 /// Classify a ZIP container.
@@ -149,12 +210,58 @@ fn detect_zip_package(bytes: &[u8]) -> Option<DocumentFormat> {
         return Some(format);
     }
 
+    let names: Vec<String> = package.names().map(str::to_owned).collect();
+    if names.iter().any(|name| name.starts_with("word/")) {
+        return Some(DocumentFormat::Docx);
+    }
+    if names.iter().any(|name| name.starts_with("ppt/")) {
+        return Some(DocumentFormat::Pptx);
+    }
+    if names.iter().any(|name| name.starts_with("xl/")) {
+        return Some(DocumentFormat::Excel);
+    }
+
+    // Preserve a typed "missing main part" error for malformed OOXML that
+    // still declares exactly one Office family in its container metadata.
+    if let Some(format) = declared_ooxml_family(&mut package) {
+        return Some(format);
+    }
+
     // An EPUB without a readable `mimetype` is still identifiable by its
     // mandatory OCF container part.
     if package.names().any(|name| name == "META-INF/container.xml") {
         return Some(DocumentFormat::Epub);
     }
     None
+}
+
+fn declared_ooxml_family(package: &mut Package<'_>) -> Option<DocumentFormat> {
+    let xml = package.read("[Content_Types].xml").ok()??;
+    let mut reader = Reader::from_reader(xml.as_slice());
+    let mut declared = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event) | Event::Empty(event)) => {
+                for attribute in event.attributes().flatten() {
+                    if attribute.key.local_name().as_ref() != b"ContentType" {
+                        continue;
+                    }
+                    let value = std::str::from_utf8(attribute.value.as_ref()).ok()?;
+                    let Some(format) = family_from_content_type(Some(value)) else {
+                        continue;
+                    };
+                    if declared.is_some_and(|existing| existing != format) {
+                        return None;
+                    }
+                    declared = Some(format);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+    }
+    declared
 }
 
 /// Resolve the OOXML main part and classify by its declared content type.
@@ -241,6 +348,30 @@ mod tests {
         assert_eq!(
             detect_format(b"%PDF-1.7", Some("data.csv")),
             DocumentFormat::Pdf
+        );
+    }
+
+    #[test]
+    fn arbitrary_bytes_do_not_become_a_format_from_extension() {
+        assert_eq!(
+            detect_format(b"not a pdf", Some("document.pdf")),
+            DocumentFormat::Unknown
+        );
+        assert_eq!(
+            detect_format(b"PK\x03\x04broken", Some("document.docx")),
+            DocumentFormat::Unknown
+        );
+    }
+
+    #[test]
+    fn malformed_delimited_text_is_unknown() {
+        assert_eq!(
+            detect_format(b"a,b\n1\n", Some("data.csv")),
+            DocumentFormat::Unknown
+        );
+        assert_eq!(
+            detect_format(b"plain text", Some("data.csv")),
+            DocumentFormat::Unknown
         );
     }
 }

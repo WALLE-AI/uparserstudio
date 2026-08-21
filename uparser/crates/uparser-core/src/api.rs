@@ -4,34 +4,14 @@
 //! produce byte-identical IR, per `ARCHITECTURE.md`'s binding-layer
 //! requirement.
 //!
-//! **Known, documented duplication**: `cli.rs::run_parse` implements
-//! largely the same logic (registry build, cache lookup/store, rasterize,
-//! scheduler dispatch) independently, rather than this module being
-//! extracted *from* it — `cli.rs` additionally handles `--stream`'s
-//! incremental NDJSON output (a CLI-only UX concern the bindings don't
-//! need for a single request/response call) and CLI-specific exit-code/
-//! stderr-formatting concerns this module has no business doing. Fully
-//! unifying them was judged higher-risk than valuable for this pass
-//! (touching `cli.rs`'s already-tested control flow to shave off
-//! duplication, versus adding this new, independently-tested module) —
-//! left as a documented follow-up, not a hidden one.
+//! CLI and API are thin shells over the shared runner.
 
-use crate::adapters::{AdapterOverrides, PipelineConfig, Registry};
-use crate::cache::{self, ParamFingerprint};
-use crate::ingest::{DocumentFormat, RenderedPage};
-use crate::scheduler::Scheduler;
-use crate::transport::Transport;
-use crate::types::{DocumentProfile, ParseResult, RoutedBy};
-use sha2::{Digest, Sha256};
+use crate::adapters::PipelineConfig;
+#[cfg(test)]
+use crate::types::RoutedBy;
+use crate::types::{DocumentProfile, ParseResult};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Semaphore;
-
-/// Same default as `cli.rs`'s `DEFAULT_CACHE_TTL` (kept as an
-/// independent constant per this module's documented-duplication
-/// posture above).
-pub const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone)]
 pub struct ParseOptions {
@@ -65,12 +45,15 @@ pub struct ParseOptions {
     /// that default-on behavior was chosen: it mirrors MinerU's own
     /// unconditional `images/` output convention).
     pub no_assets: bool,
+    /// Shared across preflight analysis, optional L3 classification,
+    /// conversion, page production and model dispatch.
+    pub cancellation: crate::frontend::CancellationToken,
 }
 
 impl Default for ParseOptions {
     fn default() -> Self {
         Self {
-            protocol: "mock".to_string(),
+            protocol: "auto".to_string(),
             endpoint: None,
             model: None,
             // See cli.rs's `--window-size`/`--max-concurrency` doc
@@ -86,6 +69,7 @@ impl Default for ParseOptions {
             pages: None,
             assets_dir: None,
             no_assets: false,
+            cancellation: crate::frontend::CancellationToken::default(),
         }
     }
 }
@@ -100,7 +84,8 @@ pub enum ApiError {
     UnknownProtocol(String),
     #[error("ingestion failed: {0}")]
     IngestFailed(String),
-    #[cfg(feature = "native")]
+    #[error("preflight failed: {0}")]
+    PreflightFailed(String),
     #[error("native parse failed: {0}")]
     NativeParseFailed(String),
     #[cfg(not(feature = "native"))]
@@ -108,99 +93,60 @@ pub enum ApiError {
     NativeFeatureDisabled,
 }
 
-/// Same fallback ladder as `cli.rs::rasterize_or_fallback` — see that
-/// function's doc comment for the real-bug history behind why the
-/// non-`pdfium` fallback must decode real image bytes rather than
-/// hardcoding `1x1`.
-fn rasterize_or_fallback(path: &str, file_bytes: &[u8]) -> Vec<RenderedPage> {
-    #[cfg(feature = "pdfium")]
-    {
-        if let Ok(pages) = crate::ingest::rasterize(path, 150.0)
-            && !pages.is_empty()
-        {
-            return pages;
+fn map_prepare_error(error: crate::runner::PrepareError) -> ApiError {
+    match error {
+        crate::runner::PrepareError::UnknownProtocol(protocol) => {
+            ApiError::UnknownProtocol(protocol)
         }
-    }
-    #[cfg(not(feature = "pdfium"))]
-    let _ = path;
-
-    if let Ok(img) = image::load_from_memory(file_bytes) {
-        return vec![RenderedPage {
-            page_num: 1,
-            width: img.width(),
-            height: img.height(),
-            png_bytes: file_bytes.to_vec(),
-        }];
-    }
-
-    vec![RenderedPage {
-        page_num: 1,
-        width: 1,
-        height: 1,
-        png_bytes: file_bytes.to_vec(),
-    }]
-}
-
-/// Format-aware page ingestion (T-7.1-7.4's `ingest_document`, finally
-/// wired into a real call path): DOCX/PPTX are converted to PDF via
-/// LibreOffice first (§13.1a's `normalize_format` step) and rasterized
-/// from the converted bytes; every other format goes through the
-/// existing `rasterize_or_fallback` ladder unchanged (no behavior change
-/// for PDF/PNG/JPEG/unknown input — only DOCX/PPTX gain real support
-/// here, where they previously fell all the way through to the
-/// degenerate 1x1 placeholder and got silently fed to a protocol adapter
-/// as a blank image). XLSX/CSV never reach this function — `parse()`
-/// checks `structured_bypass()` first and short-circuits before this is
-/// called.
-async fn ingest_pages(
-    path: &str,
-    file_bytes: &[u8],
-    format: DocumentFormat,
-) -> Result<Vec<RenderedPage>, ApiError> {
-    match format {
-        DocumentFormat::Docx | DocumentFormat::Pptx => {
-            let pdf_bytes = crate::ingest::normalize_format(file_bytes, format)
-                .await
-                .map_err(|e| ApiError::IngestFailed(e.to_string()))?;
-            crate::ingest::rasterize_pdf_bytes(&pdf_bytes, 150.0)
-                .map_err(|e| ApiError::IngestFailed(e.to_string()))
-        }
-        _ => Ok(rasterize_or_fallback(path, file_bytes)),
+        other => ApiError::PreflightFailed(other.to_string()),
     }
 }
 
-/// L2 profiling when possible (native feature + PDF input), falling back
-/// to L1 otherwise — mirrors `cli.rs::profile_best_effort`.
-async fn profile_best_effort(bytes: &[u8], format: DocumentFormat) -> DocumentProfile {
-    #[cfg(feature = "native")]
-    {
-        if format == DocumentFormat::Pdf
-            && let Ok(p) = crate::profiler::profile_l2(bytes, format).await
-        {
-            return p;
+fn map_execution_error(error: crate::runner::ExecutionError) -> ApiError {
+    match error {
+        crate::runner::ExecutionError::UnknownProtocol(protocol) => {
+            ApiError::UnknownProtocol(protocol)
+        }
+        crate::runner::ExecutionError::Ingest(message) => ApiError::IngestFailed(message),
+        crate::runner::ExecutionError::Native(message)
+        | crate::runner::ExecutionError::Structured(message) => {
+            ApiError::NativeParseFailed(message)
+        }
+        crate::runner::ExecutionError::Assets(message) => ApiError::IngestFailed(message),
+        crate::runner::ExecutionError::Cache(message) => ApiError::IngestFailed(message),
+        crate::runner::ExecutionError::InvalidStageGraph(message) => {
+            ApiError::PreflightFailed(message)
+        }
+        crate::runner::ExecutionError::Cancelled => {
+            ApiError::PreflightFailed("execution cancelled".to_owned())
         }
     }
-    #[cfg(not(feature = "native"))]
-    let _ = &bytes;
-
-    crate::profiler::profile_l1(format)
 }
 
 /// Runs the Profiler (L1, or L2 when `--features native` and the input
 /// is a PDF) and returns the resulting `DocumentProfile`.
 pub async fn classify(path: &str) -> Result<DocumentProfile, ApiError> {
+    classify_with_cancellation(path, crate::frontend::CancellationToken::default()).await
+}
+
+pub async fn classify_with_cancellation(
+    path: &str,
+    cancellation: crate::frontend::CancellationToken,
+) -> Result<DocumentProfile, ApiError> {
     if !Path::new(path).exists() {
         return Err(ApiError::FileNotFound(path.to_string()));
     }
     let bytes = std::fs::read(path).map_err(|e| ApiError::ReadFailed(e.to_string()))?;
-    let format = crate::ingest::detect_format(&bytes, Some(path));
-    Ok(profile_best_effort(&bytes, format).await)
+    let source = crate::frontend::PreflightSource::new(Arc::<[u8]>::from(bytes), Some(path));
+    crate::runner::analyze_with_cancellation(&source, &cancellation)
+        .await
+        .map(|report| report.profile)
+        .map_err(|error| ApiError::PreflightFailed(error.to_string()))
 }
 
 /// Parse a structured source document into the lossless canonical contract.
 /// PDF remains available through `parse`, whose page-oriented result carries
 /// geometry that is not represented by the structured document engine.
-#[cfg(feature = "native")]
 pub async fn parse_canonical_document(
     path: &str,
     options: &uparser_document_engine::ParseOptions,
@@ -228,185 +174,55 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         return Err(ApiError::FileNotFound(path.to_string()));
     }
     let file_bytes = std::fs::read(path).map_err(|e| ApiError::ReadFailed(e.to_string()))?;
-    let format = crate::ingest::detect_format(&file_bytes, Some(path));
-
-    // XLSX/CSV short-circuit unconditionally (§13.1a) — genuinely no
-    // model call, no rasterization, regardless of `--protocol`: reading
-    // cells directly is strictly more accurate than any visual-recognition
-    // protocol could be for structured data. Must run before the `auto`/
-    // `native` branches below, which would otherwise treat these formats
-    // the same as everything else and silently degrade them (previously:
-    // fail `image::load_from_memory`, fall to the 1x1 placeholder, get
-    // fed to a protocol adapter as a blank image — exit 0, no error, but
-    // a completely wrong result).
-    #[cfg(not(feature = "native"))]
-    if let Some(bypass) = crate::ingest::structured_bypass(&file_bytes, format, path) {
-        return bypass.map_err(|e| ApiError::IngestFailed(e.to_string()));
-    }
-
-    let effective_protocol = if options.protocol == "auto" {
-        #[cfg(feature = "native")]
-        {
-            let document_format = uparser_document_engine::detect_format(&file_bytes, Some(path));
-            if matches!(
-                document_format,
-                uparser_document_engine::DocumentFormat::Csv
-                    | uparser_document_engine::DocumentFormat::Tsv
-                    | uparser_document_engine::DocumentFormat::Excel
-                    | uparser_document_engine::DocumentFormat::Ods
-                    | uparser_document_engine::DocumentFormat::Odt
-                    | uparser_document_engine::DocumentFormat::Odp
-                    | uparser_document_engine::DocumentFormat::Epub
-                    | uparser_document_engine::DocumentFormat::Rtf
-                    | uparser_document_engine::DocumentFormat::Docx
-                    | uparser_document_engine::DocumentFormat::Pptx
-                    // The legacy binary formats parse fully offline too;
-                    // leaving them out sent a `.doc`/`.ppt` to a VLM — and,
-                    // with no endpoint configured, to a dead end — even
-                    // though the native engine reads them directly.
-                    | uparser_document_engine::DocumentFormat::Doc
-                    | uparser_document_engine::DocumentFormat::Ppt
-            ) {
-                "native".to_owned()
-            } else {
-                let profile = profile_best_effort(&file_bytes, format).await;
-                crate::router::route(&profile).protocol.to_string()
-            }
-        }
-        #[cfg(not(feature = "native"))]
-        {
-            let profile = profile_best_effort(&file_bytes, format).await;
-            crate::router::route(&profile).protocol.to_string()
-        }
-    } else {
-        options.protocol.clone()
-    };
-
-    if effective_protocol == "native" {
-        let mut result = parse_native(path, &file_bytes).await?;
-        if options.protocol == "auto" {
-            result.routed_by = RoutedBy::Auto;
-        }
-        return Ok(result);
-    }
-
-    let fingerprint = ParamFingerprint {
-        protocol: effective_protocol.clone(),
+    let source = crate::frontend::PreflightSource::new(Arc::<[u8]>::from(file_bytes), Some(path));
+    let prepared = crate::runner::prepare_with_preference_and_cancellation(
+        source,
+        Some(&options.protocol),
+        crate::router::RoutePreference::Quality,
+        options.cancellation.clone(),
+    )
+    .await
+    .map_err(map_prepare_error)?;
+    let execution = crate::runner::ExecutionOptions {
         endpoint: options.endpoint.clone(),
         model: options.model.clone(),
+        window_size: options.window_size,
+        max_concurrency: options.max_concurrency,
+        pipeline_config: options.pipeline_config.clone(),
+        no_cache: options.no_cache,
+        no_postprocess: options.no_postprocess,
+        pages: options.pages.clone(),
+        assets_dir: options.assets_dir.as_ref().map(std::path::PathBuf::from),
+        no_assets: options.no_assets,
+        document_options: uparser_document_engine::ParseOptions::default(),
+        cancellation: options.cancellation.clone(),
     };
-    let cache_key = cache::cache_key(&file_bytes, &fingerprint);
-    let cache_dir = cache::default_cache_dir();
-    if !options.no_cache
-        && let Some(cached) = cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL)
-    {
-        return Ok(cached);
-    }
-
-    let registry = Registry::with_builtins();
-    let overrides = AdapterOverrides {
-        endpoint: options.endpoint.clone(),
-        model: options.model.clone(),
-        pipeline: Some(options.pipeline_config.clone()),
-    };
-    let adapter = registry
-        .build(&effective_protocol, &overrides)
-        .ok_or_else(|| ApiError::UnknownProtocol(effective_protocol.clone()))?;
-
-    let source_sha256 = {
-        let mut hasher = Sha256::new();
-        hasher.update(&file_bytes);
-        format!("{:x}", hasher.finalize())
-    };
-    let pages = ingest_pages(path, &file_bytes, format).await?;
-    let pages = match &options.pages {
-        Some(wanted) => pages
-            .into_iter()
-            .filter(|p| wanted.contains(&p.page_num))
-            .collect(),
-        None => pages,
-    };
-
-    let transport = Arc::new(Transport::new());
-    let permits = Arc::new(Semaphore::new(options.max_concurrency.max(1)));
-    // A window smaller than the concurrency budget can never saturate it
-    // (see cli.rs for the same clamp and its rationale), so raise the
-    // effective window to at least `max_concurrency`.
-    let effective_window = options.window_size.max(options.max_concurrency).max(1);
-    let scheduler = Scheduler::new(effective_window);
-    let (result_pages, page_errors, warnings) =
-        scheduler.run(adapter, transport, permits, pages).await;
-    let result_pages = if options.no_postprocess {
-        result_pages
-    } else {
-        result_pages
-            .into_iter()
-            .map(|page| crate::types::Page {
-                blocks: crate::postprocess::merge_paragraphs_by_geometry(page.blocks),
-                ..page
-            })
-            .collect()
-    };
-
-    let mut result = ParseResult {
-        source_path: path.to_string(),
-        source_sha256,
-        protocol: effective_protocol,
-        routed_by: if options.protocol == "auto" {
-            RoutedBy::Auto
-        } else {
-            RoutedBy::Explicit
-        },
-        document_profile: None,
-        model_endpoint: None,
-        model_name: None,
-        pages: result_pages,
-        page_errors,
-        capability_notes: vec![],
-        warnings,
-        timing: Default::default(),
-    };
-
-    if !options.no_assets {
-        let assets_dir = options
-            .assets_dir
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| crate::assets::default_assets_dir(path));
-        if let Err(e) = crate::assets::write_block_assets(&mut result, &assets_dir) {
-            eprintln!("warning: failed to write image assets: {e}");
-        }
-    }
-
-    if !options.no_cache {
-        let _ = cache::put(&cache_dir, &cache_key, &result);
-    }
-
-    Ok(result)
-}
-
-#[cfg(feature = "native")]
-async fn parse_native(path: &str, file_bytes: &[u8]) -> Result<ParseResult, ApiError> {
-    let adapter = crate::adapters::native::NativeAdapter;
-    adapter
-        .parse_document(path, file_bytes)
+    crate::runner::execute(prepared, &execution)
         .await
-        .map_err(|e| ApiError::NativeParseFailed(e.message))
-}
-
-#[cfg(not(feature = "native"))]
-async fn parse_native(_path: &str, _file_bytes: &[u8]) -> Result<ParseResult, ApiError> {
-    Err(ApiError::NativeFeatureDisabled)
+        .map(|outcome| outcome.result)
+        .map_err(map_execution_error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn fixture_png() -> Vec<u8> {
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
     #[tokio::test]
     async fn parse_mock_protocol_succeeds() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "mock".to_string(),
@@ -419,30 +235,35 @@ mod tests {
         assert_eq!(result.protocol, "mock");
         assert_eq!(result.pages.len(), 1);
         assert!(result.page_errors.is_empty());
+        assert_eq!(result.route_decision.as_ref().unwrap().protocol, "mock");
+        assert_eq!(
+            result.preprocess_plan.as_ref().unwrap().input_channel,
+            crate::runner::InputChannel::VisualPages
+        );
     }
 
-    /// Proves `structured_bypass` is genuinely wired into `parse()`
-    /// (previously: never called from any real path — a `.csv` file
-    /// would fail `image::load_from_memory`, fall to the 1x1 placeholder,
-    /// and get fed to a protocol adapter as a blank image instead of
-    /// being read directly). `--protocol` is deliberately set to `mock`
-    /// here to prove the bypass takes priority over whatever protocol
-    /// was requested, per §13.1a.
+    /// Source-semantic structured parsing is baseline capability and must not
+    /// change when the PDF native feature is disabled.
     #[cfg(not(feature = "native"))]
     #[tokio::test]
-    async fn parse_bypasses_csv_to_structured_result_regardless_of_protocol() {
+    async fn parse_auto_routes_csv_to_baseline_document_engine() {
         let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
         std::io::Write::write_all(&mut file, b"Name,Age\nAlice,30\n").unwrap();
 
         let options = ParseOptions {
-            protocol: "mock".to_string(),
+            protocol: "auto".to_string(),
             no_cache: true,
             ..Default::default()
         };
         let result = parse(file.path().to_str().unwrap(), &options)
             .await
             .expect("csv structured bypass succeeds");
-        assert_eq!(result.protocol, "structured_bypass:csv");
+        assert_eq!(result.protocol, "native:csv");
+        assert_eq!(result.routed_by, RoutedBy::Auto);
+        assert_eq!(
+            result.document_profile.as_ref().unwrap().genre.primary,
+            crate::types::DocumentGenre::Spreadsheet
+        );
         assert_eq!(result.pages.len(), 1);
         let html = result.pages[0].blocks[0]
             .html
@@ -517,8 +338,24 @@ mod tests {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("[Content_Types].xml", options).unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                b"<Types><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            )
+            .unwrap();
+            writer.start_file("_rels/.rels", options).unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                b"<Relationships><Relationship Id=\"r0\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+            )
+            .unwrap();
             writer.start_file("word/document.xml", options).unwrap();
-            std::io::Write::write_all(&mut writer, b"<document/>").unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>hello</w:t></w:r></w:p></w:body></w:document>",
+            )
+            .unwrap();
             writer.finish().unwrap();
         }
         buf
@@ -544,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn parse_pages_filter_excludes_pages_not_in_the_requested_set() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes for pages filter test").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "mock".to_string(),
@@ -562,8 +399,7 @@ mod tests {
     #[tokio::test]
     async fn parse_pages_filter_keeps_matching_pages() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes for pages filter match test")
-            .unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "mock".to_string(),
@@ -587,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn parse_applies_postprocess_by_default() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes for postprocess test").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "mock".to_string(),
@@ -607,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn parse_no_postprocess_returns_raw_unmerged_blocks() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes for no-postprocess test").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "mock".to_string(),
@@ -633,9 +469,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parse_uses_the_same_cancellation_token_during_preflight() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
+        let cancellation = crate::frontend::CancellationToken::default();
+        cancellation.cancel();
+        let options = ParseOptions {
+            protocol: "mock".to_owned(),
+            cancellation,
+            ..Default::default()
+        };
+
+        let error = parse(file.path().to_str().unwrap(), &options)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ApiError::PreflightFailed(message) if message.contains("cancelled"))
+        );
+    }
+
+    #[tokio::test]
     async fn parse_unknown_protocol_is_unknown_protocol_error() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
 
         let options = ParseOptions {
             protocol: "nonexistent".to_string(),
@@ -649,7 +505,7 @@ mod tests {
     #[tokio::test]
     async fn parse_respects_no_cache_and_cache_hit() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"fake pdf bytes for api cache test").unwrap();
+        std::io::Write::write_all(&mut file, &fixture_png()).unwrap();
         let cache_dir = tempfile::tempdir().unwrap();
         // SAFETY: test-only env var set for the duration of this test,
         // no concurrent access to it from other threads in this test.
@@ -677,11 +533,14 @@ mod tests {
 
     #[tokio::test]
     async fn classify_produces_a_profile_for_a_real_file() {
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut file, b"not really a pdf, just bytes").unwrap();
+        let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+        std::io::Write::write_all(&mut file, b"Name,Age\nAlice,30\n").unwrap();
 
         let profile = classify(file.path().to_str().unwrap()).await.unwrap();
-        assert!(profile.kind_confidence >= 0.0);
+        assert_eq!(
+            profile.genre.primary,
+            crate::types::DocumentGenre::Spreadsheet
+        );
     }
 
     #[tokio::test]

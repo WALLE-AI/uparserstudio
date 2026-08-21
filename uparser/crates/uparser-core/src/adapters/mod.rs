@@ -1,6 +1,7 @@
 //! `ProtocolAdapter` trait and registry, per ARCHITECTURE.md §2.0/§2.1.
 
 pub mod dots_ocr;
+pub mod generic_vlm;
 pub mod mineru_vlm;
 pub mod mock;
 pub mod monkeyocr_v2;
@@ -9,6 +10,7 @@ pub mod native;
 #[cfg(feature = "pipeline-local-table")]
 pub mod onnx_table;
 pub mod paddleocr;
+pub mod paddlex_structure;
 pub mod pipeline;
 pub mod pipeline_serving;
 
@@ -85,6 +87,8 @@ pub enum DispatchError {
     Transport(#[from] TransportError),
     #[error("no mock response seeded for key {0:?}")]
     MockKeyMissing(String),
+    #[error("request cancelled")]
+    Cancelled,
 }
 
 /// Where `ParseCtx::dispatch` sends its requests: a real HTTP transport,
@@ -103,6 +107,7 @@ pub struct ParseCtx {
     dispatcher: Dispatcher,
     pub permits: Arc<Semaphore>,
     warnings: Arc<Mutex<Vec<String>>>,
+    cancellation: crate::frontend::CancellationToken,
 }
 
 impl ParseCtx {
@@ -111,6 +116,7 @@ impl ParseCtx {
             dispatcher: Dispatcher::Real(transport),
             permits,
             warnings: Arc::new(Mutex::new(Vec::new())),
+            cancellation: crate::frontend::CancellationToken::default(),
         }
     }
 
@@ -121,6 +127,7 @@ impl ParseCtx {
             dispatcher: Dispatcher::Mock(mock),
             permits,
             warnings: Arc::new(Mutex::new(Vec::new())),
+            cancellation: crate::frontend::CancellationToken::default(),
         }
     }
 
@@ -137,6 +144,21 @@ impl ParseCtx {
             dispatcher: Dispatcher::Real(transport),
             permits,
             warnings,
+            cancellation: crate::frontend::CancellationToken::default(),
+        }
+    }
+
+    pub fn new_with_cancellation(
+        transport: Arc<Transport>,
+        permits: Arc<Semaphore>,
+        warnings: Arc<Mutex<Vec<String>>>,
+        cancellation: crate::frontend::CancellationToken,
+    ) -> Self {
+        Self {
+            dispatcher: Dispatcher::Real(transport),
+            permits,
+            warnings,
+            cancellation,
         }
     }
 
@@ -177,8 +199,14 @@ impl ParseCtx {
     /// Dispatch a chat-completion request. In `Dispatcher::Mock` mode,
     /// the request's `endpoint` field is used as the seed key.
     pub async fn dispatch(&self, req: ChatCompletionRequest) -> Result<Value, DispatchError> {
+        if self.cancellation.is_cancelled() {
+            return Err(DispatchError::Cancelled);
+        }
         match &self.dispatcher {
-            Dispatcher::Real(transport) => Ok(transport.dispatch(req).await?),
+            Dispatcher::Real(transport) => tokio::select! {
+                result = transport.dispatch(req) => Ok(result?),
+                _ = self.cancellation.cancelled() => Err(DispatchError::Cancelled),
+            },
             Dispatcher::Mock(mock) => mock
                 .dispatch(&req.endpoint)
                 .ok_or_else(|| DispatchError::MockKeyMissing(req.endpoint.clone())),
@@ -203,15 +231,19 @@ impl ParseCtx {
         timeout: std::time::Duration,
         max_retries: u32,
     ) -> Result<Value, DispatchError> {
+        if self.cancellation.is_cancelled() {
+            return Err(DispatchError::Cancelled);
+        }
         match &self.dispatcher {
-            Dispatcher::Real(transport) => Ok(transport
-                .dispatch_rest(RestRequest {
+            Dispatcher::Real(transport) => tokio::select! {
+                result = transport.dispatch_rest(RestRequest {
                     endpoint: endpoint.to_string(),
                     body,
                     timeout,
                     max_retries,
-                })
-                .await?),
+                }) => Ok(result?),
+                _ = self.cancellation.cancelled() => Err(DispatchError::Cancelled),
+            },
             Dispatcher::Mock(mock) => mock
                 .dispatch(endpoint)
                 .ok_or_else(|| DispatchError::MockKeyMissing(endpoint.to_string())),
@@ -230,6 +262,10 @@ impl ParseCtx {
 #[async_trait]
 pub trait ProtocolAdapter: Send + Sync {
     fn name(&self) -> &'static str;
+    fn spec(&self) -> &'static crate::protocol_spec::ProtocolSpec {
+        crate::protocol_spec::get(self.name())
+            .expect("every registered protocol adapter must have a ProtocolSpec")
+    }
     fn coordinate_system(&self) -> crate::types::CoordinateSystem;
     fn provides_reading_order(&self) -> bool;
     fn category_vocab(&self) -> &[&'static str];
@@ -246,7 +282,7 @@ pub trait ProtocolAdapter: Send + Sync {
 
 /// Whether a `pipeline` stage runs in-process (`ort`, table only by
 /// default) or against a Pipeline Model Serving endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
 #[value(rename_all = "lowercase")]
 pub enum StageBackendChoice {
     Local,
@@ -257,7 +293,7 @@ pub enum StageBackendChoice {
 /// (T-5.1). `None` fields fall back to `PipelineAdapter::default()`'s
 /// per-stage default (ARCHITECTURE.md §11.2: `table` defaults `Local`,
 /// the other three default `Remote`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PipelineConfig {
     pub layout_backend: Option<StageBackendChoice>,
     pub layout_endpoint: Option<String>,
@@ -347,6 +383,17 @@ impl Registry {
             Arc::new(adapter)
         });
 
+        registry.register("generic-vlm", |overrides| {
+            let mut adapter = generic_vlm::GenericVlmAdapter::default();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.endpoint = endpoint.clone();
+            }
+            if let Some(model) = &overrides.model {
+                adapter.model = model.clone();
+            }
+            Arc::new(adapter)
+        });
+
         registry.register("monkeyocr-v2", |overrides| {
             let mut adapter = monkeyocr_v2::MonkeyOcrV2Adapter::default();
             if let Some(endpoint) = &overrides.endpoint {
@@ -363,6 +410,14 @@ impl Registry {
 
         registry.register("paddleocr", |overrides| {
             let mut adapter = paddleocr::PaddleOcrAdapter::default();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.endpoint = endpoint.clone();
+            }
+            Arc::new(adapter)
+        });
+
+        registry.register("paddlex-structure", |overrides| {
+            let mut adapter = paddlex_structure::PaddleXStructureAdapter::default();
             if let Some(endpoint) = &overrides.endpoint {
                 adapter.endpoint = endpoint.clone();
             }
@@ -556,5 +611,41 @@ mod tests {
             "expected the 100ms timeout to be honored, took {:?}",
             start.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_an_in_flight_dispatch() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+        let cancellation = crate::frontend::CancellationToken::default();
+        let ctx = ParseCtx::new_with_cancellation(
+            Arc::new(Transport::new()),
+            Arc::new(Semaphore::new(1)),
+            Arc::new(Mutex::new(Vec::new())),
+            cancellation.clone(),
+        );
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancellation.cancel();
+        });
+
+        let start = std::time::Instant::now();
+        let result = ctx
+            .dispatch_rest(
+                &format!("{}/slow", server.uri()),
+                serde_json::json!({}),
+                std::time::Duration::from_secs(5),
+                0,
+            )
+            .await;
+        assert!(matches!(result, Err(DispatchError::Cancelled)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "uparser Document Parser"
+  short_description: "Parse, inspect, and route mixed-format documents"
+  default_prompt: "Use $uparser to inspect and parse this document with the appropriate V2 mode."

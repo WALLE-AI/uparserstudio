@@ -4,13 +4,13 @@
 # Read directly by the `uparser` binary (parse/doctor) as the lowest-precedence
 # fallback for --endpoint/--model: explicit flag > $UPARSER_ENDPOINT /
 # $UPARSER_MODEL env > this file's [<protocol>] section. The section is matched
-# against the *effective* protocol, so `--protocol auto` that routes to
+# against the *effective* protocol, so `--mode auto` that routes to
 # mineru-vlm reads [mineru-vlm]. Override the path with $UPARSER_CONFIG.
 # (The scripts/uparser-run.* wrappers read the same file; now redundant.)
 
 [mineru-vlm]
 endpoint = "http://127.0.0.1:19122/v1/chat/completions"
-model    = "MinerU2.5-2604-1.2B"
+model    = "MinerU2.5-Pro-2605-1.2B"
 
 # [dots-ocr]
 # endpoint = "http://127.0.0.1:8000/v1/chat/completions"

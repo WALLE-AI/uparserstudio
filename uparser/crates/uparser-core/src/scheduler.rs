@@ -48,11 +48,20 @@ pub struct Scheduler {
     /// window's `RenderedPage` buffers are dropped once that window's
     /// tasks complete, before the next window is rasterized/processed.
     pub window_size: usize,
+    cancellation: crate::frontend::CancellationToken,
 }
 
 impl Scheduler {
     pub fn new(window_size: usize) -> Self {
-        Self { window_size }
+        Self {
+            window_size,
+            cancellation: crate::frontend::CancellationToken::default(),
+        }
+    }
+
+    pub fn with_cancellation(mut self, cancellation: crate::frontend::CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 
     /// Runs `adapter.parse_page` over every page, windowed and
@@ -116,10 +125,11 @@ impl Scheduler {
                 let page_num = page.page_num;
                 let page = page.clone();
                 let adapter = Arc::clone(&adapter);
-                let ctx = ParseCtx::new_with_shared_warnings(
+                let ctx = ParseCtx::new_with_cancellation(
                     Arc::clone(&transport),
                     Arc::clone(&permits),
                     Arc::clone(&warnings),
+                    self.cancellation.clone(),
                 );
                 handles.push((
                     page_num,
@@ -199,10 +209,11 @@ impl Scheduler {
                 let page_num = page.page_num;
                 let page = page.clone();
                 let adapter = Arc::clone(&adapter);
-                let ctx = ParseCtx::new_with_shared_warnings(
+                let ctx = ParseCtx::new_with_cancellation(
                     Arc::clone(&transport),
                     Arc::clone(&permits),
                     Arc::clone(&window_warnings),
+                    self.cancellation.clone(),
                 );
                 handles.push((
                     page_num,
@@ -241,6 +252,66 @@ impl Scheduler {
 
         out_pages.sort_by_key(|p| p.page_num);
         (out_pages, out_errors, out_warnings)
+    }
+
+    /// Pulls bounded windows from a `PageSource` and schedules each window
+    /// before requesting the next one. Cancellation therefore stops future
+    /// conversion/raster windows instead of accepting another whole document.
+    pub async fn run_source<F, G>(
+        &self,
+        adapter: Arc<dyn ProtocolAdapter>,
+        transport: Arc<Transport>,
+        permits: Arc<Semaphore>,
+        source: &mut dyn crate::frontend::PageSource,
+        mut on_window: F,
+        mut on_page: G,
+    ) -> Result<(Vec<Page>, Vec<PageError>, Vec<String>), crate::frontend::PageSourceError>
+    where
+        F: FnMut(&[Page], &[PageError], &[String]),
+        G: FnMut(&PageProgress),
+    {
+        let total = source.page_count_hint().unwrap_or(0);
+        let mut completed = 0usize;
+        let mut all_pages = Vec::new();
+        let mut all_errors = Vec::new();
+        let mut all_warnings = Vec::new();
+
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(crate::frontend::PageSourceError::Cancelled);
+            }
+            let window = source.next_window(self.window_size.max(1)).await?;
+            if window.is_empty() {
+                break;
+            }
+            let input_page_numbers: Vec<u32> = window.iter().map(|page| page.page_num).collect();
+            let (pages, errors, warnings) = self
+                .run(
+                    Arc::clone(&adapter),
+                    Arc::clone(&transport),
+                    Arc::clone(&permits),
+                    window,
+                )
+                .await;
+            if self.cancellation.is_cancelled() {
+                return Err(crate::frontend::PageSourceError::Cancelled);
+            }
+            for page_num in input_page_numbers {
+                completed += 1;
+                on_page(&PageProgress {
+                    page_num,
+                    ok: pages.iter().any(|page| page.page_num == page_num),
+                    completed,
+                    total,
+                });
+            }
+            on_window(&pages, &errors, &warnings);
+            all_pages.extend(pages);
+            all_errors.extend(errors);
+            all_warnings.extend(warnings);
+        }
+        all_pages.sort_by_key(|page| page.page_num);
+        Ok((all_pages, all_errors, all_warnings))
     }
 }
 

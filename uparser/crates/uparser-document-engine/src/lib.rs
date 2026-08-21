@@ -13,7 +13,7 @@ mod options;
 mod package;
 pub mod render;
 
-pub use detect::{DocumentFormat, detect_format};
+pub use detect::{DocumentFormat, detect_format, format_from_extension};
 pub use error::{DocumentError, ParseWarning, WarningCode};
 pub use model::{
     AnchorId, Asset, AssetId, Block, CanonicalDocument, Cell, CellSlot, CellValueKind,

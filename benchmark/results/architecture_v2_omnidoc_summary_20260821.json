@@ -1,0 +1,223 @@
+{
+    "save_name": "architecture-v2-20260821_quick_match",
+    "runtime_environment": {
+        "system": {
+            "platform": "Linux-5.15.0-119-generic-x86_64-with-glibc2.35",
+            "python_version": "3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]",
+            "python_executable": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBench/.venv/bin/python",
+            "python_prefix": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBench/.venv",
+            "conda_env": "base",
+            "conda_prefix": "/home/dataset1/gaojing/anaconda3",
+            "libc": "glibc 2.35",
+            "uname": "Linux a100 5.15.0-119-generic #129-Ubuntu SMP Fri Aug 2 19:25:20 UTC 2024 x86_64 x86_64",
+            "os_release": {
+                "PRETTY_NAME": "Ubuntu 22.04.5 LTS",
+                "NAME": "Ubuntu",
+                "VERSION_ID": "22.04",
+                "VERSION": "22.04.5 LTS (Jammy Jellyfish)",
+                "VERSION_CODENAME": "jammy",
+                "ID": "ubuntu",
+                "ID_LIKE": "debian",
+                "HOME_URL": "https://www.ubuntu.com/",
+                "SUPPORT_URL": "https://help.ubuntu.com/",
+                "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+                "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+                "UBUNTU_CODENAME": "jammy"
+            }
+        },
+        "system_packages": {
+            "package_manager": "dpkg-query",
+            "tracked_packages": {
+                "ghostscript": "ghostscript=",
+                "imagemagick": "unavailable (dpkg-query: no packages found matching imagemagick)",
+                "fontconfig": "fontconfig=2.13.1-4.2ubuntu5",
+                "python3": "python3=3.10.6-1~22.04.1",
+                "python3-pip": "python3-pip=22.0.2+dfsg-1ubuntu0.7",
+                "python3-setuptools": "python3-setuptools=59.6.0-1.2ubuntu0.22.04.3",
+                "python3-wheel": "python3-wheel=0.37.1-2ubuntu0.22.04.1",
+                "texlive-base": "unavailable (dpkg-query: no packages found matching texlive-base)",
+                "texlive-binaries": "texlive-binaries=",
+                "texlive-lang-chinese": "unavailable (dpkg-query: no packages found matching texlive-lang-chinese)",
+                "texlive-lang-cjk": "unavailable (dpkg-query: no packages found matching texlive-lang-cjk)",
+                "texlive-latex-base": "unavailable (dpkg-query: no packages found matching texlive-latex-base)",
+                "texlive-latex-extra": "unavailable (dpkg-query: no packages found matching texlive-latex-extra)",
+                "texlive-fonts-recommended": "unavailable (dpkg-query: no packages found matching texlive-fonts-recommended)",
+                "texlive-plain-generic": "unavailable (dpkg-query: no packages found matching texlive-plain-generic)",
+                "latexml": "latexml="
+            }
+        },
+        "python_packages": {
+            "apted": "1.0.3",
+            "beautifulsoup4": "4.11.1",
+            "evaluate": "0.4.3",
+            "func-timeout": "4.3.5",
+            "Levenshtein": "0.25.1",
+            "loguru": "0.7.2",
+            "lxml": "4.9.1",
+            "matplotlib": "3.7.5",
+            "nltk": "3.9.1",
+            "numpy": "1.24.4",
+            "pandas": "2.0.3",
+            "Pillow": "10.4.0",
+            "pylatexenc": "2.10",
+            "PyYAML": "6.0.2",
+            "scipy": "1.10.1",
+            "tabulate": "0.9.0",
+            "tqdm": "4.67.1",
+            "pip": "unavailable",
+            "setuptools": "unavailable",
+            "wheel": "unavailable"
+        },
+        "external_tools": {
+            "pdflatex": {
+                "path": "/share/texlive/pdflatex",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: '/share/texlive/pdflatex')"
+            },
+            "kpsewhich": {
+                "path": "/share/texlive/kpsewhich",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: '/share/texlive/kpsewhich')"
+            },
+            "tlmgr": {
+                "path": "tlmgr",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'tlmgr')"
+            },
+            "ghostscript": {
+                "path": "gs",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'gs')"
+            },
+            "magick": {
+                "path": "magick",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'magick')"
+            },
+            "convert": {
+                "path": "convert",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'convert')"
+            },
+            "identify": {
+                "path": "identify",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'identify')"
+            },
+            "latexmlc": {
+                "path": "latexmlc",
+                "returncode": null,
+                "output": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: 'latexmlc')"
+            }
+        },
+        "texlive": {
+            "cjk_font_family": "gkai",
+            "cjk_sty": {
+                "path": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: '/share/texlive/kpsewhich')",
+                "version": "unavailable",
+                "date": "",
+                "header": "",
+                "status": "not_found"
+            },
+            "cjk_font_fd": {
+                "path": "unavailable (FileNotFoundError: [Errno 2] No such file or directory: '/share/texlive/kpsewhich')",
+                "version": "unavailable",
+                "date": "",
+                "header": "",
+                "status": "not_found"
+            }
+        }
+    },
+    "stage_execution": {
+        "page_match": {
+            "workers": 24,
+            "page_count": 1651,
+            "quick_match_truncated_timeout_sec": 300,
+            "match_timeout_sec": 420,
+            "fallbacks": {
+                "quick_match_timeout": {
+                    "count": 0,
+                    "cases": []
+                },
+                "page_timeout": {
+                    "count": 0,
+                    "cases": []
+                }
+            }
+        },
+        "metrics": {
+            "table": {
+                "TEDS": {
+                    "workers": 24,
+                    "timeout_sec": 120.0,
+                    "sample_count": 665,
+                    "timeout_case_count": 0,
+                    "timeout_cases": [],
+                    "error_case_count": 0,
+                    "error_cases": [],
+                    "exception_case_count": 0,
+                    "exception_cases": []
+                }
+            }
+        }
+    },
+    "page_denominators": {
+        "text_block": {
+            "Edit_dist": {
+                "ALL": 1557
+            }
+        },
+        "display_formula": {
+            "Edit_dist": {
+                "ALL": 313
+            }
+        },
+        "table": {
+            "TEDS": {
+                "ALL": 458
+            },
+            "Edit_dist": {
+                "ALL": 458
+            },
+            "TEDS_structure_only": {
+                "ALL": 458
+            }
+        },
+        "reading_order": {
+            "Edit_dist": {
+                "ALL": 1638
+            }
+        }
+    },
+    "notebook_metric_summary": {
+        "source": "tools/generate_result_tables.ipynb#cell-2",
+        "metrics": {
+            "text_block_Edit_dist": {
+                "raw": 0.06965977853460543,
+                "page_denominator": 1557,
+                "notebook_value": 0.06965977853460543
+            },
+            "display_formula_CDM": {
+                "raw": null,
+                "page_denominator": null,
+                "notebook_value": null
+            },
+            "table_TEDS": {
+                "raw": 0.9242793487193435,
+                "page_denominator": 458,
+                "notebook_value": 92.42793487193435
+            },
+            "table_TEDS_structure_only": {
+                "raw": 0.9524485130422348,
+                "page_denominator": 458,
+                "notebook_value": 95.24485130422347
+            },
+            "reading_order_Edit_dist": {
+                "raw": 0.1357499101383414,
+                "page_denominator": 1638,
+                "notebook_value": 0.1357499101383414
+            }
+        },
+        "overall_notebook": null
+    }
+}

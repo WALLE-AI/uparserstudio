@@ -43,6 +43,8 @@ fn wrap_as_parse_result(protocol: &str, page: Page) -> ParseResult {
         protocol: protocol.into(),
         routed_by: RoutedBy::Explicit,
         document_profile: None,
+        route_decision: None,
+        preprocess_plan: None,
         model_endpoint: None,
         model_name: None,
         pages: vec![page],

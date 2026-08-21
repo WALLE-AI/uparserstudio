@@ -1,18 +1,25 @@
 ---
 name: uparser
-description: Parse documents into structured Markdown or JSON with the `uparser` CLI — a Rust tool built specifically for coding agents to invoke as a subprocess. Handles PDF, Word (.docx/.doc), PowerPoint (.pptx/.ppt), Excel (.xlsx/.xls/.xlsm/.xlsb), OpenDocument (.odt/.ods/.odp), EPUB, RTF, CSV/TSV and images — every non-PDF format parses fully offline, with no LibreOffice, no model and no network. Use this skill WHENEVER the user wants to extract text, tables, formulas, reading order, slides, spreadsheet cells or images from any of those; convert a document to Markdown; OCR or VLM-parse a scanned document; classify a document before parsing; or feed document content into a RAG/LLM pipeline — even if they don't say "uparser" by name. Also use it when choosing between a fast local parse and a high-accuracy vision-model parse, or when a previous document-parsing attempt gave garbled/empty output.
+description: Parse, inspect, classify, plan, and route documents with the `uparser` Rust CLI. Use for PDF, Word, PowerPoint, Excel, OpenDocument, EPUB, RTF, CSV/TSV, PNG, or JPEG tasks involving Markdown/JSON extraction, tables, formulas, reading order, slides, spreadsheet cells, assets, OCR/VLM parsing, document-type analysis, routing between native/model-protocol/pipeline modes, endpoint diagnostics, or RAG ingestion. Trigger even when the user does not name uparser, especially for mixed-format batches, scanned or complex documents, and failed/garbled prior extraction.
 ---
 
 # uparser
 
 `uparser` is a unified document-parsing CLI (Rust). It turns a document into a clean **Markdown** or a structured **JSON** intermediate representation (blocks with bounding boxes, categories, tables, formulas, reading order). It is designed to be driven by coding agents as a subprocess: **stdout = the result, stderr = logs, and the exit code is semantic** (see Output contract).
 
-Pick the parsing engine with `--protocol`. The two you'll use most:
+Use the V2 execution families through `--mode`:
+
+- **`auto`** — detect format, analyze content/structure, build a preprocessing plan, filter feasible engines, then route by quality/speed/cost. This is the default when both `--mode` and `--protocol` are omitted.
+- **`native`** — pure Rust, zero model/GPU/network. It preserves the existing native PDF and structured-document algorithms.
+- **`protocol`** — select a model protocol such as `mineru-vlm`, `dots-ocr`, `generic-vlm`, `monkeyocr-v2`, `paddleocr`, or `paddlex-structure`; also pass `--protocol <name>`.
+- **`pipeline`** — run the typed layout→OCR→formula→table StageGraph; its external services must be configured explicitly.
+
+Direct `--protocol native|mineru-vlm|...|auto` remains a backward-compatible shortcut. The two concrete engines used most often are:
 
 - **`native`** — pure-Rust, **zero model, no GPU, no network**. Milliseconds per document. Two engines share this one name: a PDF text-layer engine for **born-digital PDFs**, and a **structured-document engine** that reads Word/PowerPoint/Excel/OpenDocument/EPUB/RTF/CSV *from their own source structure* (see [Non-PDF documents](#non-pdf-documents-office--opendocument--epub--rtf--csv)). Cannot read scanned/image-only pages (no OCR).
-- **`mineru-vlm`** — highest accuracy (best reading order + tables). Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
+- **`mineru-vlm`** — high-quality VLM path for reading order and tables. Requires an **OpenAI-compatible vLLM endpoint** serving a MinerU2.5 vision model. Use for **scanned documents, complex layouts, or when table/figure fidelity matters**.
 
-> **`--protocol` defaults to `auto`** (a Profiler+Router picks the engine: any non-PDF document format → `native` offline, always; born-digital PDF → `native`; scan/complex PDF → a VLM). So `uparser parse doc.pdf` or `uparser parse deck.pptx` with no flags does the right thing. `mock` (placeholder output, *not* your document) is now **explicit-only** — request it deliberately with `--protocol mock`. Note: for `auto` to reach the offline `native` path the binary must be the `native`-enabled build (the shipped prebuilt is); if `auto` routes to a VLM it still needs an endpoint (it prints a clear stderr hint when none is configured).
+> A bare `uparser parse <file>` uses the auto router's quality preference. Most structured formats remain on the source-semantic native path, but presentations can select a VLM to preserve visual layout; born-digital PDFs usually route native, while scans and images require a model. `mock` is explicit-only. Inspect `plan` first when conversion tools or model endpoints may be unavailable.
 
 ## Agent helper scripts (one call, correct defaults)
 
@@ -69,8 +76,9 @@ The config-driven wrappers (`scripts/uparser-run.sh` / `.ps1`) call this
 automatically, so `uparser-run.sh parse ...` just works on a fresh machine.
 Env overrides: `UPARSER_VERSION`, `UPARSER_REPO`, `UPARSER_HOME` (cache root).
 
-**Building from source instead** (e.g. to add `pdfium` for the VLM/OCR
-protocols — the prebuilt already includes it):
+The pinned `v0.3.0`/`v0.2.0` assets predate the V2 `--mode` and `plan` commands. In this repository, use `uparser/target/release/uparser` after building current source; use `UPARSER_BIN` or put that binary on `PATH` when exercising V2. Keep the pin until a release actually publishes matching assets.
+
+**Build current V2 from source** (also adds `pdfium` for VLM/OCR protocols):
 ```bash
 cargo build --release --features native,pdfium   # from the uparser/ workspace
 ```
@@ -80,44 +88,77 @@ cargo build --release --features native,pdfium   # from the uparser/ workspace
 
 ```bash
 # Fast, local, born-digital PDF → Markdown:
-uparser parse --protocol native --format markdown report.pdf > report.md
+uparser parse --mode native --format markdown report.pdf > report.md
 
 # Highest quality via a vision model (needs a vLLM endpoint):
-uparser parse --protocol mineru-vlm \
+uparser parse --mode protocol --protocol mineru-vlm \
   --endpoint http://127.0.0.1:19122/v1/chat/completions \
-  --model MinerU2.5-2604-1.2B \
+  --model MinerU2.5-Pro-2605-1.2B \
   --format markdown scan.pdf > scan.md
 
 # Let uparser choose the engine automatically:
-uparser parse --protocol auto --format markdown mystery.pdf > out.md
+uparser parse --mode auto --format markdown mystery.pdf > out.md
 
-# Any Office/OpenDocument/EPUB/RTF/CSV file — offline, no flags needed:
-uparser parse --format markdown deck.pptx > deck.md
-uparser parse --format document-json report.docx > report.json   # lossless structure
+# Force the source-semantic offline path for Office/OpenDocument/EPUB/RTF/CSV:
+uparser parse --mode native --format markdown deck.pptx > deck.md
+uparser parse --mode native --format document-json report.docx > report.json
 ```
+
+Inspect before spending model resources:
+
+```bash
+uparser classify mystery.pdf                         # profile only
+uparser plan --mode auto --prefer quality mystery.pdf
+uparser plan --mode auto --prefer speed mystery.pdf
+```
+
+`plan` returns the detected format, `DocumentProfile`, route decision with reason/rejection codes, and `PreprocessPlan` without executing the selected parser. Use `--prefer quality|speed|cost` to make the tradeoff explicit.
 
 ## Choosing a protocol
 
-Decide with this table. When unsure, use `--protocol auto` (the default), or run `uparser classify <file>` first — but note `classify` profiles **PDFs**; on a non-PDF document it reports `unknown` and tells you nothing, because those never need routing in the first place.
+Decide with this table. When unsure, use `--mode auto` or inspect `uparser plan --mode auto <file>` first.
 
 | Situation | Use | Why |
 |---|---|---|
 | Born-digital PDF, need speed, no GPU | `native` | ms/page, zero deps; text-layer extraction |
 | Scanned / image-only PDF | `mineru-vlm` (or another VLM) | `native` has no OCR → empty output on scans |
 | Complex tables / figures matter | `mineru-vlm` | best table (OTSL→HTML) + reading order |
-| Don't know the document type | `auto` (the default) or `classify` first | non-PDF formats → `native` always; born-digital PDF → `native`; else → VLM |
-| Office / OpenDocument / EPUB / RTF / CSV input | `native` (the `auto` default already picks it) | parsed in-process from the source structure — **no LibreOffice, no model, no network**. See the next section |
+| Don't know the document type | `--mode auto` or `plan` first | inspect detected format, profile, route reasons and preprocessing before execution |
+| Office / OpenDocument / EPUB / RTF / CSV input | `--mode native` for guaranteed offline source fidelity | parsed in-process from source structure with no LibreOffice, model, or network; quality-auto may prefer VLM for presentations |
 | Image input (png/jpg) | a VLM protocol | there is no text layer to read |
 
-Other protocols: `dots-ocr`, `monkeyocr-v2` (single/two-stage VLMs, need their own endpoint), `pipeline` (traditional layout→OCR→formula→table), `paddleocr`. Run `uparser protocols` to introspect every adapter's capabilities as JSON. See `references/protocols.md` for details on all of them.
+Other protocols: `dots-ocr`, `generic-vlm`, `monkeyocr-v2`, `paddleocr`, and `paddlex-structure`. `pipeline` is a separate execution mode. Run `uparser protocols` to inspect mode, shape, transport, coordinates, vocabulary, model stages, and defaults. See `references/protocols.md` for details.
+
+## V2 analysis and routing workflow
+
+Follow this sequence for mixed or unfamiliar input:
+
+1. Run `uparser plan --mode auto --prefer <quality|speed|cost> <file>`.
+2. Check `source_format`, format warnings, `source_quality`, genre confidence/evidence, structure signals, feasible candidates, rejection codes, and the selected preprocessing plan.
+3. If the selected model/pipeline needs an endpoint, run `uparser doctor <protocol> --endpoint <url>`.
+4. `--prefer` is plan-only. To execute a speed/cost plan exactly, pass its selected protocol explicitly with `parse --mode protocol --protocol <selected>`; otherwise `parse --mode auto` uses the router's default quality preference.
+5. Inspect `route_decision`, `preprocess_plan`, `warnings`, and `page_errors` in JSON rather than inferring behavior from Markdown.
+
+The profiler uses L1 format evidence and L2 source structure. It detects source quality,
+page/unit counts, text and image density, tables/formulas/charts, headings, table of contents,
+numbered clauses, and multi-column structure. It predicts book, resume, tender, bid, legal
+document, regulation, contract, academic paper, financial report, manual, presentation,
+spreadsheet, general report, other, or unknown. Conditional L3 semantic enrichment may run
+only for low-confidence text-bearing input when configured; failure falls back to L2.
+
+Do not treat a route as a quality oracle. Auto ranks only feasible candidates under the
+requested preference. Preserve `route_decision.reason_codes`, rejected candidates, confidence,
+and evidence for auditability.
 
 ## Non-PDF documents (Office / OpenDocument / EPUB / RTF / CSV)
 
 These do **not** go through PDF conversion, rasterization or a model. `native` reads
 each format's own structure in-process, so a `.docx` heading is a heading because the
 file says so — not because a layout model guessed it from pixels. **No LibreOffice, no
-`soffice`, no network, no GPU.** This is also what plain `uparser parse <file>` does:
-`auto` routes every format below straight to `native`.
+`soffice`, no network, no GPU.** Request it explicitly with `--mode native` when
+offline execution or source fidelity is required. Auto-quality normally chooses it for
+text documents and spreadsheets, but may choose a visual model for presentations;
+speed/cost plans choose native for the generated PPT/PPTX/ODP matrix fixtures.
 
 | Input | Extensions | Read as |
 |---|---|---|
@@ -129,10 +170,11 @@ file says so — not because a layout model guessed it from pixels. **No LibreOf
 | RTF | `.rtf` | paragraphs, character styles, tables, images |
 | Delimited text | `.csv`, `.tsv`, `.tab` | a single table |
 
-Format detection is **signature-first, extension-second**: a `.docx` misnamed `report.pdf`
-is still parsed as DOCX. The exception is delimited text — CSV/TSV have no magic bytes,
-so they are recognized **by extension only**. A CSV named `data.txt` will not be
-recognized (it falls through to the PDF/VLM path); rename it or pass the real extension.
+The authoritative format contract has 16 variants: PDF, DOC, DOCX, PPT, PPTX, Excel, ODT,
+ODS, ODP, RTF, EPUB, CSV, TSV, PNG, JPEG, and Unknown. Detection is content/signature-first;
+OOXML/ODF/EPUB ZIP containers and legacy OLE files are inspected internally. CSV/TSV require
+the matching extension **and** valid, consistent delimited syntax. A conflicting extension
+produces a warning while verified content wins.
 
 ### Pick the output format deliberately
 
@@ -163,9 +205,9 @@ one pass and returned whole. Passing one prints a `warning:` line on stderr sayi
 you never mistake "returned everything" for "selected what I asked for". To keep only some
 slides/sheets/chapters, filter `units[]` (or `pages[]`) yourself from the JSON.
 
-`uparser classify` is not useful here — it is a PDF profiler and reports
-`source_format: "unknown"` for these. There is nothing to decide: they always parse
-offline with `native`.
+`uparser classify` also profiles structured formats. It derives strong format priors for
+presentations, spreadsheets, and EPUB, then summarizes source structure. Prefer `plan` when
+you also need the actual route and preprocessing decision.
 
 ### Read the `warnings` array
 
@@ -195,12 +237,13 @@ Known gaps worth knowing before you promise a user something:
 
 ### When you *would* want a VLM on an Office file
 
-Only when the file is a wrapper around scanned images (e.g. a DOCX whose "content" is a
-full-page photo). Forcing a VLM protocol converts the file to PDF first via **LibreOffice**
+Use it when the file is a wrapper around scanned images (e.g. a DOCX whose "content" is a
+full-page photo), or when presentation visual layout matters more than source-semantic
+structure. A VLM protocol converts the file to PDF first via **LibreOffice**
 (`soffice`) — if it is not installed you get exit code 2 and
-`required conversion tool "soffice" was not found on PATH`. For ordinary Office files
-this path is strictly worse: slower, needs a GPU endpoint, and throws away structure the
-source file already states.
+`required conversion tool "soffice" was not found on PATH`. For ordinary text documents
+and spreadsheets, native is usually preferable: it is faster, offline, and preserves
+structure the source file already states. Run `plan` before accepting a model route.
 
 ## Output contract (important for agents)
 
@@ -229,7 +272,8 @@ uparser parse --protocol native --format json paper.pdf > paper.json
 uparser parse --protocol mineru-vlm --endpoint <url> --model <m> --pages 1-3,7 big.pdf
 
 # Classify first (no model call) to decide routing / cost:
-uparser classify paper.pdf        # → DocumentProfile JSON (kind, dominant_content, per-page)
+uparser classify paper.pdf        # → DocumentProfile JSON
+uparser plan --mode auto --prefer cost paper.pdf
 
 # Check an endpoint is reachable before a big run:
 uparser doctor mineru-vlm --endpoint http://127.0.0.1:19122/v1/chat/completions
@@ -249,7 +293,10 @@ The same applies to images *embedded* in a structured document (DOCX/PPTX/ODF/EP
 
 ## Key flags (see `parse --help` for all)
 
-- `--protocol <native|mineru-vlm|dots-ocr|monkeyocr-v2|pipeline|paddleocr|auto|mock>`
+- `--mode <auto|native|protocol|pipeline>` — preferred V2 execution-family selector
+- `--protocol <native|mineru-vlm|dots-ocr|generic-vlm|monkeyocr-v2|paddleocr|paddlex-structure|pipeline|auto|mock>` — concrete protocol or compatibility shortcut
+- `plan --prefer <quality|speed|cost>` — inspect route and preprocessing without parsing
+- `--markdown-source <engine|canonical>` — keep `engine` for native fidelity; canonical is an explicit comparison/debug path
 - `--format <markdown|json|document-json>` (default `json`; `document-json` is the lossless
   structured contract for non-PDF documents — see that section)
 - `--endpoint <url>` / `--model <name>` — for the VLM/OCR protocols
@@ -276,14 +323,14 @@ The same applies to images *embedded* in a structured document (DOCX/PPTX/ODF/EP
 ```bash
 # Set once, then omit the flags on every call:
 export UPARSER_ENDPOINT=http://10.0.0.5:19122/v1/chat/completions
-export UPARSER_MODEL=MinerU2.5-2604-1.2B
+export UPARSER_MODEL=MinerU2.5-Pro-2605-1.2B
 uparser parse --protocol mineru-vlm --format markdown doc.pdf   # no --endpoint/--model
 ```
 ```toml
 # …or a config file (template: references/config.example.toml):
 [mineru-vlm]
 endpoint = "http://10.0.0.5:19122/v1/chat/completions"
-model    = "MinerU2.5-2604-1.2B"
+model    = "MinerU2.5-Pro-2605-1.2B"
 ```
 
 The `scripts/uparser-run.sh` / `.ps1` wrappers predate this and inject the same
@@ -303,7 +350,9 @@ There is no prebuilt Windows binary. Two options:
 
 ## Performance notes (measured on opendataloader-bench)
 
-- `native` ≈ 0.05 s/doc, no GPU; strong quality on born-digital docs. Use it as the default fast path.
-- `mineru-vlm` ≈ best overall quality (reading order + tables) but ~1–2 s/page and needs a GPU-backed endpoint. Repeated identical parses hit the content-hash cache (near-instant) unless `--no-cache`.
+- V2 `native` measured `0.0508 s/doc`, Overall `0.8754`, with Markdown and quality identical to the frozen native path. The observed `+7.33%` wall-clock difference is a single-run end-to-end comparison, not an isolated runner microbenchmark.
+- V2 `mineru-vlm` 2605 measured `0.6208 s/doc`, Overall `0.9240`; V2 auto measured `0.1370 s/doc` with 156/44 native/VLM routes on 200 PDFs.
+- Full OmniDocBench completed 1,651/1,651 pages with no page-match or TEDS timeout. Current V2 is stable but does **not** beat the historical `surpass`/`official` quality baselines, so do not claim global quality leadership.
+- Use `--no-cache` for benchmark/reverification runs. Native execution reuses its analysis artifact but does not use the model content cache.
 
 For the full protocol reference, capability matrix, and endpoint setup, read `references/protocols.md`.

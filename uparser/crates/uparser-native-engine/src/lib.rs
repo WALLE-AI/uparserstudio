@@ -155,6 +155,9 @@ pub struct PdfProcessResult {
     /// `true` when broken font encodings are detected (garbled text,
     /// replacement characters). Clients should fall back to OCR.
     pub has_encoding_issues: bool,
+    /// Positioned items produced by the same extraction pass. Consumers can
+    /// derive page geometry without loading and extracting the PDF again.
+    pub positioned_items: Vec<types::TextItem>,
 }
 
 // =========================================================================
@@ -3612,6 +3615,7 @@ fn process_document(
             confidence,
             layout: LayoutComplexity::default(),
             has_encoding_issues: false,
+            positioned_items: Vec::new(),
         });
     }
 
@@ -3628,6 +3632,7 @@ fn process_document(
             confidence,
             layout: LayoutComplexity::default(),
             has_encoding_issues: false,
+            positioned_items: Vec::new(),
         });
     }
 
@@ -3707,6 +3712,7 @@ fn process_document(
         })
         .unwrap_or((None, Vec::new()));
 
+    let mut positioned_items = Vec::new();
     let (
         markdown,
         layout,
@@ -3812,6 +3818,7 @@ fn process_document(
             let text_quality = analyze_text_quality(&items);
             merge_ocr_reasons(&mut ocr_reasons_by_page, text_quality.reasons_by_page);
             let layout = compute_layout_complexity(&items, &layout_items, &rects, &lines);
+            positioned_items = items.clone();
 
             let md = if options.mode == ProcessMode::Analyze {
                 None
@@ -3954,6 +3961,7 @@ fn process_document(
         confidence,
         layout,
         has_encoding_issues,
+        positioned_items,
     })
 }
 

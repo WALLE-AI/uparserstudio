@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-21",
+  "dataset": "opensource/opendataloader-bench/pdfs",
+  "document_count": 200,
+  "higher_is_better": true,
+  "binary_sha256": "557ae4b074380decb1c71ee6cf019b4a6a67f043745fa736ec98107a02016b44",
+  "build_features": ["native", "pdfium"],
+  "runs": {
+    "frozen_native": {
+      "overall": 0.8754249671069286,
+      "nid": 0.9150189059881175,
+      "teds": 0.8141173616435706,
+      "mhs": 0.7875113953011849,
+      "seconds_per_document": 0.047340880632400516,
+      "explicit_rejections": 1
+    },
+    "v2_native_engine": {
+      "overall": 0.8754249671069286,
+      "nid": 0.9150189059881175,
+      "teds": 0.8141173616435706,
+      "mhs": 0.7875113953011849,
+      "seconds_per_document": 0.05081035017967224,
+      "explicit_rejections": 1,
+      "cache": false,
+      "markdown_diff_count_vs_frozen": 0,
+      "source_sha256": "6f6b384cd24c2ee22604f18581cf230ec1b3f241091c452fe07bbb65e376681b"
+    },
+    "v2_native_canonical": {
+      "overall": 0.5668676492788233,
+      "nid": 0.8526515293735399,
+      "teds": 0.0,
+      "mhs": 0.0,
+      "seconds_per_document": 0.05172435641288757,
+      "explicit_rejections": 1,
+      "cache": false,
+      "markdown_diff_count_vs_engine": 199,
+      "source_sha256": "bac90c68791c80b01d95856dd1aa575e13b85a95fc079f6967bce42c9fdd2d90"
+    },
+    "frozen_mineru": {
+      "overall": 0.9283676121222096,
+      "nid": 0.9470100745084458,
+      "teds": 0.9438942637146293,
+      "mhs": 0.8777281303767157,
+      "speed_valid": false,
+      "speed_invalid_reason": "historical run hit the uparser cache"
+    },
+    "v2_mineru_2605": {
+      "overall": 0.9239777374183431,
+      "nid": 0.9433099491384414,
+      "teds": 0.9682281233189359,
+      "mhs": 0.8672139565731531,
+      "seconds_per_document": 0.6208099973201752,
+      "failures": 0,
+      "cache": false,
+      "document_workers": 4,
+      "runner_max_concurrency": 16,
+      "service_model": "MinerU2.5-Pro-2605-1.2B",
+      "source_sha256": "53d0be510a2f3edf66dd124ef96af2a962fe772eba86e9854542bb997c9c3f73"
+    },
+    "v2_auto": {
+      "overall": 0.8920231866508953,
+      "nid": 0.9280398827267365,
+      "teds": 0.9060593327597101,
+      "mhs": 0.7948047237644665,
+      "seconds_per_document": 0.13698793411254884,
+      "failures": 0,
+      "cache": false,
+      "document_workers": 4,
+      "runner_max_concurrency": 16,
+      "route_distribution": {"native": 156, "mineru-vlm": 44},
+      "source_sha256": "fab547629964fcbb5246b88e16a5b2dd2c486d4fb8ac5d1ce0bac20f48442d38"
+    }
+  },
+  "deltas": {
+    "v2_native_engine_vs_frozen_overall": 0.0,
+    "v2_native_engine_vs_frozen_speed_percent": 7.328696680173685,
+    "v2_mineru_vs_frozen_overall": -0.004389874703866526,
+    "v2_auto_vs_native_overall": 0.016598219543966733,
+    "v2_auto_vs_native_teds": 0.09194197111613946,
+    "v2_auto_vs_native_speed_ratio": 2.6960635702793043,
+    "v2_mineru_vs_auto_speed_ratio": 4.531858965112356
+  }
+}

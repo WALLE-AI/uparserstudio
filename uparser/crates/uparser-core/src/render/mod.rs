@@ -89,6 +89,8 @@ mod tests {
             protocol: "mock".into(),
             routed_by: RoutedBy::Explicit,
             document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
             model_endpoint: None,
             model_name: None,
             pages: vec![Page {

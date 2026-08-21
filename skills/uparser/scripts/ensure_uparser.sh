@@ -8,7 +8,7 @@
 #   4) on any failure / unsupported platform, fall back to building from source
 #      via find_uparser.sh --build
 #
-# Env overrides: UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME (cache root).
+# Env overrides: UPARSER_BIN, UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME.
 set -euo pipefail
 
 # Pinned to the last release that published a linux-x86_64 asset. This pin
@@ -21,6 +21,12 @@ REPO="${UPARSER_REPO:-WALLE-AI/uparserstudio}"
 CACHE="${UPARSER_HOME:-$HOME/.cache/uparser}/bin"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 0) explicit binary (use this for an unreleased workspace build)
+if [ -n "${UPARSER_BIN:-}" ]; then
+  [ -x "$UPARSER_BIN" ] || { echo "UPARSER_BIN is not executable: $UPARSER_BIN" >&2; exit 2; }
+  case "$UPARSER_BIN" in /*) echo "$UPARSER_BIN" ;; *) (cd "$(dirname "$UPARSER_BIN")" && printf '%s/%s\n' "$PWD" "$(basename "$UPARSER_BIN")") ;; esac
+  exit 0
+fi
 # 1) already on PATH
 if command -v uparser >/dev/null 2>&1; then command -v uparser; exit 0; fi
 # 2) cached download

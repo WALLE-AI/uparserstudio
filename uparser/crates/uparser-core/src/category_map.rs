@@ -15,6 +15,9 @@
 //! originally reverse-engineered from — the served checkpoint is newer
 //! than that package version, same version-drift caveat noted in
 //! `adapters/mineru_vlm.rs`'s module doc).
+//!
+//! `"image_block"` is a composite-image parent emitted by
+//! `MinerU2.5-Pro-2605`; it contains one or more `image` child regions.
 
 /// mineru-vlm's native category vocabulary (lowercased, per the wire
 /// format's own lowercasing in `output_parse::parse_custom_tokens`).
@@ -23,6 +26,7 @@ pub const MINERU_VLM_CATEGORIES: &[&str] = &[
     "title",
     "table",
     "image",
+    "image_block",
     "code",
     "algorithm",
     "header",
@@ -72,7 +76,7 @@ pub fn map_mineru_vlm_category(raw: &str) -> (String, Option<String>) {
         "text" | "asidetext" | "phonetic" => "text",
         "title" => "title",
         "table" => "table",
-        "image" => "image",
+        "image" | "imageblock" => "image",
         "code" | "algorithm" => "code",
         "header" => "header",
         "footer" => "footer",
@@ -310,6 +314,13 @@ mod tests {
     fn equation_and_equation_block_both_map_to_equation() {
         assert_eq!(map_mineru_vlm_category("equation").0, "equation");
         assert_eq!(map_mineru_vlm_category("equation_block").0, "equation");
+    }
+
+    #[test]
+    fn image_block_maps_to_image_without_warning() {
+        let (normalized, warning) = map_mineru_vlm_category("image_block");
+        assert_eq!(normalized, "image");
+        assert!(warning.is_none());
     }
 
     #[test]

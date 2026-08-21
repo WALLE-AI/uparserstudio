@@ -4,9 +4,8 @@
 #
 # What it decides for you (so an agent doesn't have to):
 #   * ensures the `uparser` binary exists (downloads/builds via ensure_uparser.sh);
-#   * NEVER uses the `mock` protocol (the raw binary's silent default) — so you
-#     never get placeholder text back by accident;
-#   * picks the protocol automatically when you don't pass --protocol:
+#   * NEVER selects the explicit-only `mock` protocol;
+#   * picks the protocol automatically when you pass neither --mode nor --protocol:
 #       - a VLM endpoint is resolvable (‑‑endpoint / $UPARSER_ENDPOINT / config)
 #         → `--protocol auto` (Profiler routes born‑digital→native, scans→VLM),
 #         with the endpoint/model injected for the VLM branch;
@@ -40,9 +39,10 @@ read_ini() { # $1=section $2=key
 }
 
 # scan what the caller already provided
-has_protocol=0 has_ep=0 has_model=0 has_format=0
+has_mode=0 has_protocol=0 has_ep=0 has_model=0 has_format=0
 for a in "$@"; do
   case "$a" in
+    --mode|--mode=*)         has_mode=1 ;;
     --protocol|--protocol=*) has_protocol=1 ;;
     --endpoint|--endpoint=*) has_ep=1 ;;
     --model|--model=*)       has_model=1 ;;
@@ -53,7 +53,7 @@ done
 inject=()
 [ "$has_format" -eq 0 ] && inject+=(--format markdown)
 
-if [ "$has_protocol" -eq 0 ]; then
+if [ "$has_mode" -eq 0 ] && [ "$has_protocol" -eq 0 ]; then
   # resolve a VLM endpoint from flags → env → config[mineru-vlm]
   ep="${UPARSER_ENDPOINT:-}"; [ -n "$ep" ] || ep="$(read_ini mineru-vlm endpoint)"
   md="${UPARSER_MODEL:-}";    [ -n "$md" ] || md="$(read_ini mineru-vlm model)"

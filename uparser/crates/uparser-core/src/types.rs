@@ -58,6 +58,7 @@ pub enum BlockSource {
     OneShotVlm,
     LayoutThenRecognize,
     OcrPipeline,
+    StructuredService,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +132,78 @@ pub enum DocumentKind {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentGenre {
+    Book,
+    Resume,
+    Tender,
+    Bid,
+    LegalDocument,
+    Regulation,
+    Contract,
+    AcademicPaper,
+    FinancialReport,
+    Manual,
+    Presentation,
+    Spreadsheet,
+    GeneralReport,
+    Other,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceQuality {
+    Structured,
+    NativeText,
+    Scanned,
+    ImageOnly,
+    Mixed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceSource {
+    Format,
+    Metadata,
+    Outline,
+    NativeText,
+    Layout,
+    SemanticClassifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisEvidence {
+    pub signal: String,
+    pub source: EvidenceSource,
+    pub unit_index: Option<usize>,
+    pub contribution: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GenrePrediction {
+    pub primary: DocumentGenre,
+    #[serde(default)]
+    pub tags: Vec<DocumentGenre>,
+    pub confidence: f32,
+    #[serde(default)]
+    pub evidence: Vec<AnalysisEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct StructureProfile {
+    pub has_toc: Option<bool>,
+    pub has_cover: Option<bool>,
+    pub heading_depth: Option<u8>,
+    pub numbered_clause_density: f32,
+    pub repeated_header_footer_ratio: f32,
+    pub multi_column_ratio: f32,
+}
+
 /// Which kind of content dominates the document, driving router.rs's
 /// protocol recommendation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,7 +217,7 @@ pub enum ContentMix {
 
 /// How deep the profiler went to produce a given `PageProfile`/
 /// `DocumentProfile` — L3 (deep semantic classification via a model
-/// call) is opt-in and not implemented by this phase's `profiler.rs`.
+/// call) is conditional and only used for low-confidence auto routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileLevel {
@@ -153,9 +226,13 @@ pub enum ProfileLevel {
     L3,
 }
 
-/// L3-only semantic subtype — always `None` at L1/L2. Declared for
-/// shape-compatibility with ARCHITECTURE.md §13.3's spec; no L1/L2 code
-/// path populates it.
+impl Default for ProfileLevel {
+    fn default() -> Self {
+        Self::L1
+    }
+}
+
+/// L3-only semantic subtype — always `None` at L1/L2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TableSubtype {
@@ -195,11 +272,23 @@ pub struct PageProfile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentProfile {
     pub source_format: crate::ingest::DocumentFormat,
+    #[serde(default)]
+    pub source_quality: SourceQuality,
     pub kind: DocumentKind,
     pub kind_confidence: f32,
     #[serde(default)]
+    pub genre: GenrePrediction,
+    #[serde(default)]
+    pub structure: StructureProfile,
+    #[serde(default)]
+    pub page_or_unit_count: Option<u32>,
+    #[serde(default)]
     pub page_profiles: Vec<PageProfile>,
     pub dominant_content: ContentMix,
+    #[serde(default)]
+    pub analysis_level: ProfileLevel,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,6 +298,10 @@ pub struct ParseResult {
     pub protocol: String,
     pub routed_by: RoutedBy,
     pub document_profile: Option<DocumentProfile>,
+    #[serde(default)]
+    pub route_decision: Option<crate::router::RouteDecision>,
+    #[serde(default)]
+    pub preprocess_plan: Option<crate::runner::PreprocessPlan>,
     pub model_endpoint: Option<String>,
     pub model_name: Option<String>,
     #[serde(default)]
@@ -328,6 +421,8 @@ mod tests {
             protocol: "mock".into(),
             routed_by: RoutedBy::Explicit,
             document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
             model_endpoint: None,
             model_name: None,
             pages: vec![Page {
@@ -348,8 +443,17 @@ mod tests {
     fn document_profile_roundtrip() {
         let profile = DocumentProfile {
             source_format: crate::ingest::DocumentFormat::Pdf,
+            source_quality: SourceQuality::NativeText,
             kind: DocumentKind::Report,
             kind_confidence: 0.8,
+            genre: GenrePrediction {
+                primary: DocumentGenre::GeneralReport,
+                tags: Vec::new(),
+                confidence: 0.8,
+                evidence: Vec::new(),
+            },
+            structure: StructureProfile::default(),
+            page_or_unit_count: Some(1),
             page_profiles: vec![PageProfile {
                 text_density: 0.6,
                 image_density: 0.1,
@@ -360,6 +464,8 @@ mod tests {
                 profile_level: ProfileLevel::L2,
             }],
             dominant_content: ContentMix::TextDominant,
+            analysis_level: ProfileLevel::L2,
+            warnings: Vec::new(),
         };
         roundtrip(&profile);
     }

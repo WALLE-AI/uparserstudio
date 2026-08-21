@@ -33,15 +33,17 @@ pub struct ParamFingerprint {
     pub protocol: String,
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    pub execution: Option<String>,
 }
 
 impl ParamFingerprint {
     fn canonical(&self) -> String {
         format!(
-            "{}|{}|{}",
+            "v2-runner-2|{}|{}|{}|{}",
             self.protocol,
             self.endpoint.as_deref().unwrap_or(""),
-            self.model.as_deref().unwrap_or("")
+            self.model.as_deref().unwrap_or(""),
+            self.execution.as_deref().unwrap_or("")
         )
     }
 }
@@ -179,6 +181,8 @@ mod tests {
             protocol: protocol.into(),
             routed_by: RoutedBy::Explicit,
             document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
             model_endpoint: None,
             model_name: None,
             pages: vec![],
@@ -195,6 +199,7 @@ mod tests {
             protocol: "mock".into(),
             endpoint: None,
             model: None,
+            execution: None,
         };
         assert_eq!(cache_key(b"hello", &params), cache_key(b"hello", &params));
     }
@@ -227,11 +232,28 @@ mod tests {
             protocol: "mineru-vlm".into(),
             endpoint: Some("http://a".into()),
             model: None,
+            execution: None,
         };
         let b = ParamFingerprint {
             protocol: "mineru-vlm".into(),
             endpoint: Some("http://b".into()),
             model: None,
+            execution: None,
+        };
+        assert_ne!(cache_key(b"same bytes", &a), cache_key(b"same bytes", &b));
+    }
+
+    #[test]
+    fn cache_key_differs_by_execution_fingerprint() {
+        let a = ParamFingerprint {
+            protocol: "mock".into(),
+            execution: Some("pages=1".into()),
+            ..Default::default()
+        };
+        let b = ParamFingerprint {
+            protocol: "mock".into(),
+            execution: Some("pages=2".into()),
+            ..Default::default()
         };
         assert_ne!(cache_key(b"same bytes", &a), cache_key(b"same bytes", &b));
     }

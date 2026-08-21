@@ -22,4 +22,17 @@ uparser-bundle/
 # Release artifacts (upload to GitHub Releases, not git)
 dist/
 benchmark
+!benchmark/
+benchmark/*
+!benchmark/evaluate_architecture_v2.py
+!benchmark/run_format_matrix.py
+benchmark/format_matrix/
+!benchmark/format_matrix/**
+!benchmark/results/
+benchmark/results/*
+!benchmark/results/architecture_v2_20260821.json
+!benchmark/results/architecture_v2_bench_a_20260821.json
+!benchmark/results/architecture_v2_omnidoc_metric_20260821.json
+!benchmark/results/architecture_v2_omnidoc_summary_20260821.json
 output
+data

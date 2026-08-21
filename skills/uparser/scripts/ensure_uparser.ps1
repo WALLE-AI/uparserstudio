@@ -8,7 +8,7 @@
     4) on failure / no published Windows asset, fall back to building from
        source via build-windows.ps1
 
-  Env overrides: UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME (cache root).
+  Env overrides: UPARSER_BIN, UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME.
   Returns the binary path as the last output line.
 #>
 [CmdletBinding()] param()
@@ -19,6 +19,14 @@ $repo    = if ($env:UPARSER_REPO)    { $env:UPARSER_REPO }    else { 'WALLE-AI/u
 $cacheRoot = if ($env:UPARSER_HOME) { $env:UPARSER_HOME } else { Join-Path $HOME '.cache/uparser' }
 $cache   = Join-Path $cacheRoot 'bin'
 $here    = $PSScriptRoot
+
+# 0) explicit binary (use this for an unreleased workspace build)
+if ($env:UPARSER_BIN) {
+  if (-not (Test-Path -LiteralPath $env:UPARSER_BIN -PathType Leaf)) {
+    throw "UPARSER_BIN does not exist: $($env:UPARSER_BIN)"
+  }
+  return (Resolve-Path -LiteralPath $env:UPARSER_BIN).Path
+}
 
 # 1) already on PATH
 $onPath = (Get-Command uparser.exe -ErrorAction SilentlyContinue).Source

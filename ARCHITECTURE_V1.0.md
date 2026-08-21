@@ -18,6 +18,7 @@
 
 ## 目录
 
+- [0. 总览：架构全景图与执行时序](#0-总览架构全景图与执行时序)
 - [1. 产品定位与 Agent-first 契约](#1-产品定位与-agent-first-契约)
 - [2. 三模式：一级概念](#2-三模式一级概念)
 - [3. 前端：多格式接入与可达性](#3-前端多格式接入与可达性)
@@ -30,7 +31,276 @@
 - [10. 缓存 / 资产 / 错误模型 / CLI 面](#10-缓存--资产--错误模型--cli-面)
 - [11. 现状能力矩阵与验证等级](#11-现状能力矩阵与验证等级)
 - [12. 开放问题（清理版）](#12-开放问题清理版)
+- [13. 架构优化的收益](#13-架构优化的收益)
+- [14. 评测依据与不回退闸门](#14-评测依据与不回退闸门)
 - [附录 A. 工程结构与模块清单](#附录-a-工程结构与模块清单)
+
+---
+
+## 0. 总览：架构全景图与执行时序
+
+本章是全文的入口视图：一张**架构全景图**、一张**多格式分流图**、三张**执行时序图**。
+图中 `⚠` 标注的是 as-built 的已知偏差（正文对应章节有详细说明），不是设计意图。
+
+### 0.1 架构全景图
+
+```mermaid
+flowchart TB
+    subgraph SURF["调用表面（三个，共用同一 IR 序列化）"]
+        CLI["uparser CLI<br/>parse / classify / cache / doctor / protocols"]
+        NAPI["uparser-napi<br/>parse / classify / parseDocument"]
+        PYO3["uparser-python<br/>同上（OnceLock&lt;Runtime&gt; 阻塞）"]
+    end
+
+    subgraph FE["① 前端：多格式接入（§3）"]
+        DET["detect_format<br/>⚠ 两套实现：ingest(8 变体) / document-engine(16 变体)"]
+        C1["C1 源格式原生解析<br/>document-engine · 9 前端 · 纯 Rust"]
+        C2["C2 结构化直读<br/>calamine+csv ⚠ native 构建下不可达"]
+        C3["C3 PDF 文本层<br/>native-engine · lopdf"]
+        C4["C4 光栅化<br/>PDFium 150dpi · feature pdfium"]
+        C5["C5 外部转换<br/>soffice / magick ⚠ 成功路径未验证"]
+    end
+
+    subgraph RT["② 路由（§4，仅 --protocol auto）"]
+        PROF["profiler L1 格式先验<br/>L2 结构启发式（native-engine 信号）<br/>⚠ L3 未实现"]
+        ROUTER["router::route<br/>4 条有效行 + 无条件兜底<br/>⚠ 不看环境可行性 · reason 被丢弃"]
+    end
+
+    subgraph MODES["③ 三模式执行（§6–§8）"]
+        direction LR
+        MN["<b>Mode N · native</b><br/>整文档粒度 · 零模型<br/>native-engine + document-engine"]
+        MV["<b>Mode V · VLM</b><br/>逐页 · 协议化<br/>mineru-vlm / dots-ocr / monkeyocr-v2<br/>⚠ 无通用 VLM 入口"]
+        MP["<b>Mode P · pipeline</b><br/>逐页 + 4 阶段<br/>pipeline / paddleocr<br/>⚠ 契约自拟，待对齐 PaddleX"]
+    end
+
+    SCHED["scheduler.rs（§5）<br/>处理窗口 64 · 并发预算 16（只约束网络 dispatch）<br/>逐页失败/ panic 隔离 · 进度回调 · 流式窗口"]
+
+    subgraph POST["④ 共享后处理（§9）"]
+        PP["postprocess 段落合并<br/>+ content_normalize CJK 标点"]
+        RO["reading_order XY-cut 兜底<br/>⚠ 由 adapter 自调，未编排层化"]
+        AST["assets 图片内容寻址落盘"]
+        CACHE["cache 内容哈希<br/>⚠ 键不含 pages/postprocess/assets"]
+    end
+
+    subgraph OUT["⑤ 输出（§9.4）⚠ 三套渲染规则"]
+        R1["core render<br/>json / markdown"]
+        R2["document-engine render<br/>markdown / document-json"]
+        R3["native-engine 自有 markdown"]
+    end
+
+    subgraph EXT["外部化边界（core 不做重模型推理）"]
+        V1["vLLM / LMDeploy<br/>OpenAI 兼容端点"]
+        V2["Pipeline Model Serving<br/>4 端点 ⚠ 自拟契约"]
+        V3["PaddleX Serving<br/>POST /layout-parsing · /ocr<br/>（权威契约，尚未接入）"]
+        ORT["ort ONNXRuntime<br/>仅 table 阶段 · feature 门"]
+    end
+
+    CLI --> DET
+    NAPI --> DET
+    PYO3 --> DET
+    DET --> C1 & C2 & C3 & C4 & C5
+    DET -.auto.-> PROF --> ROUTER
+    ROUTER --> MODES
+    C1 --> MN
+    C2 --> R1
+    C3 --> MN
+    C5 --> C4
+    C4 --> SCHED
+    SCHED --> MV & MP
+    MV -->|"chat-completions"| V1
+    MP -->|"REST"| V2
+    MP -.目标形态.-> V3
+    MP -.table Local.-> ORT
+    MV --> POST
+    MP --> POST
+    MN -->|"⚠ 绕过 scheduler 与共享后处理"| OUT
+    POST --> OUT
+    R1 --> STDOUT(["stdout=结果 · stderr=日志 · 语义退出码"])
+    R2 --> STDOUT
+    R3 --> STDOUT
+```
+
+### 0.2 多格式接入分流图
+
+**一次调用处理一个文件**（CLI 签名是 `uparser parse <path>`，无批量入口）；
+批处理由调用方循环驱动，评测 harness 即如此（`opendataloader-bench` 的适配器逐篇 `subprocess.run`）。
+下图是**格式 → 通道 → 模式**的完整分流，对应 §3.4 的可达性矩阵。
+
+```mermaid
+flowchart LR
+    IN(["输入文件（单个）"]) --> D{"detect_format<br/>16 变体"}
+
+    D -->|"PDF"| PDF{"目标模式"}
+    PDF -->|"Mode N"| P1["native-engine lopdf<br/>文本层 / 自有 markdown"]
+    PDF -->|"Mode V / P"| P2["PDFium 150dpi 光栅化<br/>→ RenderedPage[]"]
+
+    D -->|"DOCX · PPTX"| OFF{"目标模式"}
+    OFF -->|"Mode N"| O1["document-engine 原生解析<br/>OPC 根关系 → CanonicalDocument"]
+    OFF -->|"Mode V / P"| O2["⚠ soffice --headless → PDF<br/>→ 光栅化（成功路径未验证）"]
+
+    D -->|"DOC · PPT（OLE）<br/>Excel · ODT/ODS/ODP<br/>EPUB · RTF · CSV · TSV"| ONLY["document-engine 原生解析<br/><b>仅 Mode N 可达</b>"]
+    ONLY -.->|"显式选 Mode V/P"| ERR["⚠ 无前置校验 → 1×1 占位页<br/>→ exit 3 且诊断指向 decode"]
+
+    D -->|"PNG · JPEG"| IMG["直接解码为 1 页<br/><b>仅 Mode V / P 可达</b><br/>⚠ Mode N 无图像分支"]
+
+    D -->|"Unknown"| UNK["⚠ 1×1 占位页"]
+
+    P1 --> MN(["Mode N"])
+    O1 --> MN
+    ONLY --> MN
+    P2 --> MVP(["Mode V / Mode P"])
+    O2 --> MVP
+    IMG --> MVP
+```
+
+> 关键事实：**`auto` 会正确分流**（结构化格式直接选 Mode N），而**显式指定 Mode V/P 时没有可达性校验**——
+> 这正是 §12.3 的 A-12，已经污染过一次真实评测（Bench B 的 native 行，见 §14.1 口径警告 2）。
+
+### 0.3 时序图 1：Mode V 逐页两阶段（以 mineru-vlm 为例）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Agent / CLI
+    participant R as cli.rs::run_parse
+    participant CA as cache.rs
+    participant IG as ingest.rs
+    participant SC as scheduler.rs
+    participant AD as adapters/mineru_vlm.rs
+    participant CX as ParseCtx
+    participant TR as transport.rs
+    participant EP as vLLM endpoint
+    participant PO as postprocess + assets
+    participant RD as render
+
+    U->>R: parse doc.pdf --protocol mineru-vlm --endpoint … 
+    R->>R: detect_format → 非结构化
+    R->>R: agent_config: flag → env → config.toml
+    R->>CA: get(sha256(bytes)+protocol|endpoint|model, TTL 24h)
+    alt 命中
+        CA-->>R: ParseResult
+        R->>RD: 直接渲染并返回（exit 0/3）
+    else 未命中
+        CA-->>R: miss
+        R->>IG: rasterize(150dpi) → RenderedPage[]
+        R->>R: --pages 过滤
+        R->>SC: run_with_progress(adapter, transport, permits(16), pages)
+        loop 每个窗口（chunk = max(window 64, concurrency)）
+            par 窗口内逐页并发（tokio::spawn）
+                SC->>AD: parse_page(page, ctx)
+                Note over AD: 阶段①：整页版面检测
+                AD->>AD: imaging::hard_resize（不保长宽比）
+                AD->>CX: acquire_permit()（紧贴 dispatch）
+                CX->>TR: dispatch(chat-completions, skip_special_tokens=false)
+                TR->>EP: POST /v1/chat/completions
+                EP-->>TR: custom_token 版面输出
+                TR-->>AD: JSON（429/5xx/非法JSON 走全抖动重试，总上限 600s）
+                AD->>AD: output_parse::parse_custom_tokens（严格→松弛两级）
+                AD->>AD: geometry 反归一化 + category_map 归一化
+                Note over AD: 阶段②：逐块内容识别（数量取决于阶段①）
+                loop 每个 block（image/chart 类跳过模型调用）
+                    AD->>CX: crop(bbox) + resize（CPU，不占预算）
+                    AD->>CX: acquire_permit()
+                    CX->>TR: dispatch(内容 prompt)
+                    TR->>EP: POST
+                    EP-->>AD: 文本 / OTSL / LaTeX
+                    AD->>AD: otsl::to_html · formula_repair::repair_chain
+                    AD->>AD: robustness: 退化则温度递增重试
+                end
+                AD->>CX: warn(...) 分类/截断/修复告警
+                AD-->>SC: Vec<Block>（单块失败 → block.error；整页失败 → PageError）
+            end
+            SC-->>R: on_page 进度（≥900ms 打印；30s 无进展触发看门狗）
+        end
+        SC-->>R: (pages, page_errors, warnings)
+        R->>PO: merge_paragraphs_by_geometry + content_normalize
+        R->>PO: write_block_assets（sha256 内容寻址 → <stem>_images/）
+        R->>CA: put(key, ParseResult)
+        R->>RD: to_json / to_markdown（category → "# " / "- "）
+        RD-->>U: stdout 结果；exit 0（无 page_errors）或 3
+    end
+```
+
+### 0.4 时序图 2：Mode N 多格式（结构化源 + PDF 两条子路径）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Agent / CLI
+    participant R as cli.rs::run_parse_native
+    participant NA as adapters/native.rs
+    participant DE as uparser-document-engine
+    participant NE as uparser-native-engine
+    participant AS as assets.rs
+    participant RD as render
+
+    U->>R: parse report.docx --protocol native --format markdown
+    Note over R: ⚠ 先行警告：--pages/--stream/--window-size/--max-concurrency 对本模式无效
+    R->>NA: parse_native(path, bytes, ParseOptions{notes, headers_footers, limits})
+    NA->>NA: document_engine::detect_format（RTF头→OLE→OPC/ODF→魔数→扩展名）
+
+    alt 结构化源（DOCX/PPTX/DOC/PPT/XLS(X)/ODF/EPUB/RTF/CSV/TSV）
+        NA->>DE: parse_document(bytes, format, options)
+        DE->>DE: 预算校验（max_input 256MiB / 解压 512MiB / XML 深度 256 / OLE 递归 64 …）
+        DE->>DE: 格式前端 → units[] · blocks[] · notes[] · assets[] · warnings[]
+        DE-->>NA: CanonicalDocument (schema uparser.document.v1)
+        NA-->>R: NativeParse::Structured
+        R->>AS: write_document_assets（先落盘，保证 ![]() 链接可解析）
+        alt --format markdown
+            R->>RD: document_engine::render::markdown
+        else --format document-json
+            R->>RD: document_engine::render::document_json（无损）
+        else --format json
+            R->>NA: structured_to_parse_result（⚠ 有损：list→text、几何全 0、Inline 样式丢失）
+            R->>RD: core render::to_json
+        end
+    else PDF
+        NA->>NE: extract_text_with_positions_mem（--format json）
+        NE-->>NA: TextItem[]（PDF 坐标，原点左下）
+        NA->>NA: 行聚类 + Y 翻转 → Block{spans, font_size}
+        NA->>NE: process_pdf_mem().markdown（--format markdown）
+        NE-->>NA: 引擎自有 Markdown（标题检测/段落聚合/三策略表格）
+        NA-->>R: NativeParse::Pdf
+        R->>RD: 按 --format 渲染
+    end
+    RD-->>U: stdout 结果
+    Note over R,RD: ⚠ 本路径不经 scheduler：无缓存、无 postprocess/标点规范化、无进度与看门狗
+```
+
+### 0.5 时序图 3：`--protocol auto` 的路由决策
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Agent / CLI
+    participant R as cli.rs::resolve_auto_protocol
+    participant DE as document-engine::detect_format
+    participant IG as ingest::detect_format
+    participant PF as profiler.rs
+    participant NE as native-engine
+    participant RT as router.rs
+
+    U->>R: parse input --protocol auto
+    R->>DE: detect_format(bytes, path)
+    alt 命中 12 个结构化变体
+        DE-->>R: Csv/Tsv/Excel/Ods/Odt/Odp/Epub/Rtf/Docx/Pptx/Doc/Ppt
+        R-->>U: 选定 Mode N（不经 Profiler/Router），stderr 记录理由
+    else 其余（PDF / 图像 / Unknown）
+        R->>IG: detect_format（⚠ 第二次检测，8 变体口径）
+        R->>PF: profile_best_effort
+        alt native feature 且是 PDF
+            PF->>NE: process_pdf_mem()
+            NE-->>PF: pdf_type + pages_with_tables/columns/needing_ocr
+            PF-->>R: L2 DocumentProfile（逐页 PageProfile）
+        else 其他
+            PF-->>R: L1 DocumentProfile（仅格式先验）
+        end
+        R->>RT: route(profile)
+        RT-->>R: TextDominant→native · Slide/Resume→mineru-vlm ·<br/>TableDense→pipeline ⚠ · 兜底→mineru-vlm
+        R-->>U: stderr 打印 "auto: routed to X (reason)"
+        Note over R: ⚠ reason 与 DocumentProfile 不写入 ParseResult（恒为 null）<br/>⚠ 未校验所选模式的 endpoint 是否可用，仅 eprintln! 提示
+    end
+```
 
 ---
 
@@ -694,8 +964,16 @@ uparser protocols                # 自省全部内置 adapter 的能力声明（
 | `pipeline-local-table` | ❌ | Mode P 的 `table` 本地 ONNX | 需 glibc ≥ 2.38（本机 2.35 链接失败） |
 
 生产推荐：`cargo build --release --features native,pdfium`。
-**⚠ 现状偏差**：`native` 特性除"加模式"外还改变 CSV/XLSX 行为、L2 可用性、`document-json` 可用性
-→ 默认构建（CI 主跑）与生产构建语义不同。
+
+**⚠ 现状偏差（A-11，实测证据）**：`native` 特性除"加模式"外还改变 CSV/XLSX 行为（§3.3）、
+L2 profiling 可用性（§4.2）、`document-json` 可用性 → 两种构建语义不同。更严重的一层是
+**workspace 特征统一**：`uparser-napi` / `uparser-python` 均声明
+`uparser-core = { …, features = ["native"] }`，故任何 `--workspace` 构建都强制给 `uparser-core`
+打开 `native`。实测：`cargo test --workspace` 与 `cargo test --workspace --features native`
+产出同一个测试二进制、计数完全相同（core lib 均 323），而单独的
+`cargo test -p uparser-core` 只有 307 —— 差额的 16 个用例即 native 门控部分，
+且反向的 `#[cfg(not(feature = "native"))]` 路径（`ingest::structured_bypass`）
+**在 workspace 测试中从未被编译执行**。详见 §14.2 口径警告 3。
 
 ---
 
@@ -746,6 +1024,330 @@ uparser protocols                # 自省全部内置 adapter 的能力声明（
 | A-12 | 不可达 (格式×模式) 组合无前置校验，诊断误导 | §3.4 |
 | A-13 | `emit_line` 未覆盖主路径（断管 panic） | §1 |
 | A-14 | 两阶段 fan-out 骨架复制三份 | §7.5 |
+
+---
+
+## 13. 架构优化的收益
+
+本章回答"§12.3 那些架构债为什么值得还"。原则：**每条收益都要能被 §14 的闸门或一个具体指标验证**，
+不接受"更优雅""更清晰"这类无法证伪的理由。
+
+### 13.0 目标架构全景图（收敛后，对照 §0.1）
+
+> **这是目标形态，不是现状**。全文其余章节描述 as-built；本图描述收敛后的样子，用于说明
+> 13.1–13.5 的收益从何而来。任何一步实施都必须通过 §14 的 G-T / G-A / G-B 闸门。
+> 图例：🆕 新增组件 · ♻ 由多份收敛为一份 · ✅ 保持不变
+
+```mermaid
+flowchart TB
+    subgraph SURF["调用表面：三个薄壳（只做参数解析 / 渲染选择 / 错误映射）♻"]
+        CLI["uparser CLI"]
+        NAPI["uparser-napi"]
+        PYO3["uparser-python"]
+    end
+
+    subgraph FE["① FormatFrontend ♻ 单一前端"]
+        DET["detect_format ♻ 唯一实现<br/>唯一 DocumentFormat 枚举（16 变体）"]
+        REACH["🆕 reachability(format, mode)<br/>编译期可达性矩阵 + 代价"]
+        SRC["🆕 SourceDocument<br/>Structured(bytes,fmt) 或 Paged(RenderedPage[])"]
+    end
+
+    GUARD{"🆕 可达性校验"}
+    ERRX(["exit 1 + 结构化错误<br/>{code, message, suggest:{mode, command}}<br/>消除 A-12"])
+
+    subgraph RT["② Router ♻ 三段决策"]
+        S1["① 内容维度<br/>profiler L1/L2（L3 opt-in）"]
+        S2["🆕 ② 环境可行性过滤<br/>ModeRequirements × 实测环境<br/>(endpoint/GPU/外部工具/预算)"]
+        S3["🆕 ③ 偏好排序<br/>--prefer quality / speed / cost"]
+    end
+
+    RUNNER["🆕 <b>runner.rs 唯一编排中枢</b><br/>cache → 执行(按 Granularity) → postprocess → reading_order<br/>→ assets → 填充 IR 元数据(profile/reason/endpoint/model/timing)<br/>消除 A-1 / A-7"]
+
+    subgraph MODES["③ ExecutionMode 🆕 一级概念 + Granularity"]
+        direction LR
+        MN["<b>Mode N</b> · Granularity::Document<br/>native-engine + document-engine ✅<br/>♻ 不再旁路：纳入缓存/后处理/进度"]
+        MV["<b>Mode V</b> · Granularity::Page<br/>mineru-vlm / dots-ocr / monkeyocr-v2 ✅<br/>🆕 generic-vlm（prompt preset + 模型自发现）"]
+        MP["<b>Mode P</b> · Granularity::Page+Stage<br/>🆕 Layer A: paddlex-structure(/layout-parsing)<br/>✅ Layer B: staged-serving + StageBackend"]
+    end
+
+    SCHED["scheduler.rs ✅ 窗口 / 并发预算 / 失败与 panic 隔离 / 进度<br/>♻ reading_order 兜底上提至 runner 统一回填"]
+
+    subgraph IR["④ IR ♻ 单一语义 IR"]
+        CANON["CanonicalDocument（语义）"]
+        GEOM["Page / Block（几何投影）"]
+        UP["🆕 blocks → Canonical 上升映射<br/>取代现有有损下降映射（消除 A-5 一半）"]
+    end
+
+    RENDER["⑤ render ♻ 单一渲染器<br/>markdown / json / document-json / content-list<br/>--markdown-source engine 或 canonical（保底 0.8754 基线）"]
+
+    subgraph INFRA["横切基础设施"]
+        CACHE2["cache ♻ 键含全部影响输出的参数<br/>(pages/postprocess/assets/stage 配置) 消除 A-8"]
+        ERRM["🆕 UparserError + Stage 枚举<br/>退出码映射编译期穷尽 消除 A-9"]
+        OUTC["stdout=结果 · stderr=日志 · emit_line 全覆盖 ♻ 消除 A-13"]
+    end
+
+    subgraph EXT["外部化边界 ✅"]
+        V1["vLLM / 任意 OpenAI 兼容 VLM"]
+        V3["PaddleX Serving<br/>POST /layout-parsing · /ocr"]
+        V2["自建 staged serving（Layer B）"]
+        ORT["ort · 仅 table 阶段"]
+    end
+
+    CLI --> DET
+    NAPI --> DET
+    PYO3 --> DET
+    DET --> REACH --> GUARD
+    GUARD -->|"不可达"| ERRX
+    GUARD -->|"可达"| SRC
+    SRC -->|"--mode 显式"| RUNNER
+    SRC -->|"auto"| S1 --> S2 --> S3 --> RUNNER
+    RUNNER --> MODES
+    MV --> SCHED
+    MP --> SCHED
+    MN --> RUNNER
+    SCHED --> RUNNER
+    MV --> V1
+    MP --> V3
+    MP --> V2
+    MP -.-> ORT
+    RUNNER --> IR
+    GEOM --> UP --> CANON
+    CANON --> RENDER
+    RUNNER <--> CACHE2
+    RUNNER --> ERRM
+    RENDER --> OUTC
+    OUTC --> GATE["🆕 每次改动过闸门<br/>G-T 三配置 / G-A Bench A / G-B Bench B（§14）"]
+```
+
+**现状 → 目标 的逐项对照**（每行都指向 §12.3 的债务编号与 `THREE_MODE_ARCHITECTURE_AND_PLAN.md` 的阶段）：
+
+| # | 现状（§0.1） | 目标（本图） | 消除 | 阶段 |
+|---|---|---|---|---|
+| 1 | 两套 `detect_format` + 两个格式枚举，同一文件检测两次 | 单一 `FormatFrontend`，一次检测 | A-3 | R1.5 / M4 |
+| 2 | (格式×模式) 不可达组合无校验，落 1×1 占位页 | `reachability()` 矩阵 + 执行前 exit 1 + 建议模式 | A-12 | R1.5 |
+| 3 | 编排分散在 `cli.rs`(×2) + `api.rs` + Mode N 旁路 | `runner.rs` 唯一中枢，三表面为薄壳 | A-1 / A-10 | R1 / M2 |
+| 4 | 模式无类型；`native` 假注册 + 专用旁路 | `ExecutionMode` + `Granularity`，Mode N 走 Document lane | A-2 | R2 / M3 |
+| 5 | Mode N 无缓存/无后处理/无进度 | 三模式统一享有 | §5 偏差 2 | R2 |
+| 6 | Mode V 无通用 VLM 入口 | `generic-vlm`（preset + `/v1/models` 自发现 + 独立超时） | O-1 | R2.5 |
+| 7 | Mode P 契约自拟、无端到端验证 | Layer A 对齐 PaddleX；Layer B 保留自建形态 | O-2 | P-A |
+| 8 | Router 只看内容，reason/profile 丢弃 | 三段决策 + 决策写入 IR | A-7 / §4.3 偏差 | R2.6 |
+| 9 | 两套 IR + 有损下降桥；三套渲染器 | 单一语义 IR + 上升映射 + 单一渲染器 | A-5 | R3 / M4 |
+| 10 | 缓存键缺参数（实测污染） | 键含全部影响输出的参数 | A-8 | R0 |
+| 11 | 错误四分裂 + stage 魔法字符串 | `UparserError` + `Stage` 枚举 | A-9 | R5 |
+| 12 | 断管 panic 只在 Mode N 修过 | `emit_line` 全覆盖 | A-13 | R0 |
+| 13 | `--workspace` 测试恒带 native，非 native 路径零覆盖 | feature 与语义解耦 + 三配置闸门 | A-11 | R5 |
+
+**图上没有变化的部分同样重要**：`scheduler.rs` 的窗口/并发预算/失败隔离、共享算法层
+（`otsl` / `formula_repair` / `output_parse` / `geometry` / `imaging` / `category_map`）、
+外部化边界、Agent-first 契约——这些是已被三个协议 + 基准验证过的设计，**收敛过程中不动**。
+
+### 13.1 正确性收益：消除已经实证的错误类型
+
+这些不是假想风险——每条都已在本仓库真实发生过一次：
+
+| 债务 | 已发生的事实 | 修复后的收益 | 验证方式 |
+|---|---|---|---|
+| **A-8** 缓存键不含全部影响输出的参数 | 实测：`--pages 999` 写入缓存后，同文档全量解析命中该条目、返回 0 页 | 消除"结果本身正确、但被上一次不同参数的调用串味"这一类**静默错误** | 新增回归用例（G-T） |
+| **A-12** (格式 × 模式) 不可达组合无前置校验 | ①实测 `.rtf`/`.csv` + 显式 VLM → exit 3 且诊断指向 `decode`；②**已污染过一次真实评测**：OmniDocBench 的 `native` 历史行 text_edit=1.0 / TEDS=0，因为该数据集输入是 PNG 页面图而 Mode N 不支持图像（§3.4） | 执行前 exit 1 + 建议可用模式，把"跑完 1651 页才发现全错"变成一秒内的用法错误 | 矩阵用例 + G-A/G-B 前置检查 |
+| **A-1** 无统一编排中枢（编排四处重复） | `postprocess` / `ingest_document` / `warnings` 三个模块都曾长期"写好、测绿、却没接进任何真实调用路径"；scheduler 死锁也源于"同一并发逻辑在 scheduler 与 adapter 各写一遍" | 新能力接一次即对三模式生效，杜绝"单测绿但集成没接"这一类 | G-T + G-A |
+| **A-13** 断管 panic 只在 Mode N 修过 | `uparser parse … \| head` 在主路径仍 panic；Agent 管道调用是常态用法 | 管道场景不再产生 Rust panic trace | CLI 用例 |
+| **A-9** 错误模型四分裂 + `stage` 魔法字符串 | `"native_document.encrypted"` 由 `native.rs` 产出、`cli.rs` 消费，编译器无法保护 | 退出码映射变成编译期穷尽匹配 | G-T |
+
+### 13.2 精度收益：有量化依据，不是猜测
+
+**已证实的杠杆**：渲染层一条规则值 **+0.22 Overall**。
+`render::to_markdown` 曾逐字输出 `text` 而忽略 `category`，导致 VLM 协议正确分类的 title/list 全部
+渲染成普通段落——mineru-vlm 的 `#` 标题只出现在 1/200 篇、MHS **0.000**、Overall 被拖到 **0.708**；
+接上 `category → "# " / "- "` 后 112/200 篇、MHS **0.878**、Overall **0.928**。
+这说明**共享渲染/后处理层是精度杠杆最大的位置**，而当前它有三份实现（A-5）、Mode N 完全不经过它（§5 偏差 2）。
+
+| 优化 | 精度收益路径 | 当前基线 | 可验证的目标 |
+|---|---|---|---|
+| **A-5** 渲染器 3→1、Mode N 纳入共享渲染 | native 的 MHS 短板是**标题过检测**（引擎产 280 个 vs GT 193）；它目前不享受任何共享渲染改进 | native MHS **0.7875** | Bench A 的 mhs_mean 上升且 overall 不降 |
+| **A-6 / O-3** 实现 signal-enhanced postprocess | native 是全仓库**唯一**真实产出 `spans` + `font_size` 的适配器（§9.2），字号是标题判定与段落合并最直接的信号，现在完全没有消费者 | native teds 0.8141 / mhs 0.7875 | 同上 + 段落合并用例 |
+| **O-2** Mode P 对齐 PP-StructureV3 | `/layout-parsing` 的 `markdown.isStart/isEnd` 正是**跨页段落合并**（O-4）所缺的信号；`useDocUnwarping` 覆盖 O-11 的文档矫正缺口 | Mode P 无基线行 | 补齐 Bench A 的 `uparser-pipeline` 行 |
+| **A-4 / A-12** 结构化旁路无条件生效 | XLSX/CSV/TSV 直读单元格，精度上限恒高于任何视觉识别 | — | 结构化格式用例 |
+
+**下限约束**：以上任何一项都不得让 §14.2 的两条基线下降——见 G-A / G-B。
+
+### 13.3 能力收益：当前拿不到的东西
+
+| 优化 | 现在的状态 | 收益 |
+|---|---|---|
+| **O-1** 通用 VLM 入口 | Qwen3.8-27B 已有 1651 页实测（Text Edit **0.0481**、Reading Order Edit **0.1522**，两项都优于 OmniDocBench 官方 Qwen3-VL-235B 参考的 0.063 / 0.166），但只能用 `benchmark/gen_qwen_omnidoc.py` 跑，**产品里无法使用** | 接入后"换一个模型 = 换一个 prompt preset"，而不是写 400–600 行 adapter；已有基准结论首次可在产品内复现 |
+| **A-2 / §5 偏差 2** Mode N 纳入统一链 | Mode N 无缓存、无标点规范化、无 `--pages`、无进度 | 同文档二次解析走缓存（量级参考：mineru-vlm 冷 1.81 s/篇 → 缓存命中 0.005 s/篇）；CJK 标点规范化对 Mode N 生效 |
+| **A-10** 三表面对齐 | Node/Python 拿不到 Markdown、无 env/config 解析、无 `--pages` | 绑定层与 CLI 能力一致 |
+| **A-11** feature 不再承担语义职责 | 两种构建语义不同；且因 workspace 特征统一，`--workspace` 测试**始终**带 `native`，非 native 路径（`structured_bypass`）**零测试覆盖**（§14.2 口径警告 3 实测） | 语义与构建解耦后，一次测试运行即代表生产行为，不再需要靠"跑对哪条命令"来保证覆盖 |
+
+### 13.4 工程收益：维护面可量化
+
+| 项 | 现在 | 收敛后 |
+|---|---|---|
+| 加一个新输入格式要改几处 | 2 个 `detect_format` + 2 处 `auto` 结构化清单 + 1 处可达性判断 = **5 处** | 1 处（格式枚举 + 矩阵表各一行） |
+| 加一个后处理能力要接几处 | `cli.rs` 非流式 + `cli.rs` 流式回调 + `api.rs` + Mode N 旁路 = **4 处** | 1 处（runner） |
+| 加一个 VLM 协议 | 新 adapter 400–600 行 | 通用 VLM 走 preset；专有协议仍需 adapter，但 fan-out 骨架不再复制三份（A-14） |
+| 死代码/死抽象 | `ingest_document`、`MergeHint`、`CoordFrame::Crop`、`to_content_list`、`default_endpoint_for` ≈ 200 行 | 删除，读者不再把空壳当能力 |
+| Markdown 规则真相源 | 3 份 | 1 份（`native` 引擎版保留为 `--markdown-source engine` 对照） |
+
+### 13.5 不做优化的代价（反向论证）
+
+- 每次新增能力都会**再复制一遍**当前的四处编排 → 能力矩阵的缺角只增不减；
+- `native` 与 VLM 的输出规则继续分叉 → 未来任何"通用正确性修复"（如 category→markdown 那次）
+  只能惠及一半模式，精度提升被结构性地打折；
+- 不可达组合继续静默 → 评测/生产里继续产生"看起来跑完了、实际全错"的行（OmniDocBench 的 native 行就是先例）；
+- 通用 VLM 继续留在 `benchmark/` 的 Python 脚本里 → 产品与评测两套实现漂移，评测结论无法转化为产品能力。
+
+---
+
+## 14. 评测依据与不回退闸门
+
+**总原则：任何架构优化都必须保证精度不下降。** 本章把"不下降"定义成可执行、可复现、有明确容差的闸门。
+
+### 14.1 两套基准（互不可比）
+
+| | **Bench A · opendataloader-bench** | **Bench B · OmniDocBench** |
+|---|---|---|
+| 位置 | `opensource/opendataloader-bench/` | `benchmark/OmniDocBench/` + `benchmark/OmniDocBenchData/` |
+| 语料 | 200 篇**单页真实 PDF** | **1651 页 PNG 页面图** |
+| 指标 | NID↑（阅读顺序）、TEDS↑（表格）、MHS↑（标题）、Overall = 三者等权均值；speed s/篇 | 官方 `quick_match`：Text Edit↓、Formula Edit↓、Table TEDS↑、TEDS-S↑、Reading Order Edit↓ |
+| 结果落盘 | `prediction/<engine>/evaluation.json` → `metrics.score.*_mean` | `OmniDocBench/result/<name>_quick_match_metric_result.json` |
+| 适用模式 | Mode N ✅ / Mode V ✅ / Mode P（待 Layer A 落地） | **Mode V 专用** |
+
+> **⚠ 口径警告 1**：两套语料与评测体系完全不同，**数字不可跨表比较**。
+> **⚠ 口径警告 2**：Bench B 的输入是 PNG，**Mode N 不支持图像输入**（§3.4）——
+> `OmniDocBench/result/native_*` 那一行 text_edit=1.0 / TEDS=0.0 是**无效行**，不是 native 的真实水平。
+> Mode N 只用 Bench A 做闸门。
+
+### 14.2 当前基线（以磁盘上的结果文件为准）
+
+**Bench A**（`prediction/<engine>/evaluation.json`，2026-08-04，Xeon Platinum 8378A，200 篇，`missing_predictions = 0`）：
+
+| 引擎 | Overall | NID | TEDS | MHS | s/篇 | 备注 |
+|---|---|---|---|---|---|---|
+| **uparser-mineru-vlm** | **0.9284** | 0.9470 | 0.9439 | 0.8777 | 0.0052 ⚠ | ⚠ 该值为**缓存命中**下的耗时；冷解析约 **1.81 s/篇** |
+| **uparser-native** | **0.8756** | 0.9154 | 0.8141 | 0.7875 | 0.0455 | 零模型、无 GPU |
+| pdf-inspector（内部化前的上游） | 0.8754 | 0.9150 | 0.8141 | 0.7875 | 0.0316 | native 的对照基线 |
+| opendataloader-hybrid（外部参照） | 0.9066 | 0.9337 | 0.9276 | 0.8208 | 0.4627 | 榜单第一档 |
+| docling（外部参照） | 0.8817 | 0.8984 | 0.8871 | 0.8240 | 0.7622 | |
+| liteparse（外部参照） | 0.5756 | 0.8660 | 0.0000 | 0.0000 | 1.0606 | native 取代的旧引擎 |
+
+统计口径：`nid_count = 200`、`teds_count = 42`、`mhs_count = 107`（并非每篇都有表格/标题 GT）。
+
+**Bench B**（`summarize_omnidoc.py` 输出，全量 1651 页）：
+
+| run | Text Edit↓ | Formula Edit↓ | TEDS↑ | TEDS-S↑ | Reading Order Edit↓ |
+|---|---|---|---|---|---|
+| `mineru-vlm-2605-surpass-e1-full` | **0.0367** | **0.0948** | **0.9065** | **0.9388** | **0.1285** |
+| `mineru-vlm-2605-current` | 0.0682 | 0.0999 | 0.9137 | 0.9446 | 0.1387 |
+| `qwen3.8-27b-pure`（通用 VLM，产品外） | 0.0481 | 0.1614 | 0.7920 | 0.8259 | 0.1522 |
+
+**测试基线**（本次实测，全部全绿 EXIT=0）：
+
+| 目标 | `-p uparser-core`<br/>（**真·默认特性**） | `--workspace`<br/>（**实为 native 语义**，见下方警告） |
+|---|---:|---:|
+| `uparser-core` lib | **307** | **323** |
+| `uparser-core` `tests/cli.rs` | 29 | 29 |
+| `uparser-core` `tests/contract.rs` | 2 | 2 |
+| `uparser-core` `tests/native_documents.rs` | **0**（全被 cfg 掉） | 7 |
+| `uparser-document-engine` lib | — | 86 |
+| `uparser-document-engine` `tests/mutation.rs` | — | 4 |
+| `uparser-native-engine` lib | — | 755 |
+| `uparser-native-engine` doc-tests | — | 2 |
+| **合计** | **338** | **1,208** |
+| lib 用时 | 3.7 s | 272.5 s |
+
+> **⚠ 口径警告 3（本次实测新发现，会让闸门失真）**：
+> `cargo test --workspace` 与 `cargo test --workspace --features native` **完全等价**——
+> 两次运行产出**同一个测试二进制**（`uparser_core-922ccb536690672a`）、计数逐项相同。
+> 原因是 **workspace 特征统一**：`uparser-napi` 与 `uparser-python` 的 `Cargo.toml` 都声明
+> `uparser-core = { …, features = ["native"] }`，因此只要一次构建同时包含这两个 crate，
+> `uparser-core` 必然带 `native` 编译。
+>
+> 后果有二：①`CLAUDE.md` 中长期记录的"默认 N 个 / native 特性 M 个"两组数字，实际上从来不是两种配置；
+> ②**真正的默认特性配置（307）在 workspace 测试里从未被执行过**——`#[cfg(not(feature = "native"))]`
+> 的代码路径（典型：`ingest::structured_bypass`，§3.3）因此**没有任何测试覆盖**。
+> 这是 A-11（feature 承担语义职责）比原先记述更严重的一层证据。
+> 闸门必须显式跑 `-p uparser-core` 才能覆盖非 native 语义。
+
+### 14.3 闸门定义
+
+| 闸门 | 内容 | 容差 | 性质 |
+|---|---|---|---|
+| **G-T** 测试 | **三种配置**全绿且用例数不减少：①`cargo test -p uparser-core`（真·默认特性，基线 **338**）②`cargo test --workspace`（含 native 与两个引擎，基线 **1,208**）③`cargo clippy --workspace --all-targets -- -D warnings` + `cargo fmt --all -- --check` 干净。**不要**用 `--workspace --features native` 充当第二种配置——它与 ② 等价（口径警告 3） | 0 | 硬 |
+| **G-A** Bench A 精度 | `uparser-native` 与 `uparser-mineru-vlm` 的 `overall/nid/teds/mhs` **均不低于 §14.2 基线 − 0.02**，且 `missing_predictions == 0` | **0.02** | 硬 |
+| **G-B** Bench B 精度 | `mineru-vlm` 的 Text/Formula/Reading-Order Edit **升高不超过 +0.02**，TEDS / TEDS-S **下降不超过 0.02** | 0.02 | 硬（仅当改动影响 Mode V 或共享渲染/IR 时必跑） |
+| **G-S** 速度 | native ≤ **0.06 s/篇**；mineru-vlm 冷解析（`--no-cache`）≤ **2.2 s/篇** | — | 软（超出需书面说明原因） |
+| **G-F** 绝对下限 | bench 自带 `thresholds.json`：nid ≥ 0.90、teds ≥ 0.49、mhs ≥ 0.74、table_detection_f1 ≥ 0.55、elapsed_per_doc ≤ 3.0 | 同文件 `regression_tolerance` | 硬（由 `src/run.py` 自动校验） |
+
+**0.02 这个容差不是自创的**：直接取自 bench 自带 `thresholds.json` 的 `regression_tolerance: 0.02`
+（`src/run.py:69` 在校验绝对下限时用的就是它），沿用同一常量以免出现两套判定标准。
+
+**G-F 与 G-A 的分工**：`thresholds.json` 是**面向任意引擎的通用地板**（对我们两个引擎很宽松，
+native 的 mhs 0.7875 远高于 0.74）；G-A 才是**面向本项目自身历史成绩的回归闸门**，严格得多。两者都要过。
+
+### 14.4 按改动类型的最小证据要求
+
+| 改动类型 | G-T | G-A | G-B | 额外要求 |
+|---|:--:|:--:|:--:|---|
+| 纯删除 / 死代码清理 | ✅ | — | — | 说明删除项确无消费者（grep 证据） |
+| 编排重构（runner / scheduler） | ✅ | ✅ | — | 真实多页文档（≥7 页）端到端 + 无停滞告警 |
+| **渲染器 / IR 改动** | ✅ | ✅ | ✅ | 渲染层影响全部 VLM 协议，两套 bench 都要跑 |
+| 前端 / 格式检测 / 可达性 | ✅ | ✅ | — | 补 (格式 × 模式) 矩阵用例，含**不可达组合返回 exit 1** 的断言 |
+| 单个 adapter 内部 | ✅ | 该协议有基线则跑 | 同左 | 真实端点冒烟（mineru-vlm 有；其余协议暂无端点则注明） |
+| 缓存 / 并发 | ✅ | ✅ | — | 参数组合命中/不命中用例；冷热两次计时 |
+| Mode P | ✅ | Layer A 落地后补 `uparser-pipeline` 基线行 | — | 对齐 PaddleX 契约的 schema 用例 |
+| 新增 `generic-vlm` | ✅ | — | ✅ | 用产品 CLI 复现 `qwen3.8-27b-pure` 基线（Text Edit 0.0481 ± 0.005） |
+
+### 14.5 复现命令（已在本机验证可用）
+
+```bash
+# ── 0. 构建（生产口径）────────────────────────────────────────────
+cd uparser && cargo build --release --features native,pdfium
+
+# ── 1. G-T 测试闸门 ─────────────────────────────────────────────
+# 必须设 NO_PROXY：否则 transport 的 wiremock 测试会被企业代理拦截，
+# 返回 nginx 404 而“假失败”（实测：不设时 9 个用例失败，设置后全绿）。
+export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+cargo test -p uparser-core        # 真·默认特性（338）：唯一能覆盖 cfg(not(native)) 路径的配置
+cargo test --workspace            # 全量（1,208）；注意它已隐含 native（口径警告 3），约需 5 分钟
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+
+# ── 2. G-A / G-F：opendataloader-bench（200 篇）──────────────────
+cd ../opensource/opendataloader-bench
+python src/run.py --engine uparser-native --force
+UPARSER_ENDPOINT=http://127.0.0.1:19122/v1/chat/completions \
+UPARSER_MODEL=MinerU2.5-2604-1.2B \
+  python src/run.py --engine uparser-mineru-vlm --force
+# 读数：prediction/<engine>/evaluation.json → metrics.score.{overall,nid,teds,mhs}_mean
+#      速度另测：先 uparser cache clear，或给适配器加 --no-cache（见 ⚠ 口径）
+
+# ── 3. G-B：OmniDocBench（1651 页，仅 Mode V）────────────────────
+cd ../../benchmark
+export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+python3 run_uparser_omnidoc.py --name <run-name> --protocol mineru-vlm
+python3 summarize_omnidoc.py <run-name>
+```
+
+Bench A 的引擎适配器已注册在 `src/engine_registry.py`：`uparser-native` → `pdf_parser_uparser_native.py`
+（`parse --protocol native --format markdown --no-assets`，120s 超时）、
+`uparser-mineru-vlm` → `pdf_parser_uparser_mineru_vlm.py`
+（`--protocol mineru-vlm --format markdown --no-assets --max-concurrency 16`，300s 超时，
+端点/模型经 `UPARSER_ENDPOINT`/`UPARSER_MODEL` 覆盖）。二进制路径可用 `UPARSER_BIN` 覆盖。
+
+### 14.6 记账与防过拟合规则
+
+1. **不得针对 GT 调参**。只接受**通用正确性修复**——判据是"该修复对所有走同一代码路径的协议同时生效"。
+   `category → #/-` 那次符合（四个 VLM 适配器都受益）；"给某类文档特调阈值"不符合。
+2. **每次跑分必须记录**：二进制的 feature 组合、endpoint + model、是否 `--no-cache`、日期、CPU 型号
+   （`evaluation.json` 的 `summary` 已含后两项）。
+3. **速度必须在冷缓存下测**。基线表里 mineru-vlm 的 0.0052 s/篇是缓存命中值，直接拿它比较会得出错误结论。
+4. **基线更新规则**：指标**下降**一律先按回归处理，不得直接改基线；指标**上升**且**独立复现两次**后，
+   才更新 §14.2 的基线表，并在 `BENCHMARK_REPORT.md` 记录原因。
+5. **外部参照不动**：docling / opendataloader-hybrid / liteparse 的数字取自榜单已公布结果，
+   只用于判断"我们处在第几档"，不随本项目改动重跑。
+6. **无效行要标注而非删除**：如 Bench B 的 `native` 行（模式不支持该输入形态），保留并标注原因，
+   避免后人重复踩坑。
 
 ---
 

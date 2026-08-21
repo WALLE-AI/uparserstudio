@@ -132,19 +132,16 @@ impl ProtocolAdapter for PaddleOcrAdapter {
             },
         };
         let endpoint = format!("{}#ocr", self.endpoint);
-        let resp = ctx
-            .dispatch_rest(
-                &endpoint,
-                serde_json::to_value(req).expect("always serializable"),
-                self.timeout,
-                self.max_retries,
-            )
-            .await
-            .map_err(|e| PageError {
-                page_num: page.page_num,
-                message: e.to_string(),
-                stage: Some("ocr".into()),
-            })?;
+        let resp = crate::shape_executor::rest_stage(
+            page,
+            ctx,
+            &endpoint,
+            serde_json::to_value(req).expect("always serializable"),
+            self.timeout,
+            self.max_retries,
+            "ocr",
+        )
+        .await?;
         let parsed: PaddleOcrResponse = serde_json::from_value(resp).map_err(|e| PageError {
             page_num: page.page_num,
             message: format!("malformed paddleocr response: {e}"),

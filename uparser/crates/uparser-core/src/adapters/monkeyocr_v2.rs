@@ -28,7 +28,6 @@ use crate::robustness;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
-use futures::future::join_all;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -193,11 +192,8 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             &layout_data_url,
             4096,
         );
-        let layout_resp = ctx.dispatch(layout_req).await.map_err(|e| PageError {
-            page_num: page.page_num,
-            message: e.to_string(),
-            stage: Some("layout".into()),
-        })?;
+        let layout_resp =
+            crate::shape_executor::chat_stage(page, ctx, layout_req, "layout").await?;
         let layout_content = extract_chat_content(&layout_resp).map_err(|e| PageError {
             page_num: page.page_num,
             message: e,
@@ -317,10 +313,7 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 (index, Ok(Some(content)))
             }
         });
-        let stage2_results = join_all(futures_iter).await;
-
-        let mut content_by_index: std::collections::HashMap<usize, Result<Option<String>, String>> =
-            stage2_results.into_iter().collect();
+        let mut content_by_index = crate::shape_executor::collect_indexed(futures_iter).await;
 
         let mut blocks = Vec::with_capacity(pending.len());
         for (index, p) in pending.iter().enumerate() {

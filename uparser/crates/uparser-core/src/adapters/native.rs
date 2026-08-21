@@ -35,6 +35,33 @@ use uparser_native_engine::types::{ItemType, TextItem};
 pub struct NativeAdapter;
 
 impl NativeAdapter {
+    pub(crate) fn parse_pdf_artifact(
+        source_path: &str,
+        pdf_bytes: &[u8],
+        artifact: uparser_native_engine::PdfProcessResult,
+    ) -> (ParseResult, Option<String>) {
+        let pages = build_pages(artifact.positioned_items);
+        let mut hasher = Sha256::new();
+        hasher.update(pdf_bytes);
+        let result = ParseResult {
+            source_path: source_path.to_owned(),
+            source_sha256: format!("{:x}", hasher.finalize()),
+            protocol: "native".to_owned(),
+            routed_by: RoutedBy::Explicit,
+            document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
+            model_endpoint: None,
+            model_name: None,
+            pages,
+            page_errors: vec![],
+            capability_notes: vec![],
+            warnings: vec![],
+            timing: Default::default(),
+        };
+        (result, artifact.markdown)
+    }
+
     /// Parse once, whatever the input is.
     ///
     /// This is the entry point callers should use when they may need more
@@ -98,6 +125,8 @@ impl NativeAdapter {
             protocol: "native".to_string(),
             routed_by: RoutedBy::Explicit,
             document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
             model_endpoint: None,
             model_name: None,
             pages,
@@ -239,143 +268,7 @@ pub fn structured_to_parse_result(
     source_path: &str,
     bytes: &[u8],
 ) -> ParseResult {
-    let StructuredDocument { document, format } = parsed;
-    let pages = document
-        .units
-        .iter()
-        .enumerate()
-        .map(|(index, unit)| Page {
-            page_num: (index + 1) as u32,
-            width_px: 0,
-            height_px: 0,
-            blocks: unit
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(order, block)| compatibility_block(document, block, order))
-                .collect(),
-        })
-        .collect();
-    let format = *format;
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let protocol_format = match format {
-        uparser_document_engine::DocumentFormat::Csv => "csv",
-        uparser_document_engine::DocumentFormat::Tsv => "tsv",
-        uparser_document_engine::DocumentFormat::Excel => "excel",
-        uparser_document_engine::DocumentFormat::Ods => "ods",
-        uparser_document_engine::DocumentFormat::Odt => "odt",
-        uparser_document_engine::DocumentFormat::Odp => "odp",
-        uparser_document_engine::DocumentFormat::Epub => "epub",
-        uparser_document_engine::DocumentFormat::Rtf => "rtf",
-        uparser_document_engine::DocumentFormat::Docx => "docx",
-        uparser_document_engine::DocumentFormat::Pptx => "pptx",
-        _ => "document",
-    };
-    ParseResult {
-        source_path: source_path.to_owned(),
-        source_sha256: format!("{:x}", hasher.finalize()),
-        protocol: format!("native:{protocol_format}"),
-        routed_by: RoutedBy::Explicit,
-        document_profile: None,
-        model_endpoint: None,
-        model_name: None,
-        pages,
-        page_errors: Vec::new(),
-        capability_notes: vec![
-            "source-semantic structured document extraction; geometry is not applicable".to_owned(),
-        ],
-        warnings: document
-            .warnings
-            .iter()
-            .map(|warning| warning.message.clone())
-            .collect(),
-        timing: Default::default(),
-    }
-}
-
-fn compatibility_block(
-    document: &uparser_document_engine::CanonicalDocument,
-    block: &uparser_document_engine::Block,
-    order: usize,
-) -> Block {
-    use uparser_document_engine::Block as DocBlock;
-
-    let category_raw = match block {
-        DocBlock::Heading { .. } => "title",
-        DocBlock::List { .. } => "list",
-        DocBlock::Table { .. } => "table",
-        DocBlock::Figure { .. } => "image",
-        _ => "text",
-    };
-
-    let mut text = None;
-    let mut html = None;
-    let mut asset_bytes = None;
-    // A list renders as multi-line Markdown that already carries its own
-    // markers; the compatibility renderer would prefix another `- ` if the
-    // normalized category said "list", so it is lowered as text.
-    let mut category = category_raw;
-
-    match block {
-        // A table keeps its merged cells by going out as HTML — the
-        // compatibility renderer prefers `html` over `text`, and a GFM pipe
-        // table cannot express a rowspan at all.
-        DocBlock::Table { table } => {
-            html = Some(uparser_document_engine::render::table_html(document, table));
-        }
-        DocBlock::Figure { asset_id, .. } => {
-            // Hand the raw bytes to the shared asset writer, which
-            // content-addresses them and fills in `asset_path`.
-            asset_bytes = asset_id
-                .as_deref()
-                .and_then(|id| document.assets.iter().find(|asset| asset.id == id))
-                .and_then(|asset| asset.bytes.clone());
-            if asset_bytes.is_none() {
-                text = Some(uparser_document_engine::render::block_markdown(
-                    document, block,
-                ));
-            }
-        }
-        DocBlock::Heading { .. } => {
-            // The IR carries the level in `category`; the `#` prefix is the
-            // renderer's job, so it is stripped here rather than emitted twice.
-            let rendered = uparser_document_engine::render::block_markdown(document, block);
-            text = Some(rendered.trim_start_matches('#').trim_start().to_owned());
-        }
-        DocBlock::List { .. } => {
-            category = "text";
-            text = Some(uparser_document_engine::render::block_markdown(
-                document, block,
-            ));
-        }
-        _ => {
-            text = Some(uparser_document_engine::render::block_markdown(
-                document, block,
-            ));
-        }
-    }
-
-    Block {
-        geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
-        geom_frame: CoordFrame::Page,
-        bbox_px: None,
-        category_raw: category_raw.to_owned(),
-        category: Some(category.to_owned()),
-        // A structured document has no geometry to derive order from, but its
-        // source order *is* the reading order.
-        reading_order: Some(order as u32),
-        text,
-        html,
-        latex: None,
-        spans: Vec::new(),
-        merge_hint: None,
-        confidence: Some(1.0),
-        source: BlockSource::StructuredNative,
-        error: None,
-        asset_bytes,
-        asset_path: None,
-    }
+    crate::structured::to_parse_result(&parsed.document, source_path, bytes)
 }
 
 /// Group all pages' positioned items into `Page`s of coherent line-`Block`s.

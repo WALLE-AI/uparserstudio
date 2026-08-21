@@ -1,72 +1,269 @@
-//! Document-level protocol routing, per ARCHITECTURE.md §13.4 / T-8.2.
-//! Matches a `DocumentProfile` (from `profiler.rs`) against the v1
-//! routing table — document-level only, always terminates (a fallback
-//! row guarantees a decision, never a panic). XLSX/CSV structured
-//! sources never reach this function in the real control flow (they're
-//! bypassed by `ingest::structured_bypass` before profiler/router run,
-//! per §13.1a) — `route()` still handles an xlsx-sourced profile
-//! gracefully if called directly, it just isn't the real dispatch path
-//! for that case.
+//! Explainable document-level routing.
 
-use crate::types::{ContentMix, DocumentKind, DocumentProfile};
+use crate::types::{ContentMix, DocumentGenre, DocumentProfile, SourceQuality};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteDecision {
-    pub protocol: &'static str,
-    pub reason: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteReasonCode {
+    SourceSemantic,
+    NativeText,
+    VisualRequired,
+    PresentationLayout,
+    ResumeLayout,
+    TableSpecialist,
+    GenreStructure,
+    Unavailable,
+    ConservativeFallback,
 }
 
-/// Match `profile` against the routing table (§13.4), in order. The last
-/// row is an unconditional fallback, so this always returns a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteCandidate {
+    pub protocol: String,
+    pub score: i32,
+    pub feasible: bool,
+    pub reason_codes: Vec<RouteReasonCode>,
+    pub rejection: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteDecision {
+    pub protocol: String,
+    #[serde(default)]
+    pub origin: RouteOrigin,
+    pub reason: String,
+    pub confidence: f32,
+    pub candidates: Vec<RouteCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteOrigin {
+    #[default]
+    Auto,
+    Explicit,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RoutingEnvironment {
+    pub native: bool,
+    pub model_protocol: bool,
+    pub pipeline: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutePreference {
+    #[default]
+    Quality,
+    Speed,
+    Cost,
+}
+
+impl Default for RoutingEnvironment {
+    fn default() -> Self {
+        Self {
+            native: cfg!(feature = "native"),
+            model_protocol: true,
+            // Mode 3 exists as an explicit compatibility adapter, but is not
+            // auto-feasible until its stage deployment and G-R gate are known.
+            pipeline: false,
+        }
+    }
+}
+
 pub fn route(profile: &DocumentProfile) -> RouteDecision {
-    if profile.dominant_content == ContentMix::TextDominant {
-        return RouteDecision {
-            protocol: "native",
-            reason:
-                "digitally-native text-dominant document: zero-model native extraction suffices"
-                    .to_string(),
-        };
-    }
+    route_with_preference(
+        profile,
+        RoutingEnvironment::default(),
+        RoutePreference::Quality,
+    )
+}
 
-    if profile.kind == DocumentKind::Slide {
-        return RouteDecision {
-            protocol: "mineru-vlm",
-            reason: "slide/presentation source: VLM semantic understanding of title+bullet+image layout preferred over geometric projection"
-                .to_string(),
-        };
-    }
+pub fn route_with_environment(
+    profile: &DocumentProfile,
+    environment: RoutingEnvironment,
+) -> RouteDecision {
+    route_with_preference(profile, environment, RoutePreference::Quality)
+}
 
-    if profile.kind == DocumentKind::Resume && profile.dominant_content == ContentMix::Mixed {
-        return RouteDecision {
-            protocol: "mineru-vlm",
-            reason:
-                "fragmented multi-column layout (resume-like): VLM semantic understanding preferred"
-                    .to_string(),
-        };
+pub fn route_with_preference(
+    profile: &DocumentProfile,
+    environment: RoutingEnvironment,
+    preference: RoutePreference,
+) -> RouteDecision {
+    let mut candidates = vec![
+        native_candidate(profile, environment.native),
+        model_candidate(profile, environment.model_protocol),
+        pipeline_candidate(profile, environment.pipeline),
+    ];
+    for candidate in &mut candidates {
+        candidate.score += preference_adjustment(preference, &candidate.protocol);
     }
-
-    if profile.dominant_content == ContentMix::TableDense {
-        return RouteDecision {
-            protocol: "pipeline",
-            reason: "table-dense document: dedicated table-stage recognition preferred (routing intent recorded — final \
-                      protocol choice deferred to real-sample evaluation per §13.4; `pipeline` adapter doesn't exist yet)"
-                .to_string(),
-        };
-    }
-
-    let has_chart_region = profile.page_profiles.iter().any(|p| p.has_chart_region);
-    if has_chart_region {
-        return RouteDecision {
-            protocol: "mineru-vlm",
-            reason: "chart/figure regions present: VLM's descriptive-caption capability is the only low-cost option \
-                      (a description, not precise data extraction)"
-                .to_string(),
-        };
-    }
-
+    candidates.sort_by(|left, right| {
+        right
+            .feasible
+            .cmp(&left.feasible)
+            .then_with(|| right.score.cmp(&left.score))
+            .then_with(|| left.protocol.cmp(&right.protocol))
+    });
+    let selected = candidates
+        .iter()
+        .find(|candidate| candidate.feasible)
+        .expect("model routing environment must expose at least one mode");
+    let runner_up = candidates
+        .iter()
+        .filter(|candidate| candidate.feasible)
+        .nth(1)
+        .map(|candidate| candidate.score)
+        .unwrap_or(selected.score - 50);
+    let confidence = ((selected.score - runner_up).max(0) as f32 / 50.0).clamp(0.2, 1.0);
+    let reason = format!(
+        "selected {} (score {}): {}",
+        selected.protocol,
+        selected.score,
+        selected
+            .reason_codes
+            .iter()
+            .map(|reason| format!("{reason:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     RouteDecision {
-        protocol: "mineru-vlm",
-        reason: "unable to reliably classify document; using default protocol".to_string(),
+        protocol: selected.protocol.clone(),
+        origin: RouteOrigin::Auto,
+        reason,
+        confidence,
+        candidates,
+    }
+}
+
+fn preference_adjustment(preference: RoutePreference, protocol: &str) -> i32 {
+    match (preference, protocol) {
+        (RoutePreference::Quality, "pipeline") => 10,
+        (RoutePreference::Quality, "mineru-vlm") => 5,
+        (RoutePreference::Speed, "native") => 35,
+        (RoutePreference::Speed, "mineru-vlm") => -10,
+        (RoutePreference::Speed, "pipeline") => -20,
+        (RoutePreference::Cost, "native") => 45,
+        (RoutePreference::Cost, "mineru-vlm") => -20,
+        (RoutePreference::Cost, "pipeline") => -10,
+        _ => 0,
+    }
+}
+
+fn native_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidate {
+    let source_supported = !matches!(
+        profile.source_quality,
+        SourceQuality::Scanned | SourceQuality::ImageOnly | SourceQuality::Unknown
+    );
+    let source_semantic = profile.source_quality == SourceQuality::Structured;
+    let feasible = (available || source_semantic) && source_supported;
+    let mut score = 35;
+    let mut reasons = Vec::new();
+    match profile.source_quality {
+        SourceQuality::Structured => {
+            score += 45;
+            reasons.push(RouteReasonCode::SourceSemantic);
+        }
+        SourceQuality::NativeText => {
+            score += 45;
+            reasons.push(RouteReasonCode::NativeText);
+        }
+        _ => score -= 100,
+    }
+    if profile.dominant_content == ContentMix::TextDominant {
+        score += 20;
+    }
+    if profile.genre.primary == DocumentGenre::Spreadsheet {
+        score += 35;
+    }
+    if matches!(
+        profile.genre.primary,
+        DocumentGenre::Book
+            | DocumentGenre::Regulation
+            | DocumentGenre::LegalDocument
+            | DocumentGenre::Contract
+    ) {
+        score += 15;
+        reasons.push(RouteReasonCode::GenreStructure);
+    }
+    if profile.genre.primary == DocumentGenre::Presentation {
+        score -= 35;
+    }
+    if profile.genre.primary == DocumentGenre::Resume && profile.structure.multi_column_ratio > 0.0
+    {
+        score -= 30;
+    }
+    RouteCandidate {
+        protocol: "native".to_owned(),
+        score,
+        feasible,
+        reason_codes: reasons,
+        rejection: (!feasible).then(|| {
+            if !available && !source_semantic {
+                "native feature is not compiled".to_owned()
+            } else {
+                "source has no reliable native text or source semantics".to_owned()
+            }
+        }),
+    }
+}
+
+fn model_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidate {
+    let mut score = 50;
+    let mut reasons = Vec::new();
+    if matches!(
+        profile.source_quality,
+        SourceQuality::Scanned | SourceQuality::ImageOnly | SourceQuality::Mixed
+    ) {
+        score += 45;
+        reasons.push(RouteReasonCode::VisualRequired);
+    }
+    match profile.genre.primary {
+        DocumentGenre::Presentation => {
+            score += 35;
+            reasons.push(RouteReasonCode::PresentationLayout);
+        }
+        DocumentGenre::Resume => {
+            score += 25;
+            reasons.push(RouteReasonCode::ResumeLayout);
+        }
+        DocumentGenre::Unknown => {
+            score += 10;
+            reasons.push(RouteReasonCode::ConservativeFallback);
+        }
+        _ => {}
+    }
+    RouteCandidate {
+        protocol: "mineru-vlm".to_owned(),
+        score,
+        feasible: available,
+        reason_codes: reasons,
+        rejection: (!available).then(|| "model protocol endpoint is unavailable".to_owned()),
+    }
+}
+
+fn pipeline_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidate {
+    let mut score = 30;
+    let mut reasons = Vec::new();
+    if profile.dominant_content == ContentMix::TableDense {
+        score += 60;
+        reasons.push(RouteReasonCode::TableSpecialist);
+    }
+    if matches!(
+        profile.genre.primary,
+        DocumentGenre::Tender | DocumentGenre::Bid | DocumentGenre::FinancialReport
+    ) {
+        score += 25;
+        reasons.push(RouteReasonCode::GenreStructure);
+    }
+    RouteCandidate {
+        protocol: "pipeline".to_owned(),
+        score,
+        feasible: available,
+        reason_codes: reasons,
+        rejection: (!available).then(|| "pipeline stages are unavailable".to_owned()),
     }
 }
 
@@ -74,76 +271,149 @@ pub fn route(profile: &DocumentProfile) -> RouteDecision {
 mod tests {
     use super::*;
     use crate::ingest::DocumentFormat;
-    use crate::types::{PageProfile, ProfileLevel};
+    use crate::types::{DocumentKind, GenrePrediction, ProfileLevel, StructureProfile};
 
-    fn base_profile(kind: DocumentKind, dominant_content: ContentMix) -> DocumentProfile {
+    fn profile(genre: DocumentGenre, quality: SourceQuality, mix: ContentMix) -> DocumentProfile {
         DocumentProfile {
             source_format: DocumentFormat::Pdf,
-            kind,
+            source_quality: quality,
+            kind: DocumentKind::Unknown,
             kind_confidence: 0.8,
-            page_profiles: vec![],
-            dominant_content,
+            genre: GenrePrediction {
+                primary: genre,
+                tags: Vec::new(),
+                confidence: 0.8,
+                evidence: Vec::new(),
+            },
+            structure: StructureProfile::default(),
+            page_or_unit_count: None,
+            page_profiles: Vec::new(),
+            dominant_content: mix,
+            analysis_level: ProfileLevel::L2,
+            warnings: Vec::new(),
         }
     }
 
-    fn page(has_table_region: bool, has_chart_region: bool) -> PageProfile {
-        PageProfile {
-            text_density: 0.3,
-            image_density: 0.1,
-            has_table_region,
-            table_subtype: None,
-            has_chart_region,
-            chart_subtype: None,
-            profile_level: ProfileLevel::L2,
+    fn all_available() -> RoutingEnvironment {
+        RoutingEnvironment {
+            native: true,
+            model_protocol: true,
+            pipeline: true,
         }
     }
 
     #[test]
-    fn text_dominant_routes_to_native() {
-        let profile = base_profile(DocumentKind::Report, ContentMix::TextDominant);
-        assert_eq!(route(&profile).protocol, "native");
+    fn structured_spreadsheet_routes_native() {
+        let p = profile(
+            DocumentGenre::Spreadsheet,
+            SourceQuality::Structured,
+            ContentMix::TableDense,
+        );
+        assert_eq!(
+            route_with_environment(&p, all_available()).protocol,
+            "native"
+        );
     }
 
     #[test]
-    fn slide_routes_to_mineru_vlm() {
-        let profile = base_profile(DocumentKind::Slide, ContentMix::Mixed);
-        assert_eq!(route(&profile).protocol, "mineru-vlm");
-    }
-
-    #[test]
-    fn resume_mixed_routes_to_mineru_vlm() {
-        let profile = base_profile(DocumentKind::Resume, ContentMix::Mixed);
-        assert_eq!(route(&profile).protocol, "mineru-vlm");
-    }
-
-    #[test]
-    fn table_dense_routes_to_pipeline() {
-        let profile = base_profile(DocumentKind::Unknown, ContentMix::TableDense);
-        assert_eq!(route(&profile).protocol, "pipeline");
-    }
-
-    #[test]
-    fn chart_region_routes_to_mineru_vlm() {
-        let mut profile = base_profile(DocumentKind::Unknown, ContentMix::ImageDense);
-        profile.page_profiles = vec![page(false, true)];
-        assert_eq!(route(&profile).protocol, "mineru-vlm");
-    }
-
-    #[test]
-    fn unclassifiable_falls_back_to_mineru_vlm_with_warning_reason() {
-        let profile = base_profile(DocumentKind::Unknown, ContentMix::ImageDense);
-        let decision = route(&profile);
+    fn scanned_document_routes_model() {
+        let p = profile(
+            DocumentGenre::Unknown,
+            SourceQuality::Scanned,
+            ContentMix::ImageDense,
+        );
+        let decision = route_with_environment(&p, all_available());
         assert_eq!(decision.protocol, "mineru-vlm");
-        assert!(decision.reason.contains("unable to reliably classify"));
+        assert!(
+            !decision
+                .candidates
+                .iter()
+                .find(|c| c.protocol == "native")
+                .unwrap()
+                .feasible
+        );
     }
 
     #[test]
-    fn xlsx_sourced_profile_does_not_panic() {
-        // Real xlsx short-circuit lives in ingest::structured_bypass, not
-        // here — router must still degrade gracefully if called on one.
-        let mut profile = base_profile(DocumentKind::Spreadsheet, ContentMix::TableDense);
-        profile.source_format = DocumentFormat::Xlsx;
-        let decision = route(&profile);
-        assert_eq!(decision.protocol, "pipeline");
+    fn table_dense_tender_routes_pipeline() {
+        let p = profile(
+            DocumentGenre::Tender,
+            SourceQuality::Structured,
+            ContentMix::TableDense,
+        );
+        assert_eq!(
+            route_with_environment(&p, all_available()).protocol,
+            "pipeline"
+        );
+    }
+
+    #[test]
+    fn presentation_routes_model_even_when_structured() {
+        let p = profile(
+            DocumentGenre::Presentation,
+            SourceQuality::Structured,
+            ContentMix::Mixed,
+        );
+        assert_eq!(
+            route_with_environment(&p, all_available()).protocol,
+            "mineru-vlm"
+        );
+    }
+
+    #[test]
+    fn unavailable_high_score_candidate_is_rejected() {
+        let p = profile(
+            DocumentGenre::Tender,
+            SourceQuality::Structured,
+            ContentMix::TableDense,
+        );
+        let env = RoutingEnvironment {
+            pipeline: false,
+            ..all_available()
+        };
+        let decision = route_with_environment(&p, env);
+        assert_ne!(decision.protocol, "pipeline");
+        assert!(decision.candidates.iter().any(|candidate| {
+            candidate.protocol == "pipeline" && candidate.rejection.is_some()
+        }));
+    }
+
+    #[test]
+    fn preference_changes_scores_but_not_feasibility() {
+        let p = profile(
+            DocumentGenre::Presentation,
+            SourceQuality::Structured,
+            ContentMix::Mixed,
+        );
+        let speed = route_with_preference(&p, all_available(), RoutePreference::Speed);
+        let quality = route_with_preference(&p, all_available(), RoutePreference::Quality);
+        let speed_native = speed
+            .candidates
+            .iter()
+            .find(|candidate| candidate.protocol == "native")
+            .unwrap();
+        let quality_native = quality
+            .candidates
+            .iter()
+            .find(|candidate| candidate.protocol == "native")
+            .unwrap();
+        assert!(speed_native.score > quality_native.score);
+
+        let unavailable = route_with_preference(
+            &p,
+            RoutingEnvironment {
+                pipeline: false,
+                ..all_available()
+            },
+            RoutePreference::Quality,
+        );
+        assert!(
+            !unavailable
+                .candidates
+                .iter()
+                .find(|candidate| candidate.protocol == "pipeline")
+                .unwrap()
+                .feasible
+        );
     }
 }

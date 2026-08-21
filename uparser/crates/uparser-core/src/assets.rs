@@ -91,7 +91,6 @@ pub fn write_block_assets(result: &mut ParseResult, assets_dir: &Path) -> std::i
 /// crate produces itself and therefore knows are PNG, an embedded asset can
 /// be a JPEG, GIF, SVG or EMF, and renaming it `.png` would leave a file no
 /// viewer can open.
-#[cfg(feature = "native")]
 pub fn write_document_assets(
     document: &mut uparser_document_engine::CanonicalDocument,
     assets_dir: &Path,
@@ -123,7 +122,6 @@ pub fn write_document_assets(
     Ok(written)
 }
 
-#[cfg(feature = "native")]
 fn asset_extension(media_type: &str) -> &'static str {
     match media_type {
         "image/png" => "png",
@@ -267,6 +265,8 @@ mod tests {
             protocol: "mock".into(),
             routed_by: crate::types::RoutedBy::Explicit,
             document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
             model_endpoint: None,
             model_name: None,
             pages: vec![Page {

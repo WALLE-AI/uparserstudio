@@ -171,11 +171,7 @@ impl ProtocolAdapter for DotsOcrAdapter {
         })?;
 
         let req = self.request(&data_url);
-        let resp = ctx.dispatch(req).await.map_err(|e| PageError {
-            page_num: page.page_num,
-            message: e.to_string(),
-            stage: Some("layout".into()),
-        })?;
+        let resp = crate::shape_executor::chat_stage(page, ctx, req, "layout").await?;
         let content = extract_chat_content(&resp).map_err(|e| PageError {
             page_num: page.page_num,
             message: e,

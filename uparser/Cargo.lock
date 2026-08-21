@@ -3300,6 +3300,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "file-format",
+ "image",
  "quick-xml",
  "serde",
  "serde_json",

@@ -3,42 +3,17 @@
 //! semantic so an Agent can branch on them without parsing prose.
 
 use crate::adapters::{AdapterOverrides, PipelineConfig, Registry, StageBackendChoice};
-use crate::cache::{self, ParamFingerprint};
-use crate::ingest::RenderedPage;
-use crate::postprocess;
+use crate::cache;
 use crate::render;
-use crate::scheduler::Scheduler;
-use crate::transport::Transport;
-use crate::types::{ParseResult, RoutedBy};
 use clap::{Parser, Subcommand, ValueEnum};
-use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use std::time::Duration;
 
 /// Minimum gap between progress lines printed to stderr for a
 /// non-streaming `parse` — avoids flooding stderr for a document with
 /// hundreds of pages while still updating at a human-readable cadence.
 /// The very last page always prints regardless of this gap.
 const PROGRESS_PRINT_MIN_INTERVAL: Duration = Duration::from_millis(900);
-/// How long with no page completing before the stall watchdog warns.
-/// Chosen from this session's own real deadlock: the process hung for
-/// 20+ minutes with zero signal before being diagnosed by hand — 30s is
-/// short enough to catch a stall quickly without false-positiving on a
-/// single slow-but-healthy page (a real VLM call on a dense page can
-/// legitimately take several seconds).
-const STALL_WARNING_THRESHOLD: Duration = Duration::from_secs(30);
-/// How often the watchdog re-checks for a stall.
-const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Default cache freshness window (T-9.1): 24h. Chosen as a reasonable
-/// default for "Agent re-reads the same document within a session" —
-/// long enough to survive a multi-turn conversation, short enough that a
-/// stale entry doesn't linger for weeks. `--no-cache` bypasses it
-/// entirely for forced re-verification.
-const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-
 /// Defaults for the two scheduler-tuning flags, named so the `native`
 /// path can tell "the user asked for this" from "clap filled it in".
 const DEFAULT_WINDOW_SIZE: usize = 64;
@@ -69,14 +44,24 @@ pub enum Command {
         path: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
+        /// Markdown rendering source. `engine` preserves native/document
+        /// engine output; `canonical` uses the shared ParseResult renderer
+        /// for G-N comparison. Ignored for non-Markdown output.
+        #[arg(long, value_enum, default_value_t = MarkdownSource::Engine)]
+        markdown_source: MarkdownSource,
+        /// Execution family. Omit for backward-compatible auto routing or
+        /// when selecting a concrete adapter through `--protocol`.
+        #[arg(long, value_enum)]
+        mode: Option<ParseMode>,
         /// Protocol name (`native`, `mineru-vlm`, `dots-ocr`,
-        /// `monkeyocr-v2`, `pipeline`, `paddleocr`, `mock`), or `auto`
+        /// `generic-vlm`, `monkeyocr-v2`, `pipeline`, `paddleocr`,
+        /// `paddlex-structure`, `mock`), or `auto`
         /// (the default) to run the Profiler+Router first and pick one
         /// automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto`
         /// rather than `mock` keeps an Agent that omits `--protocol` from
         /// silently getting placeholder output — `mock` is now explicit-only.
-        #[arg(long, default_value = "auto")]
-        protocol: String,
+        #[arg(long)]
+        protocol: Option<String>,
         /// Override the adapter's default endpoint (ignored by adapters
         /// with no endpoint, e.g. `mock`/`native`).
         #[arg(long)]
@@ -188,6 +173,16 @@ pub enum Command {
     /// §13.5's Agent-first philosophy: an Agent can inspect the routing
     /// decision before committing to a full (expensive) parse.
     Classify { path: String },
+    /// Detect, analyze and route without executing the selected parser.
+    Plan {
+        path: String,
+        #[arg(long, value_enum)]
+        mode: Option<ParseMode>,
+        #[arg(long)]
+        protocol: Option<String>,
+        #[arg(long, value_enum, default_value_t = crate::router::RoutePreference::Quality)]
+        prefer: crate::router::RoutePreference,
+    },
     /// Content-hash cache management (T-9.1).
     Cache {
         #[command(subcommand)]
@@ -224,6 +219,20 @@ pub enum OutputFormat {
     DocumentJson,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum MarkdownSource {
+    Engine,
+    Canonical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ParseMode {
+    Auto,
+    Native,
+    Protocol,
+    Pipeline,
+}
+
 /// Run the parsed CLI invocation, returning the process exit code. All
 /// diagnostics are written to stderr as a side effect; the result (or a
 /// structured error object, for `--format json`) is written to stdout.
@@ -232,6 +241,8 @@ pub fn run(cli: Cli) -> i32 {
         Command::Parse {
             path,
             format,
+            markdown_source,
+            mode,
             protocol,
             endpoint,
             model,
@@ -255,6 +266,19 @@ pub fn run(cli: Cli) -> i32 {
             headers_footers,
             max_input_mib,
         } => {
+            let protocol = match resolve_mode(mode, protocol.as_deref()) {
+                Ok(protocol) => protocol,
+                Err(error) => {
+                    return emit_error(
+                        format,
+                        EXIT_USAGE,
+                        "invalid_mode_selection",
+                        &error,
+                        protocol.as_deref().unwrap_or("auto"),
+                        Some("route"),
+                    );
+                }
+            };
             let wanted_pages = match pages.as_deref().map(crate::page_range::parse_page_range) {
                 Some(Ok(pages)) => Some(pages),
                 Some(Err(e)) => {
@@ -304,6 +328,7 @@ pub fn run(cli: Cli) -> i32 {
             run_parse(
                 path,
                 format,
+                markdown_source,
                 protocol,
                 endpoint,
                 model,
@@ -322,9 +347,59 @@ pub fn run(cli: Cli) -> i32 {
             )
         }
         Command::Classify { path } => run_classify(path),
+        Command::Plan {
+            path,
+            mode,
+            protocol,
+            prefer,
+        } => match resolve_mode(mode, protocol.as_deref()) {
+            Ok(protocol) => run_plan(path, protocol, prefer),
+            Err(error) => emit_error(
+                OutputFormat::Json,
+                EXIT_USAGE,
+                "invalid_mode_selection",
+                &error,
+                protocol.as_deref().unwrap_or("auto"),
+                Some("route"),
+            ),
+        },
         Command::Cache { action } => run_cache(action),
         Command::Doctor { protocol, endpoint } => run_doctor(protocol, endpoint),
         Command::Protocols => run_protocols(),
+    }
+}
+
+fn resolve_mode(mode: Option<ParseMode>, protocol: Option<&str>) -> Result<String, String> {
+    let protocol = protocol.filter(|value| !value.trim().is_empty());
+    match (mode, protocol) {
+        (None, None) => Ok("auto".to_owned()),
+        (None, Some(protocol)) => Ok(protocol.to_owned()),
+        (Some(ParseMode::Auto), None | Some("auto")) => Ok("auto".to_owned()),
+        (Some(ParseMode::Native), None | Some("native")) => Ok("native".to_owned()),
+        (Some(ParseMode::Pipeline), None | Some("pipeline")) => Ok("pipeline".to_owned()),
+        (Some(ParseMode::Protocol), Some(protocol)) => {
+            let Some(spec) = crate::protocol_spec::get(protocol) else {
+                return Err(format!("unknown model protocol: {protocol}"));
+            };
+            if spec.mode != crate::protocol_spec::ModeKind::ModelProtocol {
+                return Err(format!(
+                    "--mode protocol requires a model-protocol adapter, got {protocol}"
+                ));
+            }
+            Ok(protocol.to_owned())
+        }
+        (Some(ParseMode::Protocol), None) => {
+            Err("--mode protocol requires --protocol <name>".to_owned())
+        }
+        (Some(mode), Some(protocol)) => Err(format!(
+            "--mode {} conflicts with --protocol {protocol}",
+            match mode {
+                ParseMode::Auto => "auto",
+                ParseMode::Native => "native",
+                ParseMode::Protocol => "protocol",
+                ParseMode::Pipeline => "pipeline",
+            }
+        )),
     }
 }
 
@@ -332,6 +407,7 @@ pub fn run(cli: Cli) -> i32 {
 fn run_parse(
     path: String,
     format: OutputFormat,
+    markdown_source: MarkdownSource,
     protocol: String,
     endpoint: Option<String>,
     model: Option<String>,
@@ -373,56 +449,58 @@ fn run_parse(
         }
     };
 
-    // XLSX/CSV short-circuit unconditionally (§13.1a) — genuinely no
-    // model call, no rasterization, regardless of `--protocol`. Must run
-    // before the `auto`/`native` branches below, which would otherwise
-    // treat these formats like anything else and silently degrade them
-    // (previously: fail `image::load_from_memory`, fall to the 1x1
-    // placeholder, get fed to a protocol adapter as a blank image —
-    // exit 0, no error, but a completely wrong result).
-    let detected_format = crate::ingest::detect_format(&file_bytes, Some(&path));
-    #[cfg(not(feature = "native"))]
-    if let Some(bypass) = crate::ingest::structured_bypass(&file_bytes, detected_format, &path) {
-        return match bypass {
-            Ok(result) => {
-                let has_errors = !result.page_errors.is_empty();
-                let output = match format {
-                    OutputFormat::Json => render::to_json(&result),
-                    OutputFormat::Markdown => render::to_markdown(&result),
-                    OutputFormat::DocumentJson => render::to_json(&result),
-                };
-                println!("{output}");
-                if has_errors {
-                    EXIT_PARTIAL
-                } else {
-                    EXIT_SUCCESS
-                }
-            }
-            Err(e) => emit_error(
+    let preflight_source = crate::frontend::PreflightSource::new(
+        std::sync::Arc::<[u8]>::from(file_bytes.clone()),
+        Some(&path),
+    );
+    let detected_format = preflight_source.format();
+    let cancellation = crate::frontend::CancellationToken::default();
+    let prepare_runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return emit_error(
                 format,
-                EXIT_DEPENDENCY,
-                "ingest_failed",
-                &e.to_string(),
+                EXIT_INTERNAL,
+                "runtime_init_failed",
+                &error.to_string(),
                 &protocol,
-                Some("structured_bypass"),
-            ),
-        };
-    }
-
-    // `--protocol auto`: run Profiler+Router first (per ARCHITECTURE.md
-    // §13.1a/§13.5) and substitute the recommended protocol name into the
-    // rest of this function — same registry lookup / native branch below.
-    let effective_protocol = if protocol == "auto" {
-        let (chosen, reason) = resolve_auto_protocol(&path, &file_bytes);
-        eprintln!("auto: routed to {chosen:?} ({reason})");
-        chosen
-    } else {
-        protocol.clone()
+                Some("preflight"),
+            );
+        }
     };
-
-    // Resolve endpoint/model from CLI flag → env → config file, keyed by the
-    // *effective* (post-`auto`) protocol so a routed VLM picks up its config
-    // section. An explicit flag always wins; the fallbacks only fill omissions.
+    let signal_cancellation = cancellation.clone();
+    prepare_runtime.spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal_cancellation.cancel();
+        }
+    });
+    let prepared =
+        match prepare_runtime.block_on(crate::runner::prepare_with_preference_and_cancellation(
+            preflight_source,
+            Some(&protocol),
+            crate::router::RoutePreference::Quality,
+            cancellation.clone(),
+        )) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return emit_error(
+                    format,
+                    EXIT_USAGE,
+                    "preflight_failed",
+                    &error.to_string(),
+                    &protocol,
+                    Some("preflight"),
+                );
+            }
+        };
+    let effective_protocol = prepared.plan.route.protocol.clone();
+    if protocol == "auto" {
+        eprintln!(
+            "auto: routed to {:?} ({})",
+            effective_protocol, prepared.plan.route.reason
+        );
+    }
+    // Resolve endpoint/model after routing so auto uses the selected protocol's config.
     let (endpoint, model) =
         crate::agent_config::resolve_endpoint_model(&effective_protocol, endpoint, model);
 
@@ -436,30 +514,26 @@ fn run_parse(
             None,
         );
     }
-
-    // Agent-friendly hint: `auto` routed to a model-backed protocol but nothing
-    // (flag/env/config) supplied an endpoint, so it will fall back to that
-    // adapter's built-in default and almost certainly fail to connect. Say so
-    // clearly on stderr instead of leaving a cryptic connection error.
-    if protocol == "auto" && effective_protocol != "native" && endpoint.is_none() {
-        eprintln!(
-            "hint: auto selected '{effective_protocol}', which needs a model endpoint, but \
-             none is configured — set UPARSER_ENDPOINT (or --endpoint / config.toml), or pass \
-             --protocol native for an offline text-layer parse"
+    if format == OutputFormat::DocumentJson
+        && detected_format == crate::frontend::DocumentFormat::Pdf
+    {
+        return emit_error(
+            format,
+            EXIT_USAGE,
+            "unsupported_output_format",
+            "document-json is available for structured native documents, not PDF",
+            &effective_protocol,
+            None,
         );
     }
 
+    if protocol == "auto" && effective_protocol != "native" && endpoint.is_none() {
+        eprintln!(
+            "hint: auto selected '{effective_protocol}', which needs a model endpoint, but \
+             none is configured - set UPARSER_ENDPOINT (or --endpoint / config.toml)"
+        );
+    }
     if effective_protocol == "native" {
-        // Caching/`--stream` aren't wired into the `native` whole-document
-        // path (T-9.1/T-9.2 scope): its entry point bypasses the
-        // scheduler entirely (see `run_parse_native`'s own doc comment),
-        // and it has no network round-trip to amortize the way every
-        // other protocol does — the main cost caching exists to avoid.
-        //
-        // The same bypass means the page/window/concurrency flags do not
-        // reach this path. Silently accepting them is worse than useless to
-        // an Agent: `--pages 2` on a deck looks like it selected slide 2 and
-        // actually returns the whole document.
         for (flag, given) in [
             ("--pages", wanted_pages.is_some()),
             ("--stream", stream),
@@ -470,574 +544,200 @@ fn run_parse(
             ),
         ] {
             if given {
-                eprintln!(
-                    "warning: {flag} has no effect on the `native` protocol — it parses the \
-                     whole document in one pass; the full result is returned"
-                );
+                eprintln!("warning: {flag} has no effect on native whole-document execution");
             }
         }
-        return run_parse_native(
-            path,
-            format,
-            file_bytes,
-            protocol == "auto",
-            NativeOptions {
-                assets_dir: assets_dir.clone(),
-                no_assets,
-                include_notes: !no_notes,
-                include_headers_footers: headers_footers,
-                max_input_mib,
-            },
-        );
     }
 
-    let fingerprint = ParamFingerprint {
-        protocol: effective_protocol.clone(),
-        endpoint: endpoint.clone(),
-        model: model.clone(),
+    let mut document_options = uparser_document_engine::ParseOptions {
+        include_notes: !no_notes,
+        include_headers_footers: headers_footers,
+        include_assets: !no_assets,
+        ..uparser_document_engine::ParseOptions::default()
     };
-    let cache_key = cache::cache_key(&file_bytes, &fingerprint);
-    let cache_dir = cache::default_cache_dir();
-    if !no_cache && let Some(cached) = cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL) {
-        eprintln!("cache: hit for {cache_key}");
-        let has_errors = !cached.page_errors.is_empty();
-        let output = match format {
-            OutputFormat::Json => render::to_json(&cached),
-            OutputFormat::Markdown => render::to_markdown(&cached),
-            OutputFormat::DocumentJson => render::to_json(&cached),
-        };
-        println!("{output}");
-        return if has_errors {
-            EXIT_PARTIAL
-        } else {
-            EXIT_SUCCESS
-        };
+    if let Some(mib) = max_input_mib {
+        document_options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
     }
-
-    let registry = Registry::with_builtins();
-    let overrides = AdapterOverrides {
+    let execution = crate::runner::ExecutionOptions {
         endpoint,
         model,
-        pipeline: Some(pipeline_config),
-    };
-    let Some(adapter) = registry.build(&effective_protocol, &overrides) else {
-        return emit_error(
-            format,
-            EXIT_USAGE,
-            "unknown_protocol",
-            &format!("unknown protocol: {effective_protocol}"),
-            &effective_protocol,
-            None,
-        );
-    };
-
-    let source_sha256 = {
-        let mut hasher = Sha256::new();
-        hasher.update(&file_bytes);
-        format!("{:x}", hasher.finalize())
+        window_size,
+        max_concurrency,
+        pipeline_config,
+        no_cache,
+        no_postprocess,
+        pages: wanted_pages,
+        assets_dir: assets_dir.map(std::path::PathBuf::from),
+        no_assets,
+        document_options,
+        cancellation,
     };
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            return emit_error(
-                format,
-                EXIT_INTERNAL,
-                "runtime_init_failed",
-                &e.to_string(),
-                &effective_protocol,
-                None,
-            );
-        }
-    };
-
-    let pages = match runtime.block_on(ingest_pages(&path, &file_bytes, detected_format)) {
-        Ok(pages) => pages,
-        Err(e) => {
-            return emit_error(
-                format,
-                EXIT_DEPENDENCY,
-                "ingest_failed",
-                &e.to_string(),
-                &effective_protocol,
-                Some("ingest"),
-            );
-        }
-    };
-    let pages = match &wanted_pages {
-        Some(wanted) => pages
-            .into_iter()
-            .filter(|p| wanted.contains(&p.page_num))
-            .collect(),
-        None => pages,
-    };
-
-    let transport = Arc::new(Transport::new());
-    let permits = Arc::new(Semaphore::new(max_concurrency.max(1)));
-    // A window smaller than the concurrency budget can never saturate it
-    // (the inter-window barrier drains in-flight requests to zero before
-    // the next window starts), so raise the effective window to at least
-    // `max_concurrency`. Users lower `--window-size` only to cap memory.
-    let effective_window = window_size.max(max_concurrency).max(1);
-    let scheduler = Scheduler::new(effective_window);
-
-    // Computed once, reused by both the streaming per-window callback and
-    // the non-streaming aggregate result below, so a stream of NDJSON
-    // lines and one final JSON/Markdown document reference the same
-    // images/ folder rather than each recomputing (and potentially
-    // disagreeing on) the default.
-    let effective_assets_dir = (!no_assets).then(|| {
-        assets_dir
-            .clone()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| crate::assets::default_assets_dir(&path))
-    });
-
-    let (result_pages, page_errors, warnings) = if stream {
-        runtime.block_on(scheduler.run_streaming(
-            adapter,
-            transport,
-            permits,
-            pages,
-            |window_pages, window_errors, window_warnings| {
-                let mut printed_pages: Vec<crate::types::Page> = if no_postprocess {
-                    window_pages.to_vec()
-                } else {
-                    window_pages
-                        .iter()
-                        .cloned()
-                        .map(|page| crate::types::Page {
-                            blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
-                            ..page
-                        })
-                        .collect()
-                };
-                if let Some(dir) = &effective_assets_dir
-                    && let Err(e) = crate::assets::write_page_assets(&mut printed_pages, dir)
-                {
-                    eprintln!("warning: failed to write image assets: {e}");
-                }
+    let hooks = if stream && effective_protocol != "native" {
+        crate::runner::ExecutionHooks {
+            on_window: Some(std::sync::Arc::new(|pages, errors, warnings| {
                 let line = serde_json::json!({
-                    "window_pages": printed_pages,
-                    "window_errors": window_errors,
-                    "window_warnings": window_warnings,
+                    "window_pages": pages,
+                    "window_errors": errors,
+                    "window_warnings": warnings,
                 });
-                println!(
-                    "{}",
-                    serde_json::to_string(&line).expect("NDJSON line is always serializable")
+                emit_line(
+                    &serde_json::to_string(&line)
+                        .expect("runner window output is always serializable"),
                 );
-            },
-        ))
+            })),
+            on_progress: None,
+        }
     } else {
-        let total_pages = pages.len();
-        runtime.block_on(async {
-            // Watchdog: warn on stderr if no page has completed
-            // recently, including the current permit occupancy — this
-            // exact combination (elapsed time + permits in use) is what
-            // would have made this session's real scheduler deadlock
-            // (see `scheduler.rs::run`'s doc comment) obvious in seconds
-            // instead of requiring manual `ps`/`ss` investigation.
-            // Skipped for single-page documents, where "no progress
-            // yet" is just normal startup latency, not a stall signal.
-            let last_progress = Arc::new(Mutex::new(Instant::now()));
-            let watchdog = if total_pages > 1 {
-                let last_progress = Arc::clone(&last_progress);
-                let permits_for_watchdog = Arc::clone(&permits);
-                Some(tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(STALL_CHECK_INTERVAL).await;
-                        let elapsed = last_progress
-                            .lock()
-                            .expect("progress mutex not poisoned")
-                            .elapsed();
-                        if elapsed >= STALL_WARNING_THRESHOLD {
-                            eprintln!(
-                                "warning: no page has completed in {}s ({} of the concurrency \
-                                 budget's permits currently available) — this may indicate a \
-                                 stalled request or a scheduling issue",
-                                elapsed.as_secs(),
-                                permits_for_watchdog.available_permits(),
-                            );
-                        }
+        let last_print = std::sync::Arc::new(std::sync::Mutex::new(
+            std::time::Instant::now()
+                .checked_sub(PROGRESS_PRINT_MIN_INTERVAL)
+                .unwrap_or_else(std::time::Instant::now),
+        ));
+        crate::runner::ExecutionHooks {
+            on_window: None,
+            on_progress: Some(std::sync::Arc::new(move |event| {
+                if event.total <= 1 {
+                    return;
+                }
+                let is_last = event.completed == event.total;
+                let should_print = is_last || {
+                    let mut last = last_print.lock().expect("progress mutex not poisoned");
+                    if last.elapsed() >= PROGRESS_PRINT_MIN_INTERVAL {
+                        *last = std::time::Instant::now();
+                        true
+                    } else {
+                        false
                     }
-                }))
-            } else {
-                None
-            };
+                };
+                if should_print {
+                    eprintln!(
+                        "progress: {}/{} pages (page {} {})",
+                        event.completed,
+                        event.total,
+                        event.page_num,
+                        if event.ok { "ok" } else { "error" }
+                    );
+                }
+            })),
+        }
+    };
 
-            let last_print = Arc::new(Mutex::new(
-                Instant::now()
-                    .checked_sub(PROGRESS_PRINT_MIN_INTERVAL)
-                    .unwrap_or_else(Instant::now),
-            ));
-            let result = scheduler
-                .run_with_progress(adapter, transport, permits, pages, move |event| {
-                    *last_progress.lock().expect("progress mutex not poisoned") = Instant::now();
-                    if total_pages <= 1 {
-                        return;
-                    }
-                    let is_last = event.completed == event.total;
-                    let should_print = is_last || {
-                        let mut last = last_print.lock().expect("progress mutex not poisoned");
-                        if last.elapsed() >= PROGRESS_PRINT_MIN_INTERVAL {
-                            *last = Instant::now();
-                            true
-                        } else {
-                            false
+    let mut outcome = match prepare_runtime.block_on(crate::runner::execute_with_hooks(
+        prepared, &execution, &hooks,
+    )) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let (code, error_code, stage) = match &error {
+                crate::runner::ExecutionError::UnknownProtocol(_) => {
+                    (EXIT_USAGE, "unknown_protocol", Some("route"))
+                }
+                crate::runner::ExecutionError::Ingest(_) => {
+                    (EXIT_DEPENDENCY, "ingest_failed", Some("ingest"))
+                }
+                crate::runner::ExecutionError::Structured(_) => (
+                    EXIT_DEPENDENCY,
+                    "native_parse_failed",
+                    Some("native_document"),
+                ),
+                crate::runner::ExecutionError::Native(_) => {
+                    (EXIT_INTERNAL, "native_parse_failed", Some("native"))
+                }
+                crate::runner::ExecutionError::Assets(_) => {
+                    (EXIT_DEPENDENCY, "asset_write_failed", Some("assets"))
+                }
+                crate::runner::ExecutionError::Cache(_) => {
+                    (EXIT_DEPENDENCY, "cache_write_failed", Some("cache"))
+                }
+                crate::runner::ExecutionError::InvalidStageGraph(_) => {
+                    (EXIT_USAGE, "invalid_stage_graph", Some("stage_graph"))
+                }
+                crate::runner::ExecutionError::Cancelled => {
+                    (EXIT_PARTIAL, "cancelled", Some("runner"))
+                }
+            };
+            return emit_error(
+                format,
+                code,
+                error_code,
+                &error.to_string(),
+                &effective_protocol,
+                stage,
+            );
+        }
+    };
+    if outcome.cache_hit {
+        eprintln!("cache: hit");
+    }
+
+    let has_errors = !outcome.result.page_errors.is_empty();
+    if !stream || effective_protocol == "native" {
+        let output = match format {
+            OutputFormat::Json => render::to_json(&outcome.result),
+            OutputFormat::Markdown => {
+                if markdown_source == MarkdownSource::Canonical {
+                    render::to_markdown(&outcome.result)
+                } else if let Some(markdown) = outcome.engine_markdown.take() {
+                    markdown
+                } else if let Some(document) = outcome.document.as_mut() {
+                    if !no_assets {
+                        let directory = execution
+                            .assets_dir
+                            .clone()
+                            .unwrap_or_else(|| crate::assets::default_assets_dir(&path));
+                        if let Err(error) =
+                            crate::assets::write_document_assets(document, &directory)
+                        {
+                            eprintln!("warning: failed to write document assets: {error}");
                         }
-                    };
-                    if should_print {
-                        eprintln!(
-                            "progress: {}/{} pages (page {} {})",
-                            event.completed,
-                            event.total,
-                            event.page_num,
-                            if event.ok { "ok" } else { "error" }
+                    }
+                    uparser_document_engine::render::markdown(document)
+                } else {
+                    render::to_markdown(&outcome.result)
+                }
+            }
+            OutputFormat::DocumentJson => {
+                let Some(document) = outcome.document.as_mut() else {
+                    return emit_error(
+                        format,
+                        EXIT_USAGE,
+                        "unsupported_output_format",
+                        "document-json requires a structured native document",
+                        &effective_protocol,
+                        Some("render"),
+                    );
+                };
+                if !no_assets {
+                    let directory = execution
+                        .assets_dir
+                        .clone()
+                        .unwrap_or_else(|| crate::assets::default_assets_dir(&path));
+                    if let Err(error) = crate::assets::write_document_assets(document, &directory) {
+                        eprintln!("warning: failed to write document assets: {error}");
+                    }
+                }
+                match uparser_document_engine::render::document_json(document) {
+                    Ok(json) => json,
+                    Err(error) => {
+                        return emit_error(
+                            format,
+                            EXIT_INTERNAL,
+                            "serialization_failed",
+                            &error.to_string(),
+                            &effective_protocol,
+                            Some("render"),
                         );
                     }
-                })
-                .await;
-
-            if let Some(watchdog) = watchdog {
-                watchdog.abort();
+                }
             }
-            result
-        })
-    };
-    let result_pages = if no_postprocess {
-        result_pages
-    } else {
-        result_pages
-            .into_iter()
-            .map(|page| crate::types::Page {
-                blocks: postprocess::merge_paragraphs_by_geometry(page.blocks),
-                ..page
-            })
-            .collect()
-    };
-    let has_errors = !page_errors.is_empty();
-
-    let mut result = ParseResult {
-        source_path: path.clone(),
-        source_sha256,
-        protocol: effective_protocol.clone(),
-        routed_by: if protocol == "auto" {
-            RoutedBy::Auto
-        } else {
-            RoutedBy::Explicit
-        },
-        document_profile: None,
-        model_endpoint: None,
-        model_name: None,
-        pages: result_pages,
-        page_errors,
-        capability_notes: vec![],
-        warnings,
-        timing: Default::default(),
-    };
-
-    // Runs regardless of `--stream`: the streaming per-window closure
-    // above (if taken) only writes assets for its own cloned NDJSON
-    // view, never touching the original `Page`/`Block`s that end up
-    // here — this is the call that actually clears `asset_bytes` on the
-    // aggregate `result` that gets cached and (non-streaming) rendered.
-    if let Some(dir) = &effective_assets_dir
-        && let Err(e) = crate::assets::write_block_assets(&mut result, dir)
-    {
-        eprintln!("warning: failed to write image assets: {e}");
-    }
-
-    if !no_cache && let Err(e) = cache::put(&cache_dir, &cache_key, &result) {
-        eprintln!("warning: failed to write cache entry: {e}");
-    }
-
-    if !stream {
-        let output = match format {
-            OutputFormat::Json => render::to_json(&result),
-            OutputFormat::Markdown => render::to_markdown(&result),
-            OutputFormat::DocumentJson => render::to_json(&result),
         };
-        println!("{output}");
+        emit_line(&output);
     }
 
     if has_errors {
         EXIT_PARTIAL
     } else {
         EXIT_SUCCESS
-    }
-}
-
-/// Rasterize the input as a real multi-page PDF when the `pdfium`
-/// feature is compiled in and rasterization succeeds. Otherwise, if the
-/// input is itself a decodable raster image (PNG/JPEG/etc. — e.g. a page
-/// already rendered externally), treat it as one real page with its real
-/// dimensions. Only if neither applies (a PDF without `pdfium`, or
-/// genuinely non-image garbage bytes) fall back to a degenerate 1x1
-/// placeholder page — the original P0 Gate-G0 behavior, preserved
-/// exactly for that case so `mock`/tests using arbitrary non-image bytes
-/// are unaffected.
-///
-/// Getting this wrong is not cosmetic: a real VLM adapter denormalizes
-/// model bbox output against `page.width`/`page.height` — silently
-/// reporting `1x1` for what's actually e.g. a 1275x1651 image collapses
-/// every bbox to a single degenerate point, corrupting every stage-2
-/// crop (confirmed by a real end-to-end run against a live vLLM
-/// endpoint: every block came back `"[Non-Text]"` until this was fixed).
-#[cfg_attr(not(feature = "pdfium"), allow(unused_variables))]
-fn rasterize_or_fallback(path: &str, file_bytes: &[u8]) -> Vec<RenderedPage> {
-    #[cfg(feature = "pdfium")]
-    {
-        if let Ok(pages) = crate::ingest::rasterize(path, 150.0)
-            && !pages.is_empty()
-        {
-            return pages;
-        }
-    }
-
-    if let Ok(img) = image::load_from_memory(file_bytes) {
-        return vec![RenderedPage {
-            page_num: 1,
-            width: img.width(),
-            height: img.height(),
-            png_bytes: file_bytes.to_vec(),
-        }];
-    }
-
-    vec![RenderedPage {
-        page_num: 1,
-        width: 1,
-        height: 1,
-        png_bytes: file_bytes.to_vec(),
-    }]
-}
-
-/// Format-aware page ingestion (T-7.1-7.4's `ingest_document`, finally
-/// wired into a real call path): DOCX/PPTX are converted to PDF via
-/// LibreOffice first (§13.1a's `normalize_format` step) and rasterized
-/// from the converted bytes; every other format goes through the
-/// existing `rasterize_or_fallback` ladder unchanged (no behavior change
-/// for PDF/PNG/JPEG/unknown input). XLSX/CSV never reach this function —
-/// `run_parse` checks `structured_bypass()` first and returns before
-/// this is called.
-async fn ingest_pages(
-    path: &str,
-    file_bytes: &[u8],
-    format: crate::ingest::DocumentFormat,
-) -> Result<Vec<RenderedPage>, crate::ingest::IngestError> {
-    use crate::ingest::DocumentFormat;
-    match format {
-        DocumentFormat::Docx | DocumentFormat::Pptx => {
-            let pdf_bytes = crate::ingest::normalize_format(file_bytes, format).await?;
-            crate::ingest::rasterize_pdf_bytes(&pdf_bytes, 150.0)
-        }
-        _ => Ok(rasterize_or_fallback(path, file_bytes)),
-    }
-}
-
-/// `native`'s real entry point is the whole-document `parse_document()`,
-/// not the per-page `ProtocolAdapter::parse_page()` every other adapter
-/// implements (a deliberate P4 design decision — see `adapters/native.rs`),
-/// so it can't go through the scheduler-based flow above.
-#[cfg(feature = "native")]
-fn run_parse_native(
-    path: String,
-    format: OutputFormat,
-    file_bytes: Vec<u8>,
-    routed_by_auto: bool,
-    options: NativeOptions,
-) -> i32 {
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            return emit_error(
-                format,
-                EXIT_INTERNAL,
-                "runtime_init_failed",
-                &e.to_string(),
-                "native",
-                None,
-            );
-        }
-    };
-
-    let adapter = crate::adapters::native::NativeAdapter;
-
-    // One parse serves every output format. Previously Markdown, JSON and
-    // `document-json` each re-parsed the source, so asking for
-    // `document-json` read and parsed the same bytes twice.
-    let parsed = match runtime.block_on(adapter.parse_native(
-        &path,
-        &file_bytes,
-        &options.to_engine_options(),
-    )) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            return emit_error(
-                format,
-                native_failure_exit_code(e.stage.as_deref()),
-                "native_parse_failed",
-                &e.message,
-                "native",
-                e.stage.as_deref(),
-            );
-        }
-    };
-
-    match parsed {
-        crate::adapters::native::NativeParse::Pdf(mut result) => {
-            if routed_by_auto {
-                result.routed_by = RoutedBy::Auto;
-            }
-            if let OutputFormat::DocumentJson = format {
-                return emit_error(
-                    format,
-                    EXIT_USAGE,
-                    "unsupported_output_format",
-                    "document-json is available for structured native documents, not PDF",
-                    "native",
-                    Some("native_document"),
-                );
-            }
-            if let OutputFormat::Markdown = format {
-                // The PDF engine's own Markdown pipeline (headings, paragraph
-                // grouping, three-strategy tables) is richer than what the
-                // block IR can reconstruct, so Markdown comes from there.
-                return match runtime.block_on(adapter.native_markdown(&path, &file_bytes)) {
-                    Ok(md) => {
-                        emit_line(&md);
-                        EXIT_SUCCESS
-                    }
-                    Err(e) => emit_error(
-                        format,
-                        EXIT_INTERNAL,
-                        "native_parse_failed",
-                        &e.message,
-                        "native",
-                        e.stage.as_deref(),
-                    ),
-                };
-            }
-            let has_errors = !result.page_errors.is_empty();
-            emit_line(&render::to_json(&result));
-            if has_errors {
-                EXIT_PARTIAL
-            } else {
-                EXIT_SUCCESS
-            }
-        }
-        crate::adapters::native::NativeParse::Structured(mut parsed) => {
-            // Embedded images are written before anything is rendered, so
-            // both the Markdown `![](…)` links and the JSON `asset_path`s
-            // point at files that exist.
-            if let Some(dir) = options.effective_assets_dir(&path)
-                && let Err(e) = crate::assets::write_document_assets(&mut parsed.document, &dir)
-            {
-                eprintln!("warning: failed to write image assets: {e}");
-            }
-
-            match format {
-                OutputFormat::Markdown => {
-                    emit_line(&uparser_document_engine::render::markdown(&parsed.document));
-                    EXIT_SUCCESS
-                }
-                OutputFormat::DocumentJson => {
-                    match uparser_document_engine::render::document_json(&parsed.document) {
-                        Ok(json) => {
-                            emit_line(&json);
-                            EXIT_SUCCESS
-                        }
-                        Err(e) => emit_error(
-                            format,
-                            EXIT_INTERNAL,
-                            "serialization_failed",
-                            &e.to_string(),
-                            "native",
-                            Some("native_document"),
-                        ),
-                    }
-                }
-                OutputFormat::Json => {
-                    let mut result = crate::adapters::native::structured_to_parse_result(
-                        &parsed,
-                        &path,
-                        &file_bytes,
-                    );
-                    if routed_by_auto {
-                        result.routed_by = RoutedBy::Auto;
-                    }
-                    if let Some(dir) = options.effective_assets_dir(&path)
-                        && let Err(e) = crate::assets::write_block_assets(&mut result, &dir)
-                    {
-                        eprintln!("warning: failed to write image assets: {e}");
-                    }
-                    emit_line(&render::to_json(&result));
-                    EXIT_SUCCESS
-                }
-            }
-        }
-    }
-}
-
-/// Map a structured-document failure onto the semantic exit code an agent
-/// should branch on.
-///
-/// A format we cannot parse is the caller's choice of input (usage); an
-/// encrypted file or one over its resource budget is an environment/input
-/// condition to fix and retry; only a genuinely unexpected failure is
-/// "internal", which is the code that tells an agent to retry blindly.
-#[cfg(feature = "native")]
-fn native_failure_exit_code(stage: Option<&str>) -> i32 {
-    match stage {
-        // Something about the input itself: retrying changes nothing.
-        Some(
-            "native_document.unsupported_format"
-            | "native_document.malformed"
-            | "native_document.missing_part",
-        ) => EXIT_USAGE,
-        // Fixable in the environment (a password, a bigger budget, a readable
-        // file), so retrying after fixing it is the right move.
-        Some(
-            "native_document.encrypted" | "native_document.resource_limit" | "native_document.io",
-        ) => EXIT_DEPENDENCY,
-        _ => EXIT_INTERNAL,
-    }
-}
-
-/// Native-only knobs, kept together so the parse entry point takes one value
-/// rather than five positional booleans.
-pub(crate) struct NativeOptions {
-    pub assets_dir: Option<String>,
-    pub no_assets: bool,
-    pub include_notes: bool,
-    pub include_headers_footers: bool,
-    pub max_input_mib: Option<u64>,
-}
-
-impl NativeOptions {
-    #[cfg(feature = "native")]
-    fn to_engine_options(&self) -> uparser_document_engine::ParseOptions {
-        let mut options = uparser_document_engine::ParseOptions {
-            include_notes: self.include_notes,
-            include_headers_footers: self.include_headers_footers,
-            // Assets are always retained in memory when we intend to write
-            // them; `--no-assets` is what turns the retention off.
-            include_assets: !self.no_assets,
-            ..uparser_document_engine::ParseOptions::default()
-        };
-        if let Some(mib) = self.max_input_mib {
-            options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
-        }
-        options
-    }
-
-    #[cfg(feature = "native")]
-    fn effective_assets_dir(&self, source_path: &str) -> Option<std::path::PathBuf> {
-        (!self.no_assets).then(|| {
-            self.assets_dir
-                .clone()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| crate::assets::default_assets_dir(source_path))
-        })
     }
 }
 
@@ -1057,25 +757,6 @@ fn emit_line(text: &str) {
     let _ = handle.flush();
 }
 
-#[cfg(not(feature = "native"))]
-fn run_parse_native(
-    _path: String,
-    format: OutputFormat,
-    _file_bytes: Vec<u8>,
-    _routed_by_auto: bool,
-    _options: NativeOptions,
-) -> i32 {
-    emit_error(
-        format,
-        EXIT_USAGE,
-        "unsupported_protocol",
-        "the `native` protocol requires building with `--features native`",
-        "native",
-        None,
-    )
-}
-
-/// Runs the Profiler only (no protocol adapter, no scheduler) and prints
 /// the resulting `DocumentProfile` as JSON to stdout.
 fn run_classify(path: String) -> i32 {
     if !Path::new(&path).exists() {
@@ -1103,8 +784,34 @@ fn run_classify(path: String) -> i32 {
         }
     };
 
-    let format = crate::ingest::detect_format(&bytes, Some(&path));
-    let profile = profile_best_effort(&bytes, format);
+    let source =
+        crate::frontend::PreflightSource::new(std::sync::Arc::<[u8]>::from(bytes), Some(&path));
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return emit_error(
+                OutputFormat::Json,
+                EXIT_INTERNAL,
+                "runtime_init_failed",
+                &error.to_string(),
+                "classify",
+                Some("preflight"),
+            );
+        }
+    };
+    let profile = match runtime.block_on(crate::runner::analyze(&source)) {
+        Ok(report) => report.profile,
+        Err(error) => {
+            return emit_error(
+                OutputFormat::Json,
+                EXIT_USAGE,
+                "analysis_failed",
+                &error.to_string(),
+                "classify",
+                Some("analyze"),
+            );
+        }
+    };
 
     let json =
         serde_json::to_string_pretty(&profile).expect("DocumentProfile is always serializable");
@@ -1112,68 +819,47 @@ fn run_classify(path: String) -> i32 {
     EXIT_SUCCESS
 }
 
-/// L2 profiling when possible (native feature + PDF input), falling back
-/// to L1 otherwise. Shared by `run_classify` and `resolve_auto_protocol`.
-#[cfg_attr(not(feature = "native"), allow(unused_variables))]
-fn profile_best_effort(
-    bytes: &[u8],
-    format: crate::ingest::DocumentFormat,
-) -> crate::types::DocumentProfile {
-    #[cfg(feature = "native")]
-    {
-        if format == crate::ingest::DocumentFormat::Pdf {
-            match tokio::runtime::Runtime::new() {
-                Ok(runtime) => match runtime.block_on(crate::profiler::profile_l2(bytes, format)) {
-                    Ok(p) => return p,
-                    Err(e) => eprintln!("warning: L2 profiling failed ({e}), falling back to L1"),
-                },
-                Err(e) => eprintln!(
-                    "warning: failed to init runtime for L2 profiling ({e}), falling back to L1"
-                ),
-            }
-        }
-    }
-    #[cfg(not(feature = "native"))]
-    eprintln!(
-        "note: built without the `native` feature — only L1 (format-based) profiling is available"
-    );
-
-    crate::profiler::profile_l1(format)
-}
-
-/// `--protocol auto` support: Profiler + Router, per ARCHITECTURE.md
-/// §13.1a/§13.5.
-fn resolve_auto_protocol(path: &str, bytes: &[u8]) -> (String, String) {
-    #[cfg(feature = "native")]
-    {
-        let format = uparser_document_engine::detect_format(bytes, Some(path));
-        if matches!(
-            format,
-            uparser_document_engine::DocumentFormat::Csv
-                | uparser_document_engine::DocumentFormat::Tsv
-                | uparser_document_engine::DocumentFormat::Excel
-                | uparser_document_engine::DocumentFormat::Ods
-                | uparser_document_engine::DocumentFormat::Odt
-                | uparser_document_engine::DocumentFormat::Odp
-                | uparser_document_engine::DocumentFormat::Epub
-                | uparser_document_engine::DocumentFormat::Rtf
-                | uparser_document_engine::DocumentFormat::Docx
-                | uparser_document_engine::DocumentFormat::Pptx
-                // See the same list in `api.rs`: the legacy binary formats
-                // are read by the same offline engine.
-                | uparser_document_engine::DocumentFormat::Doc
-                | uparser_document_engine::DocumentFormat::Ppt
-        ) {
-            return (
-                "native".to_owned(),
-                format!("source-semantic {format:?} parser is available locally"),
+fn run_plan(path: String, protocol: String, preference: crate::router::RoutePreference) -> i32 {
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return emit_error(
+                OutputFormat::Json,
+                EXIT_DEPENDENCY,
+                "read_failed",
+                &error.to_string(),
+                &protocol,
+                Some("read"),
             );
         }
+    };
+    let source =
+        crate::frontend::PreflightSource::new(std::sync::Arc::<[u8]>::from(bytes), Some(&path));
+    let runtime = tokio::runtime::Runtime::new().expect("runtime initialization");
+    match runtime.block_on(crate::runner::prepare_with_preference(
+        source,
+        Some(&protocol),
+        preference,
+    )) {
+        Ok(prepared) => {
+            let output = serde_json::json!({
+                "format": prepared.source.detection(),
+                "profile": prepared.analysis.profile,
+                "plan": prepared.plan,
+                "preference": preference,
+            });
+            emit_line(&serde_json::to_string_pretty(&output).expect("plan is serializable"));
+            EXIT_SUCCESS
+        }
+        Err(error) => emit_error(
+            OutputFormat::Json,
+            EXIT_USAGE,
+            "plan_failed",
+            &error.to_string(),
+            &protocol,
+            Some("plan"),
+        ),
     }
-    let format = crate::ingest::detect_format(bytes, Some(path));
-    let profile = profile_best_effort(bytes, format);
-    let decision = crate::router::route(&profile);
-    (decision.protocol.to_string(), decision.reason)
 }
 
 fn emit_error(
@@ -1247,17 +933,9 @@ fn run_cache(action: CacheAction) -> i32 {
 /// network endpoint to probe; `pipeline` is handled separately (its
 /// doctor check is local-resource-based, not endpoint reachability).
 fn default_endpoint_for(protocol: &str) -> Option<String> {
-    match protocol {
-        "mineru-vlm" => {
-            Some(crate::adapters::mineru_vlm::MineruVlmAdapter::default().endpoint_base)
-        }
-        "dots-ocr" => Some(crate::adapters::dots_ocr::DotsOcrAdapter::default().endpoint_base),
-        "monkeyocr-v2" => {
-            Some(crate::adapters::monkeyocr_v2::MonkeyOcrV2Adapter::default().endpoint_base)
-        }
-        "paddleocr" => Some(crate::adapters::paddleocr::PaddleOcrAdapter::default().endpoint),
-        _ => None,
-    }
+    crate::protocol_spec::get(protocol)
+        .and_then(|spec| spec.default_endpoint)
+        .map(str::to_owned)
 }
 
 /// `MemAvailable` from `/proc/meminfo`, in MB. `None` on non-Linux or if
@@ -1392,8 +1070,13 @@ fn run_protocols() -> i32 {
                 .build(name, &overrides)
                 .expect("name came from the registry itself");
             let signals = adapter.emitted_signals();
+            let spec = crate::protocol_spec::get(name).expect("registered protocol has a spec");
             serde_json::json!({
                 "name": adapter.name(),
+                "mode": spec.mode,
+                "shape": spec.shape,
+                "transport": spec.transport,
+                "default_endpoint": spec.default_endpoint,
                 "coordinate_system": format!("{:?}", adapter.coordinate_system()),
                 "provides_reading_order": adapter.provides_reading_order(),
                 "category_vocab": adapter.category_vocab(),
@@ -1421,47 +1104,4 @@ fn run_protocols() -> i32 {
         serde_json::to_string_pretty(&list).expect("protocol list is serializable")
     );
     EXIT_SUCCESS
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every format the offline document engine can read must route to
-    /// `native` under `--protocol auto`. The legacy binary formats were
-    /// missing from that list, so `uparser parse deck.ppt` — with no flags,
-    /// which is the common Agent call — routed to a VLM and dead-ended on
-    /// "no endpoint configured", despite the deck parsing fine offline.
-    #[cfg(feature = "native")]
-    #[test]
-    fn auto_routes_every_offline_readable_format_to_native() {
-        for name in [
-            "deck.ppt",
-            "letter.doc",
-            "deck.pptx",
-            "letter.docx",
-            "book.epub",
-            "notes.rtf",
-            "sheet.xlsx",
-            "sheet.ods",
-            "text.odt",
-            "slides.odp",
-            "data.csv",
-            "data.tsv",
-        ] {
-            // Bytes no signature sniffer recognises, so the decision rests on
-            // the format alone rather than on fixture contents.
-            let (protocol, reason) = resolve_auto_protocol(name, b"not a real document");
-            assert_eq!(protocol, "native", "{name} routed to {protocol} ({reason})");
-        }
-    }
-
-    /// A PDF must *not* take that shortcut: it goes through the profiler, so
-    /// a scanned one can still reach a VLM.
-    #[cfg(feature = "native")]
-    #[test]
-    fn auto_still_profiles_a_pdf_rather_than_shortcutting_it() {
-        let (protocol, _) = resolve_auto_protocol("scan.pdf", b"%PDF-1.7\n");
-        assert_ne!(protocol, "native");
-    }
 }

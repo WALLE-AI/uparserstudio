@@ -6,51 +6,16 @@
 //! itself, called separately downstream).
 
 use crate::types::{Block, BlockSource, CoordFrame, Geometry, Page, ParseResult, RoutedBy};
-use file_format::FileFormat;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 
-/// Detected input document format, before any conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DocumentFormat {
-    Pdf,
-    Docx,
-    Pptx,
-    Xlsx,
-    Csv,
-    Png,
-    Jpeg,
-    Unknown,
-}
+/// The structured-document engine owns format identity and detection. Core
+/// re-exports that contract so every entry point carries the same 16 variants.
+pub use crate::frontend::DocumentFormat;
 
-/// Sniff the document format from content (magic bytes via the
-/// `file-format` crate — the same dependency `opensource/liteparse`
-/// already uses for this exact purpose). CSV has no reliable magic-byte
-/// signature (it's plain text), so content sniffing alone can't
-/// distinguish it from other plain text — fall back to the filename
-/// extension hint in that case.
 pub fn detect_format(bytes: &[u8], filename_hint: Option<&str>) -> DocumentFormat {
-    let fmt = FileFormat::from_bytes(bytes);
-    match fmt.extension() {
-        "pdf" => DocumentFormat::Pdf,
-        "docx" => DocumentFormat::Docx,
-        "pptx" => DocumentFormat::Pptx,
-        "xlsx" => DocumentFormat::Xlsx,
-        "png" => DocumentFormat::Png,
-        "jpg" => DocumentFormat::Jpeg,
-        _ => {
-            if let Some(name) = filename_hint {
-                let lower = name.to_lowercase();
-                if lower.ends_with(".csv") {
-                    return DocumentFormat::Csv;
-                }
-            }
-            DocumentFormat::Unknown
-        }
-    }
+    uparser_document_engine::detect_format(bytes, filename_hint)
 }
 
 /// A single rasterized page: PNG bytes plus pixel dimensions. Mirrors
@@ -97,7 +62,7 @@ pub fn structured_bypass(
     source_path: &str,
 ) -> Option<Result<ParseResult, IngestError>> {
     match format {
-        DocumentFormat::Xlsx => Some(structured_bypass_xlsx(bytes, source_path)),
+        DocumentFormat::Excel => Some(structured_bypass_xlsx(bytes, source_path)),
         DocumentFormat::Csv => Some(structured_bypass_csv(bytes, source_path)),
         _ => None,
     }
@@ -205,6 +170,8 @@ fn build_structured_result(
         protocol: format!("structured_bypass:{kind}"),
         routed_by: RoutedBy::Explicit,
         document_profile: None,
+        route_decision: None,
+        preprocess_plan: None,
         model_endpoint: None,
         model_name: None,
         pages,
@@ -278,8 +245,19 @@ pub async fn normalize_format_with(
     timeout: Duration,
 ) -> Result<Vec<u8>, IngestError> {
     match format {
-        DocumentFormat::Pdf | DocumentFormat::Xlsx | DocumentFormat::Csv => Ok(bytes.to_vec()),
-        DocumentFormat::Docx | DocumentFormat::Pptx => {
+        DocumentFormat::Pdf => Ok(bytes.to_vec()),
+        DocumentFormat::Doc
+        | DocumentFormat::Docx
+        | DocumentFormat::Ppt
+        | DocumentFormat::Pptx
+        | DocumentFormat::Odt
+        | DocumentFormat::Ods
+        | DocumentFormat::Odp
+        | DocumentFormat::Rtf
+        | DocumentFormat::Epub
+        | DocumentFormat::Excel
+        | DocumentFormat::Csv
+        | DocumentFormat::Tsv => {
             convert_via_libreoffice(bytes, format, tools.libreoffice, timeout).await
         }
         DocumentFormat::Png | DocumentFormat::Jpeg => {
@@ -296,9 +274,19 @@ async fn convert_via_libreoffice(
     timeout: Duration,
 ) -> Result<Vec<u8>, IngestError> {
     let ext = match format {
+        DocumentFormat::Doc => "doc",
         DocumentFormat::Docx => "docx",
+        DocumentFormat::Ppt => "ppt",
         DocumentFormat::Pptx => "pptx",
-        _ => unreachable!("caller only routes Docx/Pptx here"),
+        DocumentFormat::Odt => "odt",
+        DocumentFormat::Ods => "ods",
+        DocumentFormat::Odp => "odp",
+        DocumentFormat::Rtf => "rtf",
+        DocumentFormat::Epub => "epub",
+        DocumentFormat::Excel => "xlsx",
+        DocumentFormat::Csv => "csv",
+        DocumentFormat::Tsv => "tsv",
+        _ => unreachable!("caller only routes office/document formats here"),
     };
 
     let dir = tempfile::tempdir().map_err(|e| conversion_failed(tool, e))?;
@@ -461,6 +449,55 @@ pub fn rasterize(path: &str, dpi: f32) -> Result<Vec<RenderedPage>, IngestError>
         });
     }
 
+    Ok(pages)
+}
+
+#[cfg(feature = "pdfium")]
+pub fn pdf_page_count(pdf_bytes: &[u8]) -> Result<u32, IngestError> {
+    use pdfium::Library;
+
+    let library = Library::init();
+    let document = library
+        .load_document_from_bytes(pdf_bytes, None)
+        .map_err(|error| IngestError::Rasterize(error.to_string()))?;
+    u32::try_from(document.page_count())
+        .map_err(|_| IngestError::Rasterize("PDF reported a negative page count".into()))
+}
+
+#[cfg(feature = "pdfium")]
+pub fn rasterize_pdf_page_numbers(
+    pdf_bytes: &[u8],
+    dpi: f32,
+    page_numbers: &[u32],
+) -> Result<Vec<RenderedPage>, IngestError> {
+    use pdfium::Library;
+
+    let library = Library::init();
+    let document = library
+        .load_document_from_bytes(pdf_bytes, None)
+        .map_err(|error| IngestError::Rasterize(error.to_string()))?;
+    let page_count = document.page_count();
+    let mut pages = Vec::with_capacity(page_numbers.len());
+    for page_num in page_numbers {
+        if *page_num == 0 || i64::from(*page_num) > i64::from(page_count) {
+            continue;
+        }
+        let page = document
+            .page((*page_num - 1) as i32)
+            .map_err(|error| IngestError::Rasterize(error.to_string()))?;
+        let bitmap = page
+            .render(dpi)
+            .map_err(|error| IngestError::Rasterize(error.to_string()))?;
+        let width = bitmap.width() as u32;
+        let height = bitmap.height() as u32;
+        let png_bytes = encode_png(&bitmap.to_rgba(), width, height)?;
+        pages.push(RenderedPage {
+            page_num: *page_num,
+            width,
+            height,
+            png_bytes,
+        });
+    }
     Ok(pages)
 }
 

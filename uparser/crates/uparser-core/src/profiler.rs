@@ -9,30 +9,336 @@
 //! classification via a model call) is opt-in per §13.2a and not here.
 
 use crate::ingest::DocumentFormat;
-use crate::types::{ContentMix, DocumentKind, DocumentProfile};
 #[cfg(feature = "native")]
-use crate::types::{PageProfile, ProfileLevel};
+use crate::types::PageProfile;
+use crate::types::{
+    AnalysisEvidence, ContentMix, DocumentGenre, DocumentKind, DocumentProfile, EvidenceSource,
+    GenrePrediction, ProfileLevel, SourceQuality, StructureProfile,
+};
 
 /// L1: near-zero-cost, unreliable classification from format alone. A
 /// `Pdf`/`Docx` alone tells you almost nothing — only formats with a
 /// strong format→kind prior (presentations, spreadsheets) get anything
 /// above minimal confidence.
 pub fn profile_l1(format: DocumentFormat) -> DocumentProfile {
-    let (kind, kind_confidence, dominant_content) = match format {
-        DocumentFormat::Pptx => (DocumentKind::Slide, 0.6, ContentMix::Mixed),
-        DocumentFormat::Xlsx | DocumentFormat::Csv => {
-            (DocumentKind::Spreadsheet, 0.9, ContentMix::TableDense)
-        }
-        _ => (DocumentKind::Unknown, 0.1, ContentMix::Mixed),
+    let (kind, genre, kind_confidence, dominant_content) = match format {
+        DocumentFormat::Ppt | DocumentFormat::Pptx | DocumentFormat::Odp => (
+            DocumentKind::Slide,
+            DocumentGenre::Presentation,
+            0.8,
+            ContentMix::Mixed,
+        ),
+        DocumentFormat::Excel | DocumentFormat::Csv | DocumentFormat::Tsv => (
+            DocumentKind::Spreadsheet,
+            DocumentGenre::Spreadsheet,
+            0.9,
+            ContentMix::TableDense,
+        ),
+        DocumentFormat::Ods => (
+            DocumentKind::Spreadsheet,
+            DocumentGenre::Spreadsheet,
+            0.9,
+            ContentMix::TableDense,
+        ),
+        DocumentFormat::Epub => (
+            DocumentKind::Book,
+            DocumentGenre::Book,
+            0.75,
+            ContentMix::TextDominant,
+        ),
+        _ => (
+            DocumentKind::Unknown,
+            DocumentGenre::Unknown,
+            0.1,
+            ContentMix::Mixed,
+        ),
+    };
+    let source_quality = match format {
+        DocumentFormat::Png | DocumentFormat::Jpeg => SourceQuality::ImageOnly,
+        DocumentFormat::Pdf | DocumentFormat::Unknown => SourceQuality::Unknown,
+        _ => SourceQuality::Structured,
     };
 
     DocumentProfile {
         source_format: format,
+        source_quality,
         kind,
         kind_confidence,
+        genre: GenrePrediction {
+            primary: genre,
+            tags: Vec::new(),
+            confidence: kind_confidence,
+            evidence: vec![AnalysisEvidence {
+                signal: format!("format:{format:?}"),
+                source: EvidenceSource::Format,
+                unit_index: None,
+                contribution: kind_confidence,
+            }],
+        },
+        structure: StructureProfile::default(),
+        page_or_unit_count: None,
         page_profiles: vec![],
         dominant_content,
+        analysis_level: ProfileLevel::L1,
+        warnings: Vec::new(),
     }
+}
+
+/// L2 for source-semantic formats. The document engine remains the owner of
+/// parsing; this function only summarizes its canonical output for routing.
+pub fn profile_structured(
+    bytes: &[u8],
+    format: DocumentFormat,
+) -> Result<DocumentProfile, crate::ingest::IngestError> {
+    let document = uparser_document_engine::parse_document(
+        bytes,
+        format,
+        &uparser_document_engine::ParseOptions::default(),
+    )
+    .map_err(|error| crate::ingest::IngestError::Profiling(error.to_string()))?;
+    Ok(profile_structured_document(&document))
+}
+
+pub fn profile_structured_document(
+    document: &uparser_document_engine::CanonicalDocument,
+) -> DocumentProfile {
+    let format = document.metadata.format;
+    let markdown = uparser_document_engine::render::markdown(&document);
+    let mut stats = StructuredStats::default();
+    for unit in &document.units {
+        for block in &unit.blocks {
+            collect_block_stats(block, &mut stats);
+        }
+    }
+
+    let total = stats.blocks.max(1) as f32;
+    let table_ratio = stats.tables as f32 / total;
+    let figure_ratio = stats.figures as f32 / total;
+    let dominant_content = if matches!(
+        format,
+        DocumentFormat::Excel | DocumentFormat::Ods | DocumentFormat::Csv | DocumentFormat::Tsv
+    ) || table_ratio >= 0.35
+    {
+        ContentMix::TableDense
+    } else if figure_ratio >= 0.35 {
+        ContentMix::ImageDense
+    } else if table_ratio + figure_ratio >= 0.2 {
+        ContentMix::Mixed
+    } else {
+        ContentMix::TextDominant
+    };
+    let fallback = profile_l1(format);
+    let genre = infer_genre(format, &markdown, fallback.genre.primary);
+    let numbered_lines = markdown
+        .lines()
+        .filter(|line| starts_with_numbered_clause(line.trim()))
+        .count();
+    let nonempty_lines = markdown
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        .max(1);
+    let has_toc = detect_toc(&markdown, stats.headings);
+
+    DocumentProfile {
+        source_format: format,
+        source_quality: SourceQuality::Structured,
+        kind: legacy_kind(genre.primary),
+        kind_confidence: genre.confidence,
+        genre,
+        structure: StructureProfile {
+            has_toc: Some(has_toc),
+            has_cover: None,
+            heading_depth: stats.heading_depth,
+            numbered_clause_density: numbered_lines as f32 / nonempty_lines as f32,
+            repeated_header_footer_ratio: 0.0,
+            multi_column_ratio: 0.0,
+        },
+        page_or_unit_count: Some(document.units.len() as u32),
+        page_profiles: Vec::new(),
+        dominant_content,
+        analysis_level: ProfileLevel::L2,
+        warnings: document
+            .warnings
+            .iter()
+            .map(|warning| format!("{:?}: {}", warning.code, warning.message))
+            .collect(),
+    }
+}
+
+#[derive(Default)]
+struct StructuredStats {
+    blocks: usize,
+    headings: usize,
+    heading_depth: Option<u8>,
+    tables: usize,
+    figures: usize,
+}
+
+fn collect_block_stats(block: &uparser_document_engine::Block, stats: &mut StructuredStats) {
+    use uparser_document_engine::Block;
+    stats.blocks += 1;
+    match block {
+        Block::Heading { level, .. } => {
+            stats.headings += 1;
+            stats.heading_depth = Some(stats.heading_depth.unwrap_or(0).max(*level));
+        }
+        Block::Table { .. } => stats.tables += 1,
+        Block::Figure { .. } => stats.figures += 1,
+        Block::BlockQuote { blocks } => {
+            for child in blocks {
+                collect_block_stats(child, stats);
+            }
+        }
+        Block::List { list } => {
+            for item in &list.items {
+                for child in &item.blocks {
+                    collect_block_stats(child, stats);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn infer_genre(format: DocumentFormat, text: &str, fallback: DocumentGenre) -> GenrePrediction {
+    let lower = text.to_lowercase();
+    let rules: &[(DocumentGenre, &[&str])] = &[
+        (
+            DocumentGenre::Resume,
+            &[
+                "工作经历",
+                "教育经历",
+                "个人简历",
+                "work experience",
+                "education",
+                "curriculum vitae",
+            ],
+        ),
+        (
+            DocumentGenre::Tender,
+            &["招标文件", "招标公告", "投标人须知", "invitation to tender"],
+        ),
+        (
+            DocumentGenre::Bid,
+            &["投标文件", "投标函", "投标报价", "bid proposal"],
+        ),
+        (
+            DocumentGenre::Regulation,
+            &[
+                "中华人民共和国",
+                "条例",
+                "管理办法",
+                "实施细则",
+                "regulation",
+            ],
+        ),
+        (
+            DocumentGenre::LegalDocument,
+            &[
+                "人民法院",
+                "判决书",
+                "裁定书",
+                "法律意见书",
+                "court",
+                "judgment",
+            ],
+        ),
+        (
+            DocumentGenre::Contract,
+            &["合同", "甲方", "乙方", "协议书", "agreement", "contract"],
+        ),
+        (
+            DocumentGenre::AcademicPaper,
+            &["摘要", "关键词", "参考文献", "abstract", "references"],
+        ),
+        (
+            DocumentGenre::FinancialReport,
+            &["资产负债表", "利润表", "现金流量表", "financial statements"],
+        ),
+        (
+            DocumentGenre::Manual,
+            &["用户手册", "操作手册", "使用说明", "user manual"],
+        ),
+    ];
+    let mut matches: Vec<(DocumentGenre, usize)> = rules
+        .iter()
+        .filter_map(|(genre, terms)| {
+            let count = terms.iter().filter(|term| lower.contains(**term)).count();
+            (count > 0).then_some((*genre, count))
+        })
+        .collect();
+    matches.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    let primary = matches.first().map(|(genre, _)| *genre).unwrap_or(fallback);
+    let confidence = matches
+        .first()
+        .map(|(_, count)| (0.55 + *count as f32 * 0.12).min(0.9))
+        .unwrap_or_else(|| {
+            if primary == DocumentGenre::Unknown {
+                0.2
+            } else {
+                0.75
+            }
+        });
+    GenrePrediction {
+        primary,
+        tags: matches.iter().skip(1).map(|(genre, _)| *genre).collect(),
+        confidence,
+        evidence: vec![AnalysisEvidence {
+            signal: if matches.is_empty() {
+                format!("format-prior:{format:?}")
+            } else {
+                "document-keyword-structure".to_owned()
+            },
+            source: if matches.is_empty() {
+                EvidenceSource::Format
+            } else {
+                EvidenceSource::NativeText
+            },
+            unit_index: None,
+            contribution: confidence,
+        }],
+    }
+}
+
+fn legacy_kind(genre: DocumentGenre) -> DocumentKind {
+    match genre {
+        DocumentGenre::Book => DocumentKind::Book,
+        DocumentGenre::Resume => DocumentKind::Resume,
+        DocumentGenre::Presentation => DocumentKind::Slide,
+        DocumentGenre::Spreadsheet => DocumentKind::Spreadsheet,
+        DocumentGenre::AcademicPaper => DocumentKind::AcademicPaper,
+        DocumentGenre::GeneralReport | DocumentGenre::FinancialReport => DocumentKind::Report,
+        _ => DocumentKind::Unknown,
+    }
+}
+
+fn detect_toc(text: &str, heading_count: usize) -> bool {
+    let marker = text.lines().any(|line| {
+        matches!(
+            line.trim().to_lowercase().as_str(),
+            "目录" | "目次" | "contents" | "table of contents"
+        )
+    });
+    let linked_or_numbered = text
+        .lines()
+        .filter(|line| line.contains("](#") || line.contains("......") || line.contains("……"))
+        .count();
+    marker && (linked_or_numbered >= 3 || heading_count >= 3)
+}
+
+fn starts_with_numbered_clause(line: &str) -> bool {
+    let first = line.chars().next();
+    first.is_some_and(|ch| ch.is_ascii_digit())
+        && line
+            .chars()
+            .take(8)
+            .any(|ch| matches!(ch, '.' | '、' | ')' | '）'))
+        || line.starts_with("第")
+            && line
+                .chars()
+                .take(12)
+                .any(|ch| matches!(ch, '条' | '章' | '节'))
 }
 
 #[cfg(feature = "native")]
@@ -55,16 +361,16 @@ mod l2 {
     ) -> Result<DocumentProfile, IngestError> {
         let result = uparser_native_engine::process_pdf_mem(pdf_bytes)
             .map_err(|e| IngestError::Profiling(e.to_string()))?;
+        Ok(profile_l2_result(&result, format))
+    }
 
+    pub fn profile_l2_result(
+        result: &uparser_native_engine::PdfProcessResult,
+        format: DocumentFormat,
+    ) -> DocumentProfile {
         let page_count = result.page_count;
         if page_count == 0 {
-            return Ok(DocumentProfile {
-                source_format: format,
-                kind: DocumentKind::Unknown,
-                kind_confidence: 0.1,
-                page_profiles: vec![],
-                dominant_content: ContentMix::Mixed,
-            });
+            return profile_l1(format);
         }
 
         let tables: HashSet<u32> = result.layout.pages_with_tables.iter().copied().collect();
@@ -74,16 +380,63 @@ mod l2 {
         let page_profiles: Vec<PageProfile> = (1..=page_count)
             .map(|p| map_page(p, &tables, &needs_ocr))
             .collect();
+        let source_quality = match result.pdf_type {
+            PdfType::TextBased => SourceQuality::NativeText,
+            PdfType::Scanned => SourceQuality::Scanned,
+            PdfType::ImageBased => SourceQuality::ImageOnly,
+            PdfType::Mixed => SourceQuality::Mixed,
+        };
+        let markdown = result.markdown.as_deref().unwrap_or_default();
         let (kind, kind_confidence, dominant_content) =
             aggregate(result.pdf_type, page_count, &tables, &columns, &needs_ocr);
+        let genre = infer_genre(format, markdown, legacy_genre(kind));
+        let heading_depth = markdown
+            .lines()
+            .filter_map(|line| {
+                let count = line.chars().take_while(|ch| *ch == '#').count();
+                (count > 0 && line.chars().nth(count) == Some(' ')).then_some(count.min(6) as u8)
+            })
+            .max();
+        let nonempty_lines = markdown
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+            .max(1);
+        let numbered = markdown
+            .lines()
+            .filter(|line| starts_with_numbered_clause(line.trim()))
+            .count();
 
-        Ok(DocumentProfile {
+        DocumentProfile {
             source_format: format,
+            source_quality,
             kind,
             kind_confidence,
+            genre,
+            structure: StructureProfile {
+                has_toc: Some(detect_toc(markdown, heading_depth.unwrap_or(0) as usize)),
+                has_cover: None,
+                heading_depth,
+                numbered_clause_density: numbered as f32 / nonempty_lines as f32,
+                repeated_header_footer_ratio: 0.0,
+                multi_column_ratio: columns.len() as f32 / page_count as f32,
+            },
+            page_or_unit_count: Some(page_count),
             page_profiles,
             dominant_content,
-        })
+            analysis_level: ProfileLevel::L2,
+            warnings: result
+                .ocr_reasons_by_page
+                .iter()
+                .map(|reason| {
+                    format!(
+                        "page {} requires OCR: {}",
+                        reason.page,
+                        reason.reasons.join(",")
+                    )
+                })
+                .collect(),
+        }
     }
 
     fn map_page(page: u32, tables: &HashSet<u32>, needs_ocr: &HashSet<u32>) -> PageProfile {
@@ -137,7 +490,20 @@ mod l2 {
 }
 
 #[cfg(feature = "native")]
-pub use l2::profile_l2;
+fn legacy_genre(kind: DocumentKind) -> DocumentGenre {
+    match kind {
+        DocumentKind::Book => DocumentGenre::Book,
+        DocumentKind::Resume => DocumentGenre::Resume,
+        DocumentKind::Slide => DocumentGenre::Presentation,
+        DocumentKind::Report => DocumentGenre::GeneralReport,
+        DocumentKind::Spreadsheet => DocumentGenre::Spreadsheet,
+        DocumentKind::AcademicPaper => DocumentGenre::AcademicPaper,
+        DocumentKind::Unknown => DocumentGenre::Unknown,
+    }
+}
+
+#[cfg(feature = "native")]
+pub use l2::{profile_l2, profile_l2_result};
 
 #[cfg(test)]
 mod tests {
@@ -153,7 +519,7 @@ mod tests {
 
     #[test]
     fn l1_xlsx_is_spreadsheet_table_dense() {
-        let profile = profile_l1(DocumentFormat::Xlsx);
+        let profile = profile_l1(DocumentFormat::Excel);
         assert_eq!(profile.kind, DocumentKind::Spreadsheet);
         assert_eq!(profile.dominant_content, ContentMix::TableDense);
     }
