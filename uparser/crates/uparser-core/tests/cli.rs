@@ -40,6 +40,17 @@ fn bad_args_exit_usage_error() {
 }
 
 #[test]
+fn help_exits_successfully_on_stdout() {
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage:"))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn nonexistent_file_exits_dependency_unavailable() {
     Command::cargo_bin("uparser")
         .unwrap()
@@ -152,6 +163,328 @@ fn plan_reports_detection_profile_candidates_and_preprocessing() {
             .is_some_and(|candidates| candidates.len() >= 3)
     );
     assert!(parsed["plan"]["preprocess"]["input_channel"].is_string());
+}
+
+#[test]
+fn native_markdown_output_writes_in_process_and_keeps_stdout_empty() {
+    let mut input = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    input.write_all(b"name,value\nalpha,1\n").unwrap();
+    let output_dir = tempfile::tempdir().unwrap();
+    let output = output_dir.path().join("result.md");
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            input.path().to_str().unwrap(),
+            "--mode",
+            "native",
+            "--format",
+            "markdown",
+            "--no-cache",
+            "--no-assets",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let markdown = std::fs::read_to_string(output).unwrap();
+    assert!(markdown.contains("alpha"));
+    assert!(markdown.contains('1'));
+}
+
+#[test]
+fn aggregate_output_rejects_streaming_mode() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    let output_dir = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--stream",
+            "--output",
+            output_dir.path().join("result.json").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "--output cannot be combined with --stream",
+        ));
+}
+
+#[test]
+fn plan_reports_mode_conflicts_and_missing_inputs_as_structured_errors() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "plan",
+            file.path().to_str().unwrap(),
+            "--mode",
+            "native",
+            "--protocol",
+            "mock",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("invalid_mode_selection"));
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["plan", "/no/such/input.pdf"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::contains("read_failed"));
+}
+
+#[cfg(feature = "native")]
+fn native_pdf_fixture() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../opensource/pdf-inspector/tests/fixtures/bare_name_struct.pdf")
+}
+
+#[cfg(feature = "native")]
+fn image_only_pdf_fixture() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../benchmark/opendataloader-bench/pdfs/01030000000141.pdf")
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
+    let mut csv = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    csv.write_all(b"name,value\nalpha,42\n").unwrap();
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            csv.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("| alpha | 42 |"));
+
+    let pdf = native_pdf_fixture();
+    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            pdf.to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+
+    let mut broken = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+    broken.write_all(b"%PDF-1.7\nnot a valid PDF").unwrap();
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            broken.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("Invalid PDF structure"));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn native_markdown_fast_path_reports_image_only_pdf_metadata() {
+    let pdf = image_only_pdf_fixture();
+    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            pdf.to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "INFOGRAPHIC- 10 Things to Know about Copyright",
+        ))
+        .stdout(predicate::str::contains("[Image-only PDF: OCR required]"));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn native_markdown_fast_path_reports_image_only_pdf_without_metadata() {
+    let mut bytes = std::fs::read(image_only_pdf_fixture()).unwrap();
+    let title_key = b"/Title(";
+    let key_start = bytes
+        .windows(title_key.len())
+        .position(|window| window == title_key)
+        .expect("fixture Info dictionary title");
+    bytes[key_start + 1] = b'X';
+    let mut pdf = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+    pdf.write_all(&bytes).unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            pdf.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[Image-only PDF: OCR required]"))
+        .stdout(predicate::str::contains("INFOGRAPHIC").not());
+}
+
+#[test]
+fn aggregate_output_writes_file_and_keeps_stdout_empty() {
+    let mut input = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+    input.write_all(&fixture_png()).unwrap();
+    let output_dir = tempfile::tempdir().unwrap();
+    let output = output_dir.path().join("result.md");
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            input.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "markdown",
+            "--no-cache",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    assert!(
+        std::fs::read_to_string(output)
+            .unwrap()
+            .contains("mock page 1")
+    );
+}
+
+#[test]
+fn output_write_failure_is_a_dependency_error() {
+    let mut input = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+    input.write_all(&fixture_png()).unwrap();
+    let output_dir = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            input.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "markdown",
+            "--no-cache",
+            "--output",
+            output_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty().not());
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn native_pdf_rejects_document_json_and_native_flags_warn_when_ignored() {
+    let pdf = native_pdf_fixture();
+    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            pdf.to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "document-json",
+            "--no-cache",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "document-json is available for structured native documents",
+        ));
+
+    let mut csv = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    csv.write_all(b"name,value\nalpha,42\n").unwrap();
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            csv.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "json",
+            "--pages",
+            "1",
+            "--stream",
+            "--window-size",
+            "2",
+            "--max-concurrency",
+            "2",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("--pages has no effect")
+                .and(predicate::str::contains("--stream has no effect"))
+                .and(predicate::str::contains("--window-size has no effect"))
+                .and(predicate::str::contains("--max-concurrency has no effect")),
+        );
 }
 
 #[test]
@@ -648,6 +981,23 @@ fn doctor_mock_protocol_reports_no_endpoint_to_probe() {
     let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(parsed["protocol"], "mock");
     assert!(parsed["reachable"].is_null());
+}
+
+#[test]
+fn doctor_unknown_protocol_is_a_structured_usage_error() {
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "not-a-protocol"])
+        .assert()
+        .failure()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["error"]["code"], "unknown_protocol");
+    assert_eq!(parsed["error"]["protocol"], "not-a-protocol");
 }
 
 /// T-9.3: `doctor pipeline` reports a local resource advisory, not an

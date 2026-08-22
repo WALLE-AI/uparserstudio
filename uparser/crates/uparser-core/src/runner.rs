@@ -495,16 +495,21 @@ async fn execute_native(
 ) -> Result<ParseOutcome, ExecutionError> {
     match analysis.artifacts {
         AnalysisArtifacts::Structured(document) => {
-            let document = if document_options_are_default(&options.document_options) {
-                document
-            } else {
+            let mut document = if document_options_require_reparse(&options.document_options) {
                 uparser_document_engine::parse_document(
                     source.bytes(),
                     source.format(),
                     &options.document_options,
                 )
                 .map_err(|error| ExecutionError::Structured(error.to_string()))?
+            } else {
+                document
             };
+            if !options.document_options.include_assets {
+                for asset in &mut document.assets {
+                    asset.bytes = None;
+                }
+            }
             let mut result =
                 crate::structured::to_parse_result(&document, &source_path, source.bytes());
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
@@ -554,22 +559,21 @@ fn attach_execution_metadata(
     result.model_name = options.model.clone();
 }
 
-fn document_options_are_default(options: &uparser_document_engine::ParseOptions) -> bool {
+fn document_options_require_reparse(options: &uparser_document_engine::ParseOptions) -> bool {
     let defaults = uparser_document_engine::ParseOptions::default();
-    options.include_assets == defaults.include_assets
-        && options.include_notes == defaults.include_notes
-        && options.include_headers_footers == defaults.include_headers_footers
-        && options.limits.max_input_bytes == defaults.limits.max_input_bytes
-        && options.limits.max_entry_bytes == defaults.limits.max_entry_bytes
-        && options.limits.max_total_uncompressed_bytes
-            == defaults.limits.max_total_uncompressed_bytes
-        && options.limits.max_archive_entries == defaults.limits.max_archive_entries
-        && options.limits.max_xml_depth == defaults.limits.max_xml_depth
-        && options.limits.max_record_depth == defaults.limits.max_record_depth
-        && options.limits.max_xml_nodes == defaults.limits.max_xml_nodes
-        && options.limits.max_expansion == defaults.limits.max_expansion
-        && options.limits.max_asset_bytes == defaults.limits.max_asset_bytes
-        && options.limits.max_text_bytes == defaults.limits.max_text_bytes
+    options.include_notes != defaults.include_notes
+        || options.include_headers_footers != defaults.include_headers_footers
+        || options.limits.max_input_bytes != defaults.limits.max_input_bytes
+        || options.limits.max_entry_bytes != defaults.limits.max_entry_bytes
+        || options.limits.max_total_uncompressed_bytes
+            != defaults.limits.max_total_uncompressed_bytes
+        || options.limits.max_archive_entries != defaults.limits.max_archive_entries
+        || options.limits.max_xml_depth != defaults.limits.max_xml_depth
+        || options.limits.max_record_depth != defaults.limits.max_record_depth
+        || options.limits.max_xml_nodes != defaults.limits.max_xml_nodes
+        || options.limits.max_expansion != defaults.limits.max_expansion
+        || options.limits.max_asset_bytes != defaults.limits.max_asset_bytes
+        || options.limits.max_text_bytes != defaults.limits.max_text_bytes
 }
 
 fn write_result_assets(
@@ -851,6 +855,16 @@ mod tests {
             report.profile.genre.primary,
             crate::types::DocumentGenre::Spreadsheet
         );
+    }
+
+    #[test]
+    fn asset_bytes_can_be_dropped_without_reparsing_the_document() {
+        let mut options = uparser_document_engine::ParseOptions::default();
+        options.include_assets = false;
+        assert!(!document_options_require_reparse(&options));
+
+        options.include_notes = false;
+        assert!(document_options_require_reparse(&options));
     }
 
     #[test]

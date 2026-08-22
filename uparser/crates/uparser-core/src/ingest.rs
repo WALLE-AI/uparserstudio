@@ -707,11 +707,131 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn malformed_xlsx_is_a_typed_structured_parse_error() {
+        let result = structured_bypass(b"not an xlsx", DocumentFormat::Excel, "bad.xlsx")
+            .expect("Excel uses structured bypass");
+        assert!(matches!(result, Err(IngestError::StructuredParse(_))));
+
+        let parts = [
+            (
+                "[Content_Types].xml",
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>name</t></is></c><c r="B1" t="inlineStr"><is><t>value</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>alpha</t></is></c><c r="B2"><v>42</v></c></row></sheetData></worksheet>"#,
+            ),
+        ];
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, body) in parts {
+                writer.start_file(name, options).unwrap();
+                std::io::Write::write_all(&mut writer, body.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let result = structured_bypass(&bytes, DocumentFormat::Excel, "valid.xlsx")
+            .unwrap()
+            .expect("minimal XLSX parses");
+        assert_eq!(result.protocol, "structured_bypass:xlsx");
+        assert!(
+            result.pages[0].blocks[0]
+                .html
+                .as_deref()
+                .unwrap()
+                .contains("alpha")
+        );
+    }
+
+    #[tokio::test]
+    async fn every_office_extension_routes_through_the_conversion_tool() {
+        for format in [
+            DocumentFormat::Doc,
+            DocumentFormat::Docx,
+            DocumentFormat::Ppt,
+            DocumentFormat::Pptx,
+            DocumentFormat::Odt,
+            DocumentFormat::Ods,
+            DocumentFormat::Odp,
+            DocumentFormat::Rtf,
+            DocumentFormat::Epub,
+            DocumentFormat::Excel,
+            DocumentFormat::Csv,
+            DocumentFormat::Tsv,
+        ] {
+            let result =
+                normalize_format_with(b"input", format, bogus_tools(), Duration::from_secs(1))
+                    .await;
+            assert!(matches!(result, Err(IngestError::ToolNotFound { .. })));
+        }
+        let jpeg = normalize_format_with(
+            b"jpeg",
+            DocumentFormat::Jpeg,
+            bogus_tools(),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(jpeg, Err(IngestError::ToolNotFound { .. })));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn converters_report_nonzero_tool_exits_and_spawn_failures() {
+        let tools = ToolNames {
+            libreoffice: "where.exe",
+            imagemagick: "where.exe",
+        };
+        let office = normalize_format_with(
+            b"doc",
+            DocumentFormat::Doc,
+            tools.clone(),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(office, Err(IngestError::ConversionFailed { .. })));
+
+        let image =
+            normalize_format_with(b"png", DocumentFormat::Png, tools, Duration::from_secs(2)).await;
+        assert!(matches!(image, Err(IngestError::ConversionFailed { .. })));
+
+        let directory = tempfile::tempdir().unwrap();
+        let cmd = tokio::process::Command::new(directory.path());
+        let result = run_with_timeout(cmd, "directory", Duration::from_secs(1)).await;
+        assert!(matches!(result, Err(IngestError::ConversionFailed { .. })));
+    }
+
+    #[cfg(not(feature = "pdfium"))]
+    #[test]
+    fn rasterization_without_pdfium_returns_the_feature_error() {
+        assert!(matches!(
+            rasterize("missing.pdf", 100.0),
+            Err(IngestError::PdfiumFeatureDisabled)
+        ));
+        assert!(matches!(
+            rasterize_pdf_bytes(b"%PDF-1.7", 100.0),
+            Err(IngestError::PdfiumFeatureDisabled)
+        ));
+    }
+
     #[tokio::test]
     async fn run_with_timeout_reports_timeout_not_failure() {
-        let mut cmd = tokio::process::Command::new("sleep");
-        cmd.arg("5");
-        let result = run_with_timeout(cmd, "sleep", Duration::from_millis(100)).await;
+        let cmd = long_running_command();
+        let result = run_with_timeout(cmd, "test-delay", Duration::from_millis(100)).await;
         assert!(matches!(
             result,
             Err(IngestError::ConversionTimedOut { .. })
@@ -727,10 +847,9 @@ mod tests {
     /// process still alive — when `kill_on_drop(true)` is removed).
     #[tokio::test]
     async fn kill_on_drop_actually_terminates_the_child_on_timeout() {
-        let mut cmd = tokio::process::Command::new("sleep");
-        cmd.arg("5");
+        let mut cmd = long_running_command();
         cmd.kill_on_drop(true);
-        let mut child = cmd.spawn().expect("failed to spawn sleep");
+        let mut child = cmd.spawn().expect("failed to spawn delay process");
         let pid = child.id().expect("spawned child has a pid");
 
         let result = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
@@ -740,11 +859,45 @@ mod tests {
         // Give the OS a brief moment to actually reap the process after
         // the kill signal fires.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let still_alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+        let still_alive = process_exists(pid);
         assert!(
             !still_alive,
-            "process {pid} should have been killed on drop, but /proc/{pid} still exists"
+            "process {pid} should have been killed on drop"
         );
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("cmd.exe");
+        cmd.args(["/C", "ping -n 6 127.0.0.1 >NUL"]);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    fn long_running_command() -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("5");
+        cmd
+    }
+
+    #[cfg(windows)]
+    fn process_exists(pid: u32) -> bool {
+        let filter = format!("PID eq {pid}");
+        std::process::Command::new("tasklist.exe")
+            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split(',')
+                    .nth(1)
+                    .is_some_and(|field| field.trim_matches('"') == pid.to_string())
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(windows))]
+    fn process_exists(pid: u32) -> bool {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
     }
 
     // --- ingest_document ---

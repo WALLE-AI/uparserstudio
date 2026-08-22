@@ -12,6 +12,11 @@ name = "uparser_core"
 name = "uparser"
 path = "src/main.rs"
 
+[[bin]]
+name = "uparser-native"
+path = "src/bin/uparser-native.rs"
+required-features = ["native"]
+
 [features]
 # Not default-on: `liteparse-pdfium-sys`'s build script downloads a
 # prebuilt PDFium binary from GitHub on first build, which isn't reliable

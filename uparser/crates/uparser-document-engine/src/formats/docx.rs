@@ -1,7 +1,8 @@
 use crate::ooxml::{
     REL_ENDNOTES, REL_FOOTER, REL_FOOTNOTES, REL_HEADER, REL_NUMBERING, REL_STYLES,
     ROOT_RELATIONSHIPS_PART, Relationships, attribute, load_image_relationships,
-    load_relationships, load_root_relationships, main_part, related_part,
+    load_relationships, load_root_relationships, main_part, related_part, relationship_id,
+    resolve_internal_target,
 };
 use crate::package::Package;
 use crate::{
@@ -74,11 +75,19 @@ pub(crate) fn parse(
         &mut document.assets,
         &mut document.warnings,
     )?;
+    let related_blocks = load_related_blocks(
+        &mut package,
+        &document_part,
+        &relationships,
+        options,
+        &mut document.warnings,
+    )?;
     let context = DocxContext {
         styles: &styles,
         numbering: &numbering,
         relationships: &relationships,
         image_ids: &image_ids,
+        related_blocks: &related_blocks,
     };
     let mut unit = DocumentUnit::new(UnitKind::Flow, 0, None);
 
@@ -240,6 +249,259 @@ struct DocxContext<'a> {
     numbering: &'a HashMap<(String, u8), NumberDef>,
     relationships: &'a Relationships,
     image_ids: &'a HashMap<String, AssetId>,
+    related_blocks: &'a HashMap<String, Vec<Block>>,
+}
+
+fn load_related_blocks(
+    package: &mut Package<'_>,
+    document_part: &str,
+    relationships: &Relationships,
+    options: &ParseOptions,
+    warnings: &mut Vec<ParseWarning>,
+) -> Result<HashMap<String, Vec<Block>>, DocumentError> {
+    let mut blocks = HashMap::new();
+    for (id, relationship) in relationships {
+        if relationship.external {
+            continue;
+        }
+        let parser: Option<fn(&[u8], &str, &ParseOptions) -> Result<Vec<Block>, DocumentError>> =
+            if relationship.kind.ends_with("/chart") {
+                Some(parse_chart_xml)
+            } else if relationship.kind.ends_with("/diagramData") {
+                Some(parse_diagram_xml)
+            } else {
+                None
+            };
+        let Some(parser) = parser else { continue };
+        let Some(part) = resolve_internal_target(document_part, &relationship.target) else {
+            warnings.push(ParseWarning {
+                code: WarningCode::BrokenRelationship,
+                part: Some(document_part.to_owned()),
+                message: format!("rich-object relationship {id} escapes the package"),
+            });
+            continue;
+        };
+        let Some(xml) = package.read(&part)? else {
+            warnings.push(ParseWarning {
+                code: WarningCode::BrokenRelationship,
+                part: Some(part),
+                message: format!("rich-object relationship {id} target is missing"),
+            });
+            continue;
+        };
+        match parser(&xml, &part, options) {
+            Ok(parsed) if !parsed.is_empty() => {
+                blocks.insert(id.clone(), parsed);
+            }
+            Ok(_) => {}
+            Err(error @ DocumentError::ResourceLimit { .. }) => return Err(error),
+            Err(error) => warnings.push(ParseWarning {
+                code: WarningCode::OptionalPartSkipped,
+                part: Some(part),
+                message: format!("rich-object part skipped: {error}"),
+            }),
+        }
+    }
+    Ok(blocks)
+}
+
+#[derive(Default)]
+struct ChartSeries {
+    name: String,
+    categories: Vec<String>,
+    values: Vec<String>,
+}
+
+fn parse_chart_xml(
+    xml: &[u8],
+    part: &str,
+    options: &ParseOptions,
+) -> Result<Vec<Block>, DocumentError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.trim_text(true);
+    let mut stack: Vec<Vec<u8>> = Vec::new();
+    let mut titles = Vec::new();
+    let mut series = Vec::new();
+    let mut current_series: Option<ChartSeries> = None;
+    let mut nodes = 0usize;
+
+    loop {
+        nodes += 1;
+        enforce_node_limit(nodes, part, options)?;
+        match reader.read_event() {
+            Ok(Event::Start(event)) => {
+                enforce_depth_limit(stack.len() + 1, part, options)?;
+                let name = event.local_name().as_ref().to_vec();
+                if name == b"ser" {
+                    current_series = Some(ChartSeries::default());
+                }
+                stack.push(name);
+            }
+            Ok(Event::Text(text)) => {
+                let value = text
+                    .unescape()
+                    .map_err(|error| malformed_part(part, error))?
+                    .trim()
+                    .to_owned();
+                if value.is_empty() {
+                    continue;
+                }
+                match stack.last().map(Vec::as_slice) {
+                    Some(b"t") if current_series.is_none() => titles.push(value),
+                    Some(b"v") => {
+                        if let Some(series) = current_series.as_mut() {
+                            if stack.iter().any(|name| name.as_slice() == b"tx") {
+                                series.name = value;
+                            } else if stack.iter().any(|name| name.as_slice() == b"cat") {
+                                series.categories.push(value);
+                            } else if stack.iter().any(|name| name.as_slice() == b"val") {
+                                series.values.push(value);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(event)) => {
+                if event.local_name().as_ref() == b"ser"
+                    && let Some(value) = current_series.take()
+                {
+                    series.push(value);
+                }
+                stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(malformed_part(part, error)),
+            _ => {}
+        }
+    }
+
+    let mut blocks = Vec::new();
+    if let Some(title) = titles.first().filter(|value| !value.is_empty()) {
+        blocks.push(Block::Paragraph {
+            content: vec![Inline::Text {
+                text: title.clone(),
+                style: Style {
+                    bold: true,
+                    ..Style::default()
+                },
+            }],
+        });
+    }
+    if !series.is_empty() {
+        let row_count = series
+            .iter()
+            .map(|series| series.categories.len().max(series.values.len()))
+            .max()
+            .unwrap_or(0);
+        let column_count = series.len() + 1;
+        let mut grid = Vec::with_capacity(row_count + 1);
+        let category_title = titles.get(1).map(String::as_str).unwrap_or("Category");
+        let mut header = vec![CellSlot::Origin(Cell::text(
+            category_title,
+            CellValueKind::Text,
+        ))];
+        header.extend(series.iter().enumerate().map(|(index, series)| {
+            CellSlot::Origin(Cell::text(
+                if series.name.is_empty() {
+                    format!("Series {}", index + 1)
+                } else {
+                    series.name.clone()
+                },
+                CellValueKind::Text,
+            ))
+        }));
+        grid.push(header);
+        for row in 0..row_count {
+            let category = series
+                .iter()
+                .find_map(|series| series.categories.get(row))
+                .cloned()
+                .unwrap_or_else(|| (row + 1).to_string());
+            let mut cells = vec![CellSlot::Origin(Cell::text(category, CellValueKind::Text))];
+            for series in &series {
+                let value = series.values.get(row).cloned().unwrap_or_default();
+                let kind = if value.parse::<f64>().is_ok() {
+                    CellValueKind::Number
+                } else if value.is_empty() {
+                    CellValueKind::Empty
+                } else {
+                    CellValueKind::Text
+                };
+                cells.push(CellSlot::Origin(Cell::text(value, kind)));
+            }
+            grid.push(cells);
+        }
+        blocks.push(Block::Table {
+            table: Table {
+                kind: TableKind::Data,
+                rows: row_count + 1,
+                columns: column_count,
+                header_rows: 1,
+                grid,
+                caption: None,
+            },
+        });
+    }
+    Ok(blocks)
+}
+
+fn parse_diagram_xml(
+    xml: &[u8],
+    part: &str,
+    options: &ParseOptions,
+) -> Result<Vec<Block>, DocumentError> {
+    let mut reader = Reader::from_reader(xml);
+    reader.trim_text(true);
+    let mut in_text = false;
+    let mut values = Vec::new();
+    let mut nodes = 0usize;
+    let mut depth = 0usize;
+    loop {
+        nodes += 1;
+        enforce_node_limit(nodes, part, options)?;
+        match reader.read_event() {
+            Ok(Event::Start(event)) => {
+                depth += 1;
+                enforce_depth_limit(depth, part, options)?;
+                in_text = event.local_name().as_ref() == b"t";
+            }
+            Ok(Event::Text(text)) if in_text => {
+                let value = text
+                    .unescape()
+                    .map_err(|error| malformed_part(part, error))?
+                    .trim()
+                    .to_owned();
+                if !value.is_empty() {
+                    values.push(value);
+                }
+            }
+            Ok(Event::End(event)) => {
+                if event.local_name().as_ref() == b"t" {
+                    in_text = false;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(malformed_part(part, error)),
+            _ => {}
+        }
+    }
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![Block::List {
+        list: List {
+            marker: ListMarker::Bullet,
+            start: None,
+            items: values
+                .into_iter()
+                .map(|value| ListItem {
+                    blocks: vec![Block::paragraph(value)],
+                })
+                .collect(),
+        },
+    }])
 }
 
 #[derive(Debug, Clone, Default)]
@@ -308,6 +570,8 @@ fn parse_document_xml(
     let mut in_text = false;
     let mut hyperlink: Option<HyperlinkBuilder> = None;
     let mut table: Option<TableBuilder> = None;
+    let mut pending_alt: Option<String> = None;
+    let mut pending_related_blocks = Vec::new();
     let mut nodes = 0usize;
     let mut depth = 0usize;
     let mut counters = ListCounters::default();
@@ -319,7 +583,11 @@ fn parse_document_xml(
                 depth += 1;
                 enforce_depth_limit(depth, part, options)?;
                 match event.local_name().as_ref() {
-                    b"p" => paragraph = Some(Paragraph::default()),
+                    b"p" => {
+                        paragraph = Some(Paragraph::default());
+                        pending_alt = None;
+                        pending_related_blocks.clear();
+                    }
                     // A run starts from its paragraph style's run properties;
                     // `<w:rStyle>` and direct properties then layer on top.
                     b"r" => {
@@ -380,6 +648,11 @@ fn parse_document_xml(
                     b"gridSpan" => set_grid_span(&event, &mut table),
                     b"vMerge" => set_vertical_merge(&event, &mut table),
                     b"tblHeader" => set_header(&mut table),
+                    b"docPr" => set_drawing_alt(&event, &mut pending_alt),
+                    b"chart" | b"relIds" => {
+                        append_related_object(&event, context, &mut pending_related_blocks)
+                    }
+                    b"OLEObject" => append_ole_object(&event, &mut paragraph, &mut hyperlink),
                     _ => update_run_style(&event, &mut run_style),
                 }
             }
@@ -405,13 +678,25 @@ fn parse_document_xml(
                 b"gridSpan" => set_grid_span(&event, &mut table),
                 b"vMerge" => set_vertical_merge(&event, &mut table),
                 b"tblHeader" => set_header(&mut table),
+                b"docPr" => set_drawing_alt(&event, &mut pending_alt),
+                b"chart" | b"relIds" => {
+                    append_related_object(&event, context, &mut pending_related_blocks)
+                }
+                b"OLEObject" => append_ole_object(&event, &mut paragraph, &mut hyperlink),
                 b"footnoteReference" => {
                     append_note_reference(&event, "footnote", &mut paragraph, &mut hyperlink)
                 }
                 b"endnoteReference" => {
                     append_note_reference(&event, "endnote", &mut paragraph, &mut hyperlink)
                 }
-                b"blip" => append_image(&event, context, warnings, &mut paragraph, &mut hyperlink),
+                b"blip" => append_image(
+                    &event,
+                    pending_alt.take(),
+                    context,
+                    warnings,
+                    &mut paragraph,
+                    &mut hyperlink,
+                ),
                 _ => update_run_style(&event, &mut run_style),
             },
             Ok(Event::Text(text)) if in_text => {
@@ -434,17 +719,18 @@ fn parse_document_xml(
                     b"t" | b"instrText" => in_text = false,
                     b"hyperlink" => finish_hyperlink(&mut paragraph, &mut hyperlink),
                     b"p" => {
+                        let container = match table.as_mut().and_then(|table| table.cell.as_mut()) {
+                            Some(cell) => &mut cell.blocks,
+                            None => &mut *output,
+                        };
                         if let Some(paragraph) = paragraph.take()
                             && let Some(produced) =
                                 paragraph_block(paragraph, context, &mut counters)
                         {
-                            let container =
-                                match table.as_mut().and_then(|table| table.cell.as_mut()) {
-                                    Some(cell) => &mut cell.blocks,
-                                    None => &mut *output,
-                                };
                             place_paragraph_output(produced, container);
                         }
+                        container.append(&mut pending_related_blocks);
+                        pending_alt = None;
                     }
                     b"tc" => {
                         if table.as_ref().is_some_and(|table| table.depth == 1)
@@ -488,6 +774,7 @@ fn parse_document_xml(
                 {
                     place_paragraph_output(produced, output);
                 }
+                output.append(&mut pending_related_blocks);
                 if let Some(pending) = table.take() {
                     output.push(build_table(pending, warnings));
                 }
@@ -566,6 +853,7 @@ fn hyperlink_target(
 
 fn append_image(
     event: &BytesStart<'_>,
+    alt: Option<String>,
     context: &DocxContext<'_>,
     warnings: &mut Vec<ParseWarning>,
     paragraph: &mut Option<Paragraph>,
@@ -580,7 +868,7 @@ fn append_image(
             hyperlink,
             Inline::Image {
                 source: ImageSource::Asset(asset_id.clone()),
-                alt: None,
+                alt,
             },
         );
     } else {
@@ -590,6 +878,44 @@ fn append_image(
             message: format!("embedded image relationship {id} is unavailable"),
         });
     }
+}
+
+fn set_drawing_alt(event: &BytesStart<'_>, alt: &mut Option<String>) {
+    *alt = attribute(event, b"descr")
+        .or_else(|| attribute(event, b"title"))
+        .filter(|value| !value.trim().is_empty());
+}
+
+fn append_related_object(
+    event: &BytesStart<'_>,
+    context: &DocxContext<'_>,
+    pending: &mut Vec<Block>,
+) {
+    let id = relationship_id(event).filter(|id| context.related_blocks.contains_key(id));
+    let id = id.or_else(|| {
+        event.attributes().flatten().find_map(|attribute| {
+            let value = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
+            context.related_blocks.contains_key(&value).then_some(value)
+        })
+    });
+    if let Some(blocks) = id.and_then(|id| context.related_blocks.get(&id)) {
+        pending.extend(blocks.iter().cloned());
+    }
+}
+
+fn append_ole_object(
+    event: &BytesStart<'_>,
+    paragraph: &mut Option<Paragraph>,
+    hyperlink: &mut Option<HyperlinkBuilder>,
+) {
+    let Some(program) = attribute(event, b"ProgID").filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    append_inline(
+        paragraph,
+        hyperlink,
+        Inline::text(format!("Embedded object: {program}")),
+    );
 }
 
 fn append_note_reference(
@@ -1273,5 +1599,215 @@ fn malformed_part(part: &str, error: impl std::fmt::Display) -> DocumentError {
     DocumentError::Malformed {
         part: Some(part.to_owned()),
         detail: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod rich_object_tests {
+    use super::*;
+
+    const CHART: &[u8] = br#"
+        <c:chartSpace xmlns:c="c" xmlns:a="a">
+          <c:chart>
+            <c:title><c:tx><c:rich><a:p><a:r><a:t>Quarterly Widgets</a:t></a:r></a:p></c:rich></c:tx></c:title>
+            <c:plotArea>
+              <c:barChart><c:ser>
+                <c:tx><c:strRef><c:strCache><c:pt><c:v>Widgets</c:v></c:pt></c:strCache></c:strRef></c:tx>
+                <c:cat><c:strRef><c:strCache>
+                  <c:pt><c:v>Q1</c:v></c:pt><c:pt><c:v>Q2</c:v></c:pt>
+                </c:strCache></c:strRef></c:cat>
+                <c:val><c:numRef><c:numCache>
+                  <c:pt><c:v>10</c:v></c:pt><c:pt><c:v>14</c:v></c:pt>
+                </c:numCache></c:numRef></c:val>
+              </c:ser></c:barChart>
+              <c:catAx><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
+              <c:valAx><c:title><c:tx><c:rich><a:p><a:r><a:t>Units</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
+            </c:plotArea>
+          </c:chart>
+        </c:chartSpace>"#;
+
+    #[test]
+    fn chart_becomes_a_titled_data_table() {
+        let blocks =
+            parse_chart_xml(CHART, "word/charts/chart1.xml", &ParseOptions::default()).unwrap();
+        assert!(matches!(
+            &blocks[0],
+            Block::Paragraph { content }
+                if matches!(&content[0], Inline::Text { text, style }
+                    if text == "Quarterly Widgets" && style.bold)
+        ));
+        let Block::Table { table } = &blocks[1] else {
+            panic!("chart data was not represented as a table");
+        };
+        assert_eq!((table.rows, table.columns, table.header_rows), (3, 2, 1));
+        assert!(matches!(
+            &table.grid[0][0],
+            CellSlot::Origin(Cell { blocks, .. }) if blocks == &vec![Block::paragraph("Quarter")]
+        ));
+        assert!(matches!(
+            &table.grid[2][1],
+            CellSlot::Origin(Cell { value_kind: CellValueKind::Number, blocks, .. })
+                if blocks == &vec![Block::paragraph("14")]
+        ));
+    }
+
+    #[test]
+    fn chart_without_titles_or_aligned_categories_still_keeps_series_data() {
+        let xml = br#"<c:chartSpace xmlns:c="c"><c:chart><c:plotArea><c:barChart>
+          <c:ser><c:val><c:numRef><c:numCache><c:pt><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
+          <c:ser>
+            <c:tx><c:strRef><c:strCache><c:pt><c:v>Named</c:v></c:pt></c:strCache></c:strRef></c:tx>
+            <c:cat><c:strRef><c:strCache><c:pt><c:v>Only category</c:v></c:pt></c:strCache></c:strRef></c:cat>
+            <c:val><c:strRef><c:strCache><c:pt><c:v>N/A</c:v></c:pt></c:strCache></c:strRef></c:val>
+          </c:ser>
+        </c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+        let blocks =
+            parse_chart_xml(xml, "word/charts/chart2.xml", &ParseOptions::default()).unwrap();
+        let [Block::Table { table }] = blocks.as_slice() else {
+            panic!("untitled chart should still produce its data table");
+        };
+        assert_eq!((table.rows, table.columns), (2, 3));
+        assert_eq!(
+            table.grid[0],
+            vec![
+                CellSlot::Origin(Cell::text("Category", CellValueKind::Text)),
+                CellSlot::Origin(Cell::text("Series 1", CellValueKind::Text)),
+                CellSlot::Origin(Cell::text("Named", CellValueKind::Text)),
+            ]
+        );
+        assert!(matches!(
+            &table.grid[1][0],
+            CellSlot::Origin(Cell { blocks, .. })
+                if blocks == &vec![Block::paragraph("Only category")]
+        ));
+        assert!(matches!(
+            &table.grid[1][1],
+            CellSlot::Origin(Cell {
+                value_kind: CellValueKind::Number,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &table.grid[1][2],
+            CellSlot::Origin(Cell {
+                value_kind: CellValueKind::Text,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn diagram_text_becomes_a_bullet_list() {
+        let xml = br#"<dgm:dataModel xmlns:dgm="dgm" xmlns:a="a"><dgm:ptLst>
+          <dgm:pt><dgm:t><a:p><a:r><a:t>Plan</a:t></a:r></a:p></dgm:t></dgm:pt>
+          <dgm:pt><dgm:t><a:p><a:r><a:t>Build</a:t></a:r></a:p></dgm:t></dgm:pt>
+          <dgm:pt><dgm:t><a:p><a:r><a:t>Ship</a:t></a:r></a:p></dgm:t></dgm:pt>
+        </dgm:ptLst></dgm:dataModel>"#;
+        let blocks =
+            parse_diagram_xml(xml, "word/diagrams/data1.xml", &ParseOptions::default()).unwrap();
+        let Block::List { list } = &blocks[0] else {
+            panic!("diagram text was not represented as a list");
+        };
+        assert_eq!(list.marker, ListMarker::Bullet);
+        assert_eq!(list.items.len(), 3);
+        assert_eq!(list.items[2].blocks, vec![Block::paragraph("Ship")]);
+    }
+
+    #[test]
+    fn empty_diagram_produces_no_placeholder_block() {
+        let blocks = parse_diagram_xml(
+            br#"<dgm:dataModel xmlns:dgm="dgm"/>"#,
+            "word/diagrams/empty.xml",
+            &ParseOptions::default(),
+        )
+        .unwrap();
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn rich_object_parts_reject_malformed_xml_and_enforce_event_budgets() {
+        let options = ParseOptions::default();
+        assert!(matches!(
+            parse_chart_xml(
+                b"<c:ser><c:val><c:v>&bogus;</c:v></c:val></c:ser>",
+                "chart.xml",
+                &options,
+            ),
+            Err(DocumentError::Malformed { .. })
+        ));
+        assert!(matches!(
+            parse_diagram_xml(b"<a:t>&bogus;</a:t>", "diagram.xml", &options),
+            Err(DocumentError::Malformed { .. })
+        ));
+
+        let mut limited = ParseOptions::default();
+        limited.limits.max_xml_nodes = 1;
+        assert!(matches!(
+            parse_chart_xml(b"<root/>", "chart.xml", &limited),
+            Err(DocumentError::ResourceLimit {
+                limit: "max_xml_nodes",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_diagram_xml(b"<root/>", "diagram.xml", &limited),
+            Err(DocumentError::ResourceLimit {
+                limit: "max_xml_nodes",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn document_binds_rich_objects_alt_text_and_ole_description() {
+        let xml = br#"<w:document xmlns:w="w" xmlns:r="r" xmlns:a="a" xmlns:c="c" xmlns:dgm="dgm" xmlns:wp="wp" xmlns:o="o">
+          <w:body>
+            <w:p><w:r><w:drawing><wp:docPr descr="tiny dot image"/><a:blip r:embed="rId30"/></w:drawing></w:r></w:p>
+            <w:p><w:r><w:drawing><c:chart r:id="rId10"/></w:drawing></w:r></w:p>
+            <w:p><w:r><w:drawing><dgm:relIds r:dm="rId20"/></w:drawing></w:r></w:p>
+            <w:p><w:r><w:object><o:OLEObject ProgID="Excel.Sheet.12"/></w:object></w:r></w:p>
+          </w:body>
+        </w:document>"#;
+        let styles = HashMap::new();
+        let numbering = HashMap::new();
+        let relationships = HashMap::new();
+        let image_ids = HashMap::from([("rId30".to_owned(), "asset-1".to_owned())]);
+        let related_blocks = HashMap::from([
+            ("rId10".to_owned(), vec![Block::paragraph("chart content")]),
+            (
+                "rId20".to_owned(),
+                vec![Block::paragraph("diagram content")],
+            ),
+        ]);
+        let context = DocxContext {
+            styles: &styles,
+            numbering: &numbering,
+            relationships: &relationships,
+            image_ids: &image_ids,
+            related_blocks: &related_blocks,
+        };
+        let mut output = Vec::new();
+        parse_document_xml(
+            xml,
+            DOCUMENT_PART,
+            &mut output,
+            &mut Vec::new(),
+            &ParseOptions::default(),
+            &context,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &output[0],
+            Block::Paragraph { content }
+                if matches!(&content[0], Inline::Image { alt: Some(alt), .. }
+                    if alt == "tiny dot image")
+        ));
+        assert_eq!(output[1], Block::paragraph("chart content"));
+        assert_eq!(output[2], Block::paragraph("diagram content"));
+        assert_eq!(
+            output[3],
+            Block::paragraph("Embedded object: Excel.Sheet.12")
+        );
     }
 }

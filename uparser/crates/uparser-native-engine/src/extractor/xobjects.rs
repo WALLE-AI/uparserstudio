@@ -679,3 +679,254 @@ pub(crate) fn get_form_fonts<'a>(
 
     fonts
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::{dictionary, Dictionary, Object, Stream};
+
+    fn add_font(doc: &mut Document, base_font: &str) -> ObjectId {
+        let widths: Vec<Object> = (0..=255).map(|_| 600.into()).collect();
+        doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => Object::Name(base_font.as_bytes().to_vec()),
+            "FirstChar" => 0,
+            "LastChar" => 255,
+            "Widths" => Object::Array(widths),
+        })
+    }
+
+    fn form_resources(font_id: ObjectId) -> Dictionary {
+        dictionary! {
+            "Font" => dictionary! {
+                "F1" => Object::Reference(font_id),
+            },
+        }
+    }
+
+    fn extract(doc: &Document, form_id: ObjectId) -> Vec<TextItem> {
+        extract_form_xobject_text(
+            doc,
+            form_id,
+            3,
+            &FontCMaps::default(),
+            &[1.0, 0.0, 0.0, 1.0, 100.0, 200.0],
+            &mut CMapDecisionCache::new(),
+            &mut FontStyleCache::new(),
+        )
+    }
+
+    #[test]
+    fn page_xobjects_support_indirect_resource_dictionaries() {
+        let mut doc = Document::with_version("1.7");
+        let image_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Image".to_vec()),
+            },
+            vec![0],
+        )));
+        let form_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Form".to_vec()),
+            },
+            Vec::new(),
+        )));
+        let ignored_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! { "Subtype" => Object::Name(b"PS".to_vec()) },
+            Vec::new(),
+        )));
+        let xobjects_id = doc.add_object(dictionary! {
+            "Im1" => Object::Reference(image_id),
+            "Fm1" => Object::Reference(form_id),
+            "Ignored" => Object::Reference(ignored_id),
+            "Broken" => Object::Reference((999, 0)),
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "XObject" => Object::Reference(xobjects_id),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Resources" => Object::Reference(resources_id),
+        });
+
+        let objects = get_page_xobjects(&doc, page_id);
+
+        assert!(matches!(objects.get("Im1"), Some(XObjectType::Image)));
+        assert!(matches!(objects.get("Fm1"), Some(XObjectType::Form(id)) if *id == form_id));
+        assert!(!objects.contains_key("Ignored"));
+        assert!(!objects.contains_key("Broken"));
+        assert!(get_page_xobjects(&doc, (998, 0)).is_empty());
+    }
+
+    #[test]
+    fn form_fonts_support_direct_and_indirect_resource_dictionaries() {
+        let mut doc = Document::new();
+        let font_id = add_font(&mut doc, "Helvetica");
+        let font_map_id = doc.add_object(dictionary! {
+            "F1" => Object::Reference(font_id),
+            "Missing" => Object::Reference((999, 0)),
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => Object::Reference(font_map_id),
+        });
+        let indirect = dictionary! { "Resources" => Object::Reference(resources_id) };
+        let direct = dictionary! { "Resources" => form_resources(font_id) };
+
+        assert_eq!(get_form_fonts(&doc, &indirect).len(), 1);
+        assert_eq!(get_form_fonts(&doc, &direct).len(), 1);
+        assert!(get_form_fonts(&doc, &Dictionary::new()).is_empty());
+    }
+
+    #[test]
+    fn form_text_applies_matrix_and_font_style() {
+        let mut doc = Document::new();
+        let font_id = add_font(&mut doc, "Helvetica-BoldOblique");
+        let form_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Form".to_vec()),
+                "Resources" => form_resources(font_id),
+                "Matrix" => vec![2.into(), 0.into(), 0.into(), 2.into(), 10.into(), 20.into()],
+            },
+            b"BT /F1 10 Tf 1 0 0 1 5 7 Tm (office) Tj ET".to_vec(),
+        )));
+
+        let items = extract(&doc, form_id);
+
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.text, "office");
+        assert_eq!(item.page, 3);
+        assert!(item.is_bold && item.is_italic);
+        assert!((item.font_size - 20.0).abs() < 0.01);
+        assert!(item.x > 100.0 && item.y > 200.0);
+        assert!(item.width > 0.0);
+    }
+
+    #[test]
+    fn nested_form_emits_text_and_image_with_local_ctm() {
+        let mut doc = Document::new();
+        let font_id = add_font(&mut doc, "Helvetica");
+        let inner_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Form".to_vec()),
+                "Resources" => form_resources(font_id),
+            },
+            b"BT /F1 8 Tf 1 0 0 1 2 3 Tm (nested) Tj ET".to_vec(),
+        )));
+        let image_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Image".to_vec()),
+            },
+            vec![0],
+        )));
+        let outer_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => Object::Name(b"Form".to_vec()),
+                "Resources" => dictionary! {
+                    "XObject" => dictionary! {
+                        "Inner" => Object::Reference(inner_id),
+                        "Photo" => Object::Reference(image_id),
+                    },
+                },
+            },
+            b"q 20 0 0 10 4 6 cm /Photo Do Q 1 0 0 1 30 40 cm /Inner Do".to_vec(),
+        )));
+
+        let items = extract(&doc, outer_id);
+
+        let image = items
+            .iter()
+            .find(|item| matches!(&item.item_type, ItemType::Image))
+            .unwrap();
+        assert_eq!(image.text, "[Image: Photo]");
+        assert!((image.width - 20.0).abs() < 0.01);
+        assert!((image.height - 10.0).abs() < 0.01);
+        assert!(items.iter().any(|item| item.text == "nested"));
+    }
+
+    #[test]
+    fn recursive_form_reference_stops_at_depth_limit() {
+        let mut doc = Document::new();
+        let form_id = doc.new_object_id();
+        doc.objects.insert(
+            form_id,
+            Object::Stream(Stream::new(
+                dictionary! {
+                    "Type" => "XObject",
+                    "Subtype" => Object::Name(b"Form".to_vec()),
+                    "Resources" => dictionary! {
+                        "XObject" => dictionary! {
+                            "Loop" => Object::Reference(form_id),
+                        },
+                    },
+                },
+                b"/Loop Do".to_vec(),
+            )),
+        );
+
+        assert!(extract(&doc, form_id).is_empty());
+        assert!(extract(&doc, (999, 0)).is_empty());
+    }
+
+    #[test]
+    fn white_text_is_suppressed_for_supported_color_operators() {
+        let mut doc = Document::new();
+        let font_id = add_font(&mut doc, "Helvetica");
+        let content = b"BT /F1 10 Tf
+1 g (gray-hidden) Tj 0 g (gray-shown) Tj
+1 1 1 rg (rgb-hidden) Tj 0 0 0 rg (rgb-shown) Tj
+0 0 0 0 k (cmyk-hidden) Tj 0 0 0 1 k (cmyk-shown) Tj
+1 1 1 scn (sc-hidden) Tj 0 0 0 sc (sc-shown) Tj
+0.5 sc (other-shown) Tj ET";
+        let form_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! {
+                "Resources" => form_resources(font_id),
+            },
+            content.to_vec(),
+        )));
+
+        let text: Vec<_> = extract(&doc, form_id)
+            .into_iter()
+            .map(|item| item.text)
+            .collect();
+
+        assert_eq!(
+            text,
+            [
+                "gray-shown",
+                "rgb-shown",
+                "cmyk-shown",
+                "sc-shown",
+                "other-shown",
+            ]
+        );
+    }
+
+    #[test]
+    fn tj_array_splits_column_sized_integer_and_real_gaps() {
+        let mut doc = Document::new();
+        let font_id = add_font(&mut doc, "Helvetica");
+        let form_id = doc.add_object(Object::Stream(Stream::new(
+            dictionary! { "Resources" => form_resources(font_id) },
+            b"BT /F1 10 Tf 1 0 0 1 10 20 Tm [(Left) -1200 (Middle) -1200.5 (Right)] TJ ET".to_vec(),
+        )));
+
+        let items = extract(&doc, form_id);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Left", "Middle", "Right"]
+        );
+        assert!(items.windows(2).all(|pair| pair[0].x < pair[1].x));
+    }
+}

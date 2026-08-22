@@ -481,6 +481,32 @@ mod tests {
         bytes
     }
 
+    fn text_item(
+        text: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        page: u32,
+        item_type: ItemType,
+    ) -> TextItem {
+        TextItem {
+            text: text.to_owned(),
+            x,
+            y,
+            width,
+            height: 10.0,
+            font: "TestFont".to_owned(),
+            font_size: 10.0,
+            page,
+            is_bold: false,
+            is_italic: false,
+            is_underline: false,
+            is_strikeout: false,
+            item_type,
+            mcid: None,
+        }
+    }
+
     /// A real digitally-native PDF (MinerU's demo1) — replaces the old
     /// liteparse fixture now that native no longer depends on liteparse.
     fn fixture_pdf_path() -> String {
@@ -521,6 +547,128 @@ mod tests {
         );
         let result = adapter.parse_page(&page, &ctx).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn document_errors_have_stable_machine_readable_stages() {
+        use uparser_document_engine::{DocumentError, DocumentFormat};
+
+        let cases = [
+            (
+                DocumentError::UnsupportedFormat(DocumentFormat::Unknown),
+                "native_document.unsupported_format",
+            ),
+            (DocumentError::Encrypted, "native_document.encrypted"),
+            (
+                DocumentError::ResourceLimit {
+                    limit: "bytes",
+                    detail: "too large".to_owned(),
+                },
+                "native_document.resource_limit",
+            ),
+            (
+                DocumentError::MissingPart {
+                    part: "document.xml".to_owned(),
+                },
+                "native_document.missing_part",
+            ),
+            (
+                DocumentError::Malformed {
+                    part: Some("document.xml".to_owned()),
+                    detail: "bad XML".to_owned(),
+                },
+                "native_document.malformed",
+            ),
+            (
+                DocumentError::Io(std::io::Error::other("read failed")),
+                "native_document.io",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(document_error_stage(&error), expected);
+        }
+    }
+
+    #[test]
+    fn positioned_items_are_filtered_grouped_and_mapped_to_page_geometry() {
+        let pages = build_pages(vec![
+            text_item("ignored", 0.0, 0.0, 1.0, 1, ItemType::Image),
+            text_item("   ", 0.0, 0.0, 1.0, 1, ItemType::Text),
+            text_item("World", 35.0, 90.0, 25.0, 1, ItemType::Text),
+            text_item("Hello", 10.0, 90.0, 20.0, 1, ItemType::Text),
+            text_item("Lower", 5.0, 60.0, 30.0, 1, ItemType::FormField),
+            text_item(
+                "Second page",
+                4.0,
+                20.0,
+                50.0,
+                2,
+                ItemType::Link("https://example.com".to_owned()),
+            ),
+        ]);
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!((pages[0].width_px, pages[0].height_px), (60, 100));
+        assert_eq!(pages[0].blocks.len(), 2);
+        assert_eq!(pages[0].blocks[0].text.as_deref(), Some("Hello World"));
+        assert_eq!(pages[0].blocks[0].bbox_px, Some([10, 0, 60, 10]));
+        assert_eq!(pages[0].blocks[0].spans.len(), 2);
+        assert_eq!(pages[0].blocks[1].text.as_deref(), Some("Lower"));
+        assert_eq!(pages[1].page_num, 2);
+        assert_eq!(pages[1].blocks[0].text.as_deref(), Some("Second page"));
+    }
+
+    #[tokio::test]
+    async fn malformed_native_inputs_return_typed_errors() {
+        let adapter = NativeAdapter;
+        let pdf = b"%PDF-1.7\nnot a valid PDF";
+
+        let parse_error = adapter
+            .parse_document("broken.pdf", pdf)
+            .await
+            .expect_err("broken PDF must fail");
+        assert_eq!(parse_error.stage.as_deref(), Some("native"));
+
+        let markdown_error = adapter
+            .native_markdown("broken.pdf", pdf)
+            .await
+            .expect_err("broken PDF markdown must fail");
+        assert_eq!(markdown_error.stage.as_deref(), Some("native"));
+
+        let json_error = adapter
+            .native_document_json("broken.pdf", pdf)
+            .await
+            .expect_err("PDF document-json must be rejected");
+        assert_eq!(json_error.stage.as_deref(), Some("native_document"));
+
+        let structured_error = adapter
+            .parse_document("broken.docx", b"not a zip package")
+            .await
+            .expect_err("broken DOCX must fail");
+        assert!(
+            structured_error
+                .stage
+                .as_deref()
+                .is_some_and(|stage| stage.starts_with("native_document"))
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_parse_enforces_caller_resource_limits() {
+        let mut options = uparser_document_engine::ParseOptions::default();
+        options.limits.max_input_bytes = 4;
+        let error = match NativeAdapter
+            .parse_native("large.csv", b"name,value\nalpha,42\n", &options)
+            .await
+        {
+            Ok(_) => panic!("input over the configured limit must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.stage.as_deref(),
+            Some("native_document.resource_limit")
+        );
     }
 
     #[tokio::test]

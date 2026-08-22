@@ -2,6 +2,7 @@
 
 pub mod dots_ocr;
 pub mod generic_vlm;
+pub mod local_tesseract;
 pub mod mineru_vlm;
 pub mod mock;
 pub mod monkeyocr_v2;
@@ -360,6 +361,10 @@ impl Registry {
         let mut registry = Self::new();
 
         registry.register("mock", |_overrides| Arc::new(mock::MockAdapter::default()));
+
+        registry.register("tesseract", |_overrides| {
+            Arc::new(local_tesseract::TesseractAdapter::default())
+        });
 
         registry.register("mineru-vlm", |overrides| {
             let mut adapter = mineru_vlm::MineruVlmAdapter::default();

@@ -172,11 +172,39 @@ pub(crate) fn merge_drop_caps(lines: Vec<TextLine>, base_size: f32) -> Vec<TextL
         if is_drop_cap {
             let drop_char = trimmed.chars().next().unwrap();
 
-            // Find the first line that starts with lowercase and is at the START of a paragraph
-            // (i.e., preceded by a header or non-lowercase-starting line)
-            let mut target_idx: Option<usize> = None;
+            // Prefer a lowercase line immediately above and to the right of
+            // the initial. This survives column reordering and avoids attaching
+            // the drop cap to lowercase fragments in a neighboring title rail.
+            let drop_item = line.items.first().unwrap();
+            let drop_top = drop_item.y + drop_item.height.max(drop_item.font_size);
+            let mut geometric_targets: Vec<(usize, f32)> = result
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, prev_line)| {
+                    let first = prev_line.items.first()?;
+                    let starts_lower = prev_line
+                        .text()
+                        .trim()
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_lowercase());
+                    (prev_line.page == line.page
+                        && starts_lower
+                        && first.x > drop_item.x + drop_item.width * 0.35
+                        && prev_line.y >= drop_item.y - 1.0
+                        && prev_line.y <= drop_top + 1.0)
+                        .then_some((idx, prev_line.y))
+                })
+                .collect();
+            geometric_targets.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let mut target_idx = geometric_targets.first().map(|(idx, _)| *idx);
 
+            // Some synthetic or malformed PDFs do not expose usable geometry;
+            // retain the structural paragraph-start fallback for those cases.
             for (idx, prev_line) in result.iter().enumerate() {
+                if target_idx.is_some() {
+                    break;
+                }
                 if prev_line.page != line.page {
                     continue;
                 }
@@ -726,6 +754,34 @@ mod tests {
         assert_eq!(first_header.page, 1, "first occurrence should be on page 1");
     }
 
+    #[test]
+    fn strip_repeated_coalesces_split_header_bands_and_keeps_first_page() {
+        let mut lines = Vec::new();
+        for page in 1..=4u32 {
+            lines.push(make_line("Annual", 10.0, page, 750.0, None));
+            lines.push(make_line("Report", 10.0, page, 750.0, None));
+            for row in 0..6u32 {
+                lines.push(make_line(
+                    &format!("unique body content page {page} row {row}"),
+                    10.0,
+                    page,
+                    700.0 - row as f32 * 20.0,
+                    None,
+                ));
+            }
+        }
+
+        let result = strip_repeated_lines(lines, 4);
+        let header_parts: Vec<_> = result
+            .iter()
+            .filter(|line| matches!(line.text().as_str(), "Annual" | "Report"))
+            .collect();
+
+        assert_eq!(header_parts.len(), 2);
+        assert!(header_parts.iter().all(|line| line.page == 1));
+        assert_eq!(result.len(), 26);
+    }
+
     fn make_bold_line(text: &str, page: u32, y: f32) -> TextLine {
         let mut item = make_item(text, 12.0, None);
         item.is_bold = true;
@@ -788,5 +844,41 @@ mod tests {
         ];
         let result = merge_heading_lines(lines, 12.0, &[16.0], None);
         assert_eq!(result.len(), 2, "tiered heading must not absorb bold body");
+    }
+
+    #[test]
+    fn drop_cap_after_wrapped_lines_attaches_to_paragraph_start() {
+        let lines = vec![
+            make_line("Section title", 24.0, 1, 480.0, None),
+            make_line("his collection of stories", 10.5, 1, 450.9, None),
+            make_line("broad variety of sources", 10.5, 1, 437.4, None),
+            make_line("T", 53.0, 1, 423.9, None),
+            make_line("of those stories", 10.5, 1, 423.9, None),
+        ];
+
+        let result = merge_drop_caps(lines, 10.5);
+
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[1].text(), "This collection of stories");
+        assert_eq!(result[3].text(), "of those stories");
+    }
+
+    #[test]
+    fn drop_cap_ignores_lowercase_fragment_in_left_title_rail() {
+        let mut title = make_line("cholesterol", 33.0, 1, 631.6, None);
+        title.items[0].x = 99.0;
+        title.items[0].y = 631.6;
+        let mut body = make_line("his report defines", 10.5, 1, 718.6, None);
+        body.items[0].x = 359.6;
+        body.items[0].y = 718.6;
+        let mut drop_cap = make_line("T", 77.0, 1, 686.6, None);
+        drop_cap.items[0].x = 304.5;
+        drop_cap.items[0].y = 686.6;
+        drop_cap.items[0].width = 45.0;
+
+        let result = merge_drop_caps(vec![title, body, drop_cap], 10.5);
+
+        assert_eq!(result[0].text(), "cholesterol");
+        assert_eq!(result[1].text(), "This report defines");
     }
 }

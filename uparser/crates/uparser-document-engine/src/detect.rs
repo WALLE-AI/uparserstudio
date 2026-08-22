@@ -1,6 +1,7 @@
 use crate::ParseOptions;
 use crate::ooxml::{ContentTypes, load_root_relationships, main_part};
 use crate::package::Package;
+use encoding_rs::{UTF_8, UTF_16BE, UTF_16LE};
 use file_format::FileFormat;
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -138,20 +139,18 @@ fn detect_delimited_text(bytes: &[u8], filename_hint: Option<&str>) -> Option<Do
         DocumentFormat::Tsv => DocumentFormat::Tsv,
         _ => return None,
     };
-    let delimiter = if format == DocumentFormat::Csv {
-        b','
-    } else {
-        b'\t'
+    let text = decode_delimited_text(bytes)?;
+    let delimiter = match format {
+        DocumentFormat::Csv => sniff_csv_delimiter(text.as_bytes())?,
+        DocumentFormat::Tsv => text.as_bytes().contains(&b'\t').then_some(b'\t')?,
+        _ => return None,
     };
-    if !bytes.contains(&delimiter) || std::str::from_utf8(bytes).is_err() {
-        return None;
-    }
 
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .has_headers(false)
         .flexible(false)
-        .from_reader(bytes);
+        .from_reader(text.as_bytes());
     let mut width = None;
     let mut records = 0usize;
     for record in reader.records().take(64) {
@@ -169,6 +168,44 @@ fn detect_delimited_text(bytes: &[u8], filename_hint: Option<&str>) -> Option<Do
         records += 1;
     }
     (records > 0).then_some(format)
+}
+
+fn decode_delimited_text(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
+    let (text, had_errors) = if bytes.starts_with(&[0xff, 0xfe]) {
+        let (text, _, had_errors) = UTF_16LE.decode(&bytes[2..]);
+        (text, had_errors)
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        let (text, _, had_errors) = UTF_16BE.decode(&bytes[2..]);
+        (text, had_errors)
+    } else {
+        let source = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+        let (text, _, had_errors) = UTF_8.decode(source);
+        (text, had_errors)
+    };
+    (!had_errors).then_some(text)
+}
+
+fn sniff_csv_delimiter(bytes: &[u8]) -> Option<u8> {
+    [b',', b';', b'|']
+        .into_iter()
+        .map(|delimiter| (delimiter_consistency(bytes, delimiter), delimiter))
+        .filter(|((rows, width), _)| *rows > 0 && *width > 0)
+        .max()
+        .map(|(_, delimiter)| delimiter)
+}
+
+fn delimiter_consistency(bytes: &[u8], delimiter: u8) -> (usize, usize) {
+    let counts = bytes
+        .split(|byte| *byte == b'\n')
+        .take(64)
+        .map(|line| line.iter().filter(|byte| **byte == delimiter).count())
+        .filter(|count| *count > 0)
+        .collect::<Vec<_>>();
+    let Some(&expected) = counts.first() else {
+        return (0, 0);
+    };
+    let consistent = counts.iter().filter(|count| **count == expected).count();
+    (consistent, expected)
 }
 
 /// Classify a ZIP container.
@@ -341,6 +378,21 @@ mod tests {
             detect_format(b"a\tb\n1\t2", Some("data.tsv")),
             DocumentFormat::Tsv
         );
+        assert_eq!(
+            detect_format(b"a;b;c\n\"1,5\";\"2,5\";x\n", Some("data.csv")),
+            DocumentFormat::Csv
+        );
+    }
+
+    #[test]
+    fn detects_utf16_delimited_text() {
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(
+            "col1,col2\nnaive,cafe\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        assert_eq!(detect_format(&bytes, Some("data.csv")), DocumentFormat::Csv);
     }
 
     #[test]

@@ -103,6 +103,18 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         requires_pdf_native_feature: true,
     },
     ProtocolSpec {
+        name: "tesseract",
+        mode: ModeKind::Native,
+        shape: ProtocolShape::OneShotPage,
+        transport: TransportContract::InProcess,
+        preprocess: PreprocessKind::PageImage,
+        decode: DecodeKind::OcrBoxes,
+        coordinates: CoordinateKind::PixelAbs,
+        order: OrderSource::FromModel,
+        default_endpoint: None,
+        requires_pdf_native_feature: false,
+    },
+    ProtocolSpec {
         name: "mineru-vlm",
         mode: ModeKind::ModelProtocol,
         shape: ProtocolShape::LayoutThenRecognize,

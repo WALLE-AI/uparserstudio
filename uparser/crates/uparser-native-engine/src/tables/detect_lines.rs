@@ -1184,7 +1184,134 @@ fn derive_columns_from_horizontal_segments(horizontals: &[(f32, f32, f32)]) -> O
 /// Lines are classified as horizontal or vertical, snapped into grid edges,
 /// and validated before assigning text items to the resulting grid.
 pub fn detect_tables_from_lines(items: &[TextItem], lines: &[PdfLine], page: u32) -> Vec<Table> {
-    detect_tables_from_lines_inner(items, lines, page, true, true)
+    let mut tables = detect_tables_from_lines_inner(items, lines, page, true, true);
+    for table in &mut tables {
+        extend_with_adjacent_borderless_row(table, items, page);
+    }
+    tables
+}
+
+fn extend_with_adjacent_borderless_row(table: &mut Table, items: &[TextItem], page: u32) {
+    let column_count = table.cells.first().map_or(0, Vec::len);
+    if table.cells.len() < 2
+        || column_count < 3
+        || table.columns.len() != column_count + 1
+        || table.cells.iter().any(|row| row.len() != column_count)
+    {
+        return;
+    }
+
+    let claimed: HashSet<usize> = table.item_indices.iter().copied().collect();
+    let claimed_items: Vec<&TextItem> = table
+        .item_indices
+        .iter()
+        .filter_map(|&index| items.get(index))
+        .collect();
+    let Some(claimed_bottom) = claimed_items.iter().map(|item| item.y).reduce(f32::min) else {
+        return;
+    };
+    let mut baselines: Vec<f32> = claimed_items.iter().map(|item| item.y).collect();
+    baselines.sort_by(|left, right| left.total_cmp(right));
+    baselines.dedup_by(|left, right| (*left - *right).abs() <= TEXT_ROW_TOLERANCE);
+    let mut gaps: Vec<f32> = baselines
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .filter(|gap| *gap > TEXT_ROW_TOLERANCE)
+        .collect();
+    gaps.sort_by(|left, right| left.total_cmp(right));
+    let line_gap = gaps.get(gaps.len() / 2).copied().unwrap_or(12.0);
+    let initial_gap_limit = (line_gap * 4.0).clamp(30.0, 72.0);
+    let continuation_gap_limit = (line_gap * 2.0).clamp(18.0, 32.0);
+    let x_min = table.columns[0];
+    let x_max = *table.columns.last().expect("validated non-empty columns");
+
+    let mut candidates: Vec<(usize, &TextItem)> = items
+        .iter()
+        .enumerate()
+        .filter(|(index, item)| {
+            item.page == page
+                && !claimed.contains(index)
+                && crate::extractor::is_text_layout_item(item)
+                && !item.text.trim().is_empty()
+                && item.y < claimed_bottom - TEXT_ROW_TOLERANCE
+                && claimed_bottom - item.y <= initial_gap_limit + 160.0
+                && item.x + item.width.max(0.0) >= x_min - RULE_JOIN_GAP
+                && item.x <= x_max + RULE_JOIN_GAP
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .y
+            .total_cmp(&left.1.y)
+            .then_with(|| left.1.x.total_cmp(&right.1.x))
+    });
+    let Some(first_y) = candidates.first().map(|candidate| candidate.1.y) else {
+        return;
+    };
+    if claimed_bottom - first_y > initial_gap_limit {
+        return;
+    }
+
+    let mut block = Vec::new();
+    let mut previous_y = first_y;
+    for candidate in candidates {
+        if previous_y - candidate.1.y > continuation_gap_limit {
+            break;
+        }
+        previous_y = candidate.1.y;
+        block.push(candidate);
+    }
+
+    let mut cell_items: Vec<Vec<&TextItem>> = vec![Vec::new(); column_count];
+    let mut appended_indices = Vec::new();
+    for (index, item) in block {
+        let center = item.x + item.width.max(0.0) * 0.5;
+        let Some(column) = (0..column_count).find(|&column| {
+            center >= table.columns[column] - RULE_JOIN_GAP
+                && center <= table.columns[column + 1] + RULE_JOIN_GAP
+        }) else {
+            continue;
+        };
+        cell_items[column].push(item);
+        appended_indices.push(index);
+    }
+    let occupied = cell_items.iter().filter(|cell| !cell.is_empty()).count();
+    if occupied + 1 < column_count || cell_items[0].is_empty() {
+        return;
+    }
+    let stub_words: usize = cell_items[0]
+        .iter()
+        .map(|item| item.text.split_whitespace().count())
+        .sum();
+    if stub_words == 0 || stub_words > 5 {
+        return;
+    }
+
+    for cell in &mut cell_items {
+        cell.sort_by(|left, right| {
+            let same_visual_line = (left.y - right.y).abs()
+                <= left.font_size.max(right.font_size) * 0.5;
+            if same_visual_line {
+                left.x.total_cmp(&right.x)
+            } else {
+                right.y.total_cmp(&left.y).then_with(|| left.x.total_cmp(&right.x))
+            }
+        });
+    }
+    let row: Vec<String> = cell_items
+        .iter()
+        .map(|cell| super::grid::join_cell_items(cell))
+        .collect();
+    if row.iter().skip(1).filter(|cell| cell.chars().count() >= 12).count() < 2 {
+        return;
+    }
+
+    table.rows.push(first_y);
+    table.cells.push(row);
+    table.item_indices.extend(appended_indices);
+    table.item_indices.sort_unstable();
+    table.item_indices.dedup();
 }
 
 /// Detect only tables whose cell grid is backed by explicit vector geometry.

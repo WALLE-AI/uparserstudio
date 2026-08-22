@@ -387,6 +387,41 @@ mod integration_tests {
     }
 
     #[test]
+    fn a_minimal_xlsx_preserves_sheet_cells_and_types() {
+        let bytes = package(&[
+            (
+                "[Content_Types].xml",
+                r#"<Types><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships><Relationship Id="root" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Metrics" sheetId="1" r:id="sheet"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="sheet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>alpha</t></is></c><c r="B2"><f>40+2</f><v>42</v></c></row></sheetData></worksheet>"#,
+            ),
+        ]);
+
+        let document =
+            parse_document_auto(&bytes, Some("metrics.xlsx"), &ParseOptions::default()).unwrap();
+        assert_eq!(document.metadata.variant.as_deref(), Some("xlsx"));
+        assert_eq!(document.units[0].kind, UnitKind::Sheet);
+        assert_eq!(document.units[0].label.as_deref(), Some("Metrics"));
+        let markdown = render::markdown(&document);
+        assert!(markdown.contains("| Name | Value |"), "{markdown}");
+        assert!(markdown.contains("| alpha | 42 |"), "{markdown}");
+    }
+
+    #[test]
     fn odf_span_styles_apply_and_can_switch_emphasis_back_off() {
         let bytes = package(&[
             ("mimetype", "application/vnd.oasis.opendocument.text"),

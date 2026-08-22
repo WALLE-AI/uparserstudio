@@ -488,6 +488,80 @@ fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
     is_parallel
 }
 
+/// Mathematical display equations can expose glyph boxes and fraction rules
+/// that resemble a sparse grid. Reject only candidates dominated by repeated
+/// one-letter variables or their short superscript forms.
+fn is_formula_fragment_table(table: &crate::tables::Table) -> bool {
+    if table.kind != crate::tables::TableKind::Data
+        || table.columns.len() < 4
+        || table.rows.len() < 3
+    {
+        return false;
+    }
+
+    let cells: Vec<&str> = table
+        .cells
+        .iter()
+        .flatten()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    if cells.len() < 8 || cells.len() * 2 >= table.rows.len() * table.columns.len() * 3 {
+        return false;
+    }
+
+    let variable_fragments = cells
+        .iter()
+        .filter(|cell| {
+            let compact: String = cell.chars().filter(|ch| !ch.is_whitespace()).collect();
+            compact.chars().count() <= 4
+                && compact.chars().any(|ch| ch.is_ascii_alphabetic())
+                && compact
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphabetic() || ch.is_ascii_digit() || "+-^".contains(ch))
+        })
+        .count();
+    variable_fragments * 5 >= cells.len() * 4
+}
+
+/// A whole page can look like a sparse grid when a prose block, figure
+/// caption, footnote, and folio happen to occupy distinct horizontal bands.
+/// Reject only the extreme shape where one long paragraph dominates a small,
+/// high-column candidate with at most half of its cells populated.
+fn is_sparse_page_fragment_table(table: &crate::tables::Table) -> bool {
+    if table.columns.len() < 4
+        || table.rows.len() > 6
+        || table.rows.len() < 2
+    {
+        return false;
+    }
+
+    let cells: Vec<&str> = table
+        .cells
+        .iter()
+        .flatten()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    let capacity = table.rows.len() * table.columns.len();
+    if cells.len() * 2 > capacity {
+        return false;
+    }
+
+    let lengths: Vec<usize> = cells.iter().map(|cell| cell.chars().count()).collect();
+    let total_chars: usize = lengths.iter().sum();
+    let longest_idx = lengths
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, length)| *length)
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    let longest = cells.get(longest_idx).copied().unwrap_or("");
+    longest.chars().count() >= 300
+        && longest.split_whitespace().count() >= 45
+        && longest.chars().count() * 2 >= total_chars
+}
+
 fn positioned_table(
     table: &crate::tables::Table,
     chart_order: Option<ChartProseOrder>,
@@ -1331,8 +1405,11 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
             }
 
             // 1. Rect-based detection (skips tables overlapping struct-tree claims)
-            let (rect_tables, hint_regions) =
+            let (mut rect_tables, hint_regions) =
                 detect_tables_from_rects(band_items, band_rects, page);
+            rect_tables.retain(|table| {
+                !is_formula_fragment_table(table) && !is_sparse_page_fragment_table(table)
+            });
             for table in &rect_tables {
                 if !rect_claimed.is_empty()
                     && table
@@ -1358,7 +1435,10 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
 
             // 2. Line-based detection on unclaimed items (when rects didn't find tables)
             if rect_claimed.is_empty() {
-                let line_tables = detect_tables_from_lines(band_items, band_lines, page);
+                let mut line_tables = detect_tables_from_lines(band_items, band_lines, page);
+                line_tables.retain(|table| {
+                    !is_formula_fragment_table(table) && !is_sparse_page_fragment_table(table)
+                });
                 for table in &line_tables {
                     for &idx in &table.item_indices {
                         rect_claimed.insert(idx);
@@ -1398,6 +1478,11 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                     if let Some(table) =
                         try_build_rect_guided_table(&inside_items, &hint.cluster_rects)
                     {
+                        if is_formula_fragment_table(&table)
+                            || is_sparse_page_fragment_table(&table)
+                        {
+                            continue;
+                        }
                         for &idx in &table.item_indices {
                             if let Some(&band_idx) = inside_map.get(idx) {
                                 if let Some(&page_idx) = band_index_map.get(band_idx) {
@@ -1430,6 +1515,12 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                     let reject_parallel_prose = chart_prose_columns && !was_split;
                     let tables = detect_tables(subset_items, base_size, false);
                     for table in tables {
+                        if is_formula_fragment_table(&table) {
+                            continue;
+                        }
+                        if is_sparse_page_fragment_table(&table) {
+                            continue;
+                        }
                         if reject_parallel_prose && is_parallel_prose_table(&table) {
                             log::debug!(
                                 "page {}: rejected {}x{} parallel-prose table hypothesis",
@@ -1505,7 +1596,12 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
             });
             let has_structural_elements = band_rects.len() >= 6 || band_lines.len() >= 4;
             if !band_has_tables && !has_structural_elements {
-                if let Some(table) = crate::tables::try_build_table_from_columns(band_items, page) {
+                if let Some(table) = crate::tables::try_build_table_from_columns(band_items, page)
+                    .filter(|table| {
+                        !is_formula_fragment_table(table)
+                            && !is_sparse_page_fragment_table(table)
+                    })
+                {
                     for &idx in &table.item_indices {
                         if let Some(&page_idx) = band_index_map.get(idx) {
                             if let Some(&(global_idx, _)) = group.get(page_idx) {
@@ -1570,6 +1666,9 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                     .unzip();
                 let line_tables = detect_tables_from_lines(&page_text, &synth_lines, page);
                 for table in &line_tables {
+                    if is_formula_fragment_table(table) || is_sparse_page_fragment_table(table) {
+                        continue;
+                    }
                     for &idx in &table.item_indices {
                         if let Some(&global_idx) = page_text_map.get(idx) {
                             table_items.insert(global_idx);
@@ -1611,6 +1710,9 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                 merged_retry_skips_body_font(detected_columns, !chart_regions.is_empty());
             let heuristic_tables = detect_tables(&chart_free, base_size, skip_body_font);
             for table in &heuristic_tables {
+                if is_formula_fragment_table(table) || is_sparse_page_fragment_table(table) {
+                    continue;
+                }
                 if !chart_regions.is_empty() && is_parallel_prose_table(table) {
                     log::debug!(
                         "page {}: rejected {}x{} merged-band parallel-prose table hypothesis",
@@ -2551,5 +2653,82 @@ mod tests {
             split.is_empty(),
             "label+number table should not be split side-by-side"
         );
+    }
+
+    #[test]
+    fn formula_fragment_grid_is_not_a_table() {
+        let table = crate::tables::Table::new(
+            vec![10.0, 30.0, 50.0, 70.0, 90.0, 110.0],
+            (0..8).map(|row| 700.0 - row as f32 * 15.0).collect(),
+            vec![
+                vec!["", "", "p", "p p", "p+1", ""],
+                vec!["", "", "p", "p", "p+1", ""],
+                vec!["", "p", "", "", "", ""],
+                vec!["p", "p", "p", "p p", "p+1", "p"],
+                vec!["", "", "", "", "p+1", ""],
+                vec!["", "", "p", "", "", ""],
+                vec!["p", "p", "", "", "", ""],
+                vec!["", "", "", "", "", ""],
+            ]
+            .into_iter()
+            .map(|row| row.into_iter().map(str::to_string).collect())
+            .collect(),
+            (0..16).collect(),
+        );
+        assert!(is_formula_fragment_table(&table));
+    }
+
+    #[test]
+    fn compact_numeric_grid_remains_a_table() {
+        let table = crate::tables::Table::new(
+            vec![10.0, 30.0, 50.0, 70.0],
+            vec![700.0, 680.0, 660.0],
+            vec![
+                vec!["Year", "Q1", "Q2", "Q3"],
+                vec!["2025", "10", "12", "14"],
+                vec!["2026", "11", "13", "15"],
+            ]
+            .into_iter()
+            .map(|row| row.into_iter().map(str::to_string).collect())
+            .collect(),
+            (0..12).collect(),
+        );
+        assert!(!is_formula_fragment_table(&table));
+    }
+
+    #[test]
+    fn sparse_page_prose_and_caption_are_not_a_table() {
+        let paragraph = "In this content, the organization provides a detailed explanation of the goals and action plans, and most importantly, their role in advancing the agenda through monitoring and evaluation. These focus areas allow the organization to investigate public policies and prepare reports, proposals, and recommendations that strengthen related processes across all responsible institutions and stakeholders.";
+        let table = crate::tables::Table::new(
+            vec![60.0, 180.0, 320.0, 480.0],
+            vec![700.0, 400.0, 70.0, 30.0],
+            vec![
+                vec![String::new(), paragraph.repeat(2), "also regularly uploads commemorations".to_string(), String::new()],
+                vec![String::new(), String::new(), String::new(), "Figure 6 World Health Day Celebration".to_string()],
+                vec!["98".to_string(), "accessed on 5 December 2021".to_string(), "https://example.test/item".to_string(), String::new()],
+                vec![String::new(), String::new(), "23".to_string(), String::new()],
+            ],
+            vec![],
+        );
+
+        assert!(is_sparse_page_fragment_table(&table));
+    }
+
+    #[test]
+    fn dense_four_column_description_table_is_preserved() {
+        let long_value = "A solution that extracts and organizes key information from unstructured documents into a standardized database";
+        let table = crate::tables::Table::new(
+            vec![60.0, 180.0, 320.0, 480.0],
+            vec![700.0, 620.0, 540.0, 460.0],
+            vec![
+                vec!["Pack".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
+                vec!["Application".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
+                vec!["Highlight".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
+                vec!["Team".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
+            ],
+            vec![],
+        );
+
+        assert!(!is_sparse_page_fragment_table(&table));
     }
 }

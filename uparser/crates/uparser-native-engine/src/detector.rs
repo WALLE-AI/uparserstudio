@@ -1860,6 +1860,63 @@ fn get_document_title(doc: &Document) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../opensource/pdf-inspector/tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn public_detection_entrypoints_cover_file_memory_and_validation() {
+        let path = fixture_path("bare_name_struct.pdf");
+        let bytes = std::fs::read(&path).expect("fixture");
+
+        let file_result = detect_pdf_type(&path).expect("file detection");
+        let memory_result = detect_pdf_type_mem(&bytes).expect("memory detection");
+        assert_eq!(file_result.page_count, memory_result.page_count);
+        assert_eq!(file_result.pdf_type, memory_result.pdf_type);
+
+        assert!(detect_pdf_type(fixture_path("missing.pdf")).is_err());
+        assert!(detect_pdf_type_mem(b"not a pdf").is_err());
+    }
+
+    #[test]
+    fn configured_detection_strategies_filter_and_sample_pages() {
+        let bytes = std::fs::read(fixture_path("bare_name_struct.pdf")).expect("fixture");
+        for strategy in [
+            ScanStrategy::EarlyExit,
+            ScanStrategy::Full,
+            ScanStrategy::Sample(0),
+            ScanStrategy::Sample(2),
+            ScanStrategy::Pages(vec![0, 1, 1, 999]),
+        ] {
+            let result = detect_pdf_type_mem_with_config(
+                &bytes,
+                DetectionConfig {
+                    strategy,
+                    min_text_ops_per_page: 1,
+                    text_page_ratio_threshold: 0.5,
+                },
+            )
+            .expect("configured detection");
+            assert_eq!(result.page_count, 1);
+            assert!(result.pages_sampled <= 1);
+        }
+
+        assert_eq!(distribute_pages(0, 10), Vec::<u32>::new());
+        assert_eq!(distribute_pages(3, 3), vec![1, 2, 3]);
+        assert_eq!(distribute_pages(1, 10), vec![1]);
+        assert_eq!(distribute_pages(4, 10), vec![1, 3, 5, 10]);
+    }
+
+    #[test]
+    fn raw_page_count_estimator_honors_pdf_name_boundaries() {
+        let bytes = b"/Type/Page /Type /Page\n/Type\t/Page%comment\n/Type /Pages /Type /PageExtra /Subtype /Page";
+        assert_eq!(estimate_page_count_from_bytes(bytes), 3);
+        assert_eq!(estimate_page_count_from_bytes(b"no dictionaries"), 0);
+        assert_eq!(estimate_page_count_from_bytes(b"/Type\0/Page"), 1);
+    }
+
     #[test]
     fn page_ocr_reasons_classify() {
         // Scanned: no text, full-page image.

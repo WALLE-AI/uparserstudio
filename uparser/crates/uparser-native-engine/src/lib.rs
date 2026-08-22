@@ -1346,6 +1346,12 @@ fn crop_px_bbox_is_plausible(
 mod vector_grid_tests {
     use super::crop_px_bbox_is_plausible;
 
+    fn fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../opensource/pdf-inspector/tests/fixtures")
+            .join(name)
+    }
+
     /// Regression for `forecast_table_chart.pdf` (doc 128 from the
     /// opendataloader-bench corpus). The table has six visual columns, but
     /// text X-clustering in the cell-rect fallback previously split wide
@@ -1359,7 +1365,7 @@ mod vector_grid_tests {
         use std::collections::HashSet;
         use std::fs;
 
-        let path = "tests/fixtures/forecast_table_chart.pdf";
+        let path = fixture_path("forecast_table_chart.pdf");
         let buf = fs::read(path).unwrap();
         let doc = Document::load_mem(&buf).unwrap();
         let pages = doc.get_pages();
@@ -1402,7 +1408,7 @@ mod vector_grid_tests {
         use std::collections::HashSet;
         use std::fs;
 
-        let buf = fs::read(path).unwrap();
+        let buf = fs::read(fixture_path(path)).unwrap();
         let doc = Document::load_mem(&buf).unwrap();
         let pages = doc.get_pages();
         let &page_id = pages.get(&page_num).unwrap();
@@ -1439,7 +1445,7 @@ mod vector_grid_tests {
     #[test]
     fn accessory_building_rejects_prose_in_frame() {
         let tables = detect_rect_tables_in_fixture(
-            "tests/fixtures/accessory_building_permit_prose_frame.pdf",
+            "accessory_building_permit_prose_frame.pdf",
         );
         // Real form data table (TYPE / SIZE / SETBACKS) must still be detected.
         let data_table = tables.iter().find(|t| t.columns.len() == 3);
@@ -1465,7 +1471,7 @@ mod vector_grid_tests {
 
     #[test]
     fn td9264_insurance_prose_not_rect_table() {
-        let tables = detect_rect_tables_in_fixture_page("tests/fixtures/td9264.pdf", 4);
+        let tables = detect_rect_tables_in_fixture_page("td9264.pdf", 4);
         assert!(
             tables.is_empty(),
             "expected no rect-detected tables for the insurance-company prose; got {:?}",
@@ -1481,7 +1487,7 @@ mod vector_grid_tests {
     /// accepted as a vector grid.
     #[test]
     fn wireless_two_col_rejects_rect_grid() {
-        let tables = detect_rect_tables_in_fixture("tests/fixtures/wireless_two_col_no_rects.pdf");
+        let tables = detect_rect_tables_in_fixture("wireless_two_col_no_rects.pdf");
         assert!(
             tables.is_empty(),
             "expected no rect-detected tables for wireless content; got {:?}",
@@ -1494,7 +1500,7 @@ mod vector_grid_tests {
 
     #[test]
     fn wireless_two_col_region_rejects_vector_grid() {
-        let buf = std::fs::read("tests/fixtures/wireless_two_col_no_rects.pdf").unwrap();
+        let buf = std::fs::read(fixture_path("wireless_two_col_no_rects.pdf")).unwrap();
         let crops = [
             [49.32_f32, 52.92, 558.72, 214.2],
             [49.32_f32, 288.72, 556.56, 378.0],
@@ -1514,7 +1520,7 @@ mod vector_grid_tests {
     /// enough evidence for a rect-derived grid.
     #[test]
     fn wireless_dense_rejects_rect_grid() {
-        let tables = detect_rect_tables_in_fixture("tests/fixtures/wireless_dense_no_rects.pdf");
+        let tables = detect_rect_tables_in_fixture("wireless_dense_no_rects.pdf");
         assert!(
             tables.is_empty(),
             "expected no rect-detected tables for wireless content; got {:?}",
@@ -1527,7 +1533,7 @@ mod vector_grid_tests {
 
     #[test]
     fn wireless_dense_region_rejects_vector_grid() {
-        let buf = std::fs::read("tests/fixtures/wireless_dense_no_rects.pdf").unwrap();
+        let buf = std::fs::read(fixture_path("wireless_dense_no_rects.pdf")).unwrap();
         let crops = [
             [72.36_f32, 177.48, 243.72, 333.36],
             [72.0_f32, 390.24, 286.92, 417.6],
@@ -1545,7 +1551,7 @@ mod vector_grid_tests {
     #[test]
     fn multiline_indent_cell_rect_grid_fixture_detects_table() {
         let tables = detect_rect_tables_in_fixture_page(
-            "tests/fixtures/multiline_indent_cell_rect_grid.pdf",
+            "multiline_indent_cell_rect_grid.pdf",
             30,
         );
         let table = tables
@@ -1570,7 +1576,7 @@ mod vector_grid_tests {
 
     #[test]
     fn multiline_indent_cell_rect_grid_region_detects_vector_grid() {
-        let buf = std::fs::read("tests/fixtures/multiline_indent_cell_rect_grid.pdf").unwrap();
+        let buf = std::fs::read(fixture_path("multiline_indent_cell_rect_grid.pdf")).unwrap();
         let detected =
             crate::detect_vector_grid_in_region_mem(&buf, 29, [0.0, 0.0, 612.0, 792.0], 200.0)
                 .unwrap()
@@ -1598,7 +1604,7 @@ mod vector_grid_tests {
     /// they swamp the real cell rectangles and make this table look chart-like.
     #[test]
     fn greencomp_competence_two_cols() {
-        let tables = detect_rect_tables_in_fixture("tests/fixtures/greencomp_competence.pdf");
+        let tables = detect_rect_tables_in_fixture("greencomp_competence.pdf");
         assert!(
             !tables.is_empty(),
             "expected at least one rect-detected table for shaded-header + plain-body shape"
@@ -1629,7 +1635,7 @@ mod vector_grid_tests {
     /// table rows.
     #[test]
     fn upstage_key_functions_four_cols() {
-        let tables = detect_rect_tables_in_fixture("tests/fixtures/upstage_key_functions.pdf");
+        let tables = detect_rect_tables_in_fixture("upstage_key_functions.pdf");
         assert!(
             !tables.is_empty(),
             "expected at least one rect-detected table for shaded-header + alt-row shape"
@@ -1663,7 +1669,7 @@ mod vector_grid_tests {
     /// columns and every column ends up populated.
     #[test]
     fn wired_header_data_misalign_keeps_all_columns() {
-        let tables = detect_rect_tables_in_fixture("tests/fixtures/wired_header_data_misalign.pdf");
+        let tables = detect_rect_tables_in_fixture("wired_header_data_misalign.pdf");
         let table = tables
             .iter()
             .find(|t| t.columns.len() == 4 && t.rows.len() >= 5)
@@ -5908,6 +5914,59 @@ pub(crate) fn validate_pdf_file<P: AsRef<Path>>(path: P) -> Result<(), PdfError>
 mod tests {
     use super::*;
     use crate::types::ItemType;
+    use lopdf::{dictionary, Object, Stream};
+    use std::io::Write;
+
+    fn minimal_two_page_pdf() -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+            "Encoding" => "WinAnsiEncoding",
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! { "F1" => Object::Reference(font_id) },
+        });
+        let content_id = doc.add_object(Stream::new(
+            dictionary! {},
+            b"BT /F1 12 Tf 50 700 Td (Hello native PDF) Tj ET".to_vec(),
+        ));
+        let first_page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => Object::Reference(resources_id),
+            "Contents" => Object::Reference(content_id),
+        });
+        let second_page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => Object::Reference(resources_id),
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![
+                    Object::Reference(first_page_id),
+                    Object::Reference(second_page_id),
+                ],
+                "Count" => 2,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
 
     fn test_item(text: &str, x: f32, y: f32, width: f32, height: f32) -> TextItem {
         TextItem {
@@ -5933,6 +5992,429 @@ mod tests {
             page,
             ..test_item(text, 10.0, 10.0, text.len() as f32 * 5.0, 12.0)
         }
+    }
+
+    #[test]
+    fn vector_grid_edge_helpers_cover_detected_inferred_and_invalid_geometry() {
+        let table = tables::Table::new(
+            vec![0.0, 50.0, 100.0],
+            vec![100.0, 50.0],
+            vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]],
+            vec![],
+        );
+        let horizontal = |y| PdfLine {
+            x1: 0.0,
+            y1: y,
+            x2: 100.0,
+            y2: y,
+            page: 1,
+        };
+        let lines = vec![horizontal(100.0), horizontal(50.0), horizontal(0.0)];
+        let (xs, ys) = line_grid_edges(&table, &lines, 2, 2).expect("line grid");
+        assert_eq!(xs, vec![0.0, 50.0, 100.0]);
+        assert_eq!(ys, vec![100.0, 50.0, 0.0]);
+        assert!(line_grid_edges(&table, &[], 2, 2).is_none());
+        assert!(line_grid_edges(&table, &[horizontal(100.0)], 2, 2).is_none());
+        assert!(line_grid_edges(&table, &lines, 3, 2).is_none());
+
+        let rects = vec![
+            PdfRect {
+                x: 0.0,
+                y: 50.0,
+                width: 50.0,
+                height: 50.0,
+                page: 1,
+            },
+            PdfRect {
+                x: 50.0,
+                y: 50.0,
+                width: 50.0,
+                height: 50.0,
+                page: 1,
+            },
+            PdfRect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+                page: 1,
+            },
+            PdfRect {
+                x: 100.0,
+                y: 50.0,
+                width: -50.0,
+                height: -50.0,
+                page: 1,
+            },
+            PdfRect {
+                x: 1.0,
+                y: 1.0,
+                width: 2.0,
+                height: 2.0,
+                page: 1,
+            },
+        ];
+        let (xs, ys) = rect_grid_edges(&rects, 2, 2).expect("rect grid");
+        assert_eq!(xs, vec![0.0, 50.0, 100.0]);
+        assert_eq!(ys, vec![100.0, 50.0, 0.0]);
+        assert!(rect_grid_edges(&[], 2, 2).is_none());
+        assert!(rect_grid_edges(&rects, 3, 2).is_none());
+
+        let center_table = tables::Table::new(
+            vec![25.0, 75.0],
+            vec![75.0, 25.0],
+            vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]],
+            vec![],
+        );
+        let (xs, ys) = inferred_grid_edges(&center_table, &rects, &[], 2, 2).expect("inferred");
+        assert_eq!(xs, vec![0.0, 50.0, 100.0]);
+        assert_eq!(ys, vec![100.0, 50.0, 0.0]);
+
+        assert_eq!(
+            infer_ascending_edges(&[10.0, 30.0], 2, None),
+            Some(vec![0.0, 20.0, 40.0])
+        );
+        assert_eq!(
+            infer_descending_edges(&[30.0, 10.0], 2, None),
+            Some(vec![40.0, 20.0, 0.0])
+        );
+        assert!(infer_ascending_edges(&[10.0], 1, None).is_none());
+        assert!(infer_descending_edges(&[10.0], 1, None).is_none());
+        assert!(infer_ascending_edges(&[10.0], 2, None).is_none());
+        assert!(infer_descending_edges(&[], 0, None).is_none());
+    }
+
+    #[test]
+    fn vector_coordinate_helpers_handle_clustering_rotation_and_tokens() {
+        assert_eq!(
+            snap_vector_edges(vec![10.0, 11.0, 30.0, f32::NAN], false),
+            vec![10.5, 30.0]
+        );
+        assert_eq!(
+            snap_vector_edges(vec![10.0, 11.0, 30.0], true),
+            vec![30.0, 10.5]
+        );
+        assert!(strictly_ordered(&[0.0, 1.0, 2.0], false));
+        assert!(strictly_ordered(&[2.0, 1.0, 0.0], true));
+        assert!(!strictly_ordered(&[0.0, 0.0], false));
+        assert!(!strictly_ordered(&[f32::NAN, 1.0], false));
+
+        let inverted = PdfRect {
+            x: 10.0,
+            y: 20.0,
+            width: -5.0,
+            height: -10.0,
+            page: 1,
+        };
+        assert_eq!(normalized_rect_edges(&inverted), (5.0, 10.0, 10.0, 20.0));
+        let bounds = vector_geometry_bounds(
+            &[inverted],
+            &[PdfLine {
+                x1: -5.0,
+                y1: 8.0,
+                x2: 30.0,
+                y2: 40.0,
+                page: 1,
+            }],
+        )
+        .expect("bounds");
+        assert_eq!(
+            (bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max),
+            (-5.0, 8.0, 30.0, 40.0)
+        );
+        assert!(vector_geometry_bounds(&[], &[]).is_none());
+
+        assert_eq!(
+            extracted_cell_to_crop_px(
+                [10.0, 20.0, 30.0, 40.0],
+                [0.0, 0.0, 100.0, 100.0],
+                72.0,
+                100.0,
+                RegionCoordSpace::Standard,
+            ),
+            Some([10.0, 60.0, 30.0, 80.0])
+        );
+        assert_eq!(
+            extracted_cell_to_crop_px(
+                [10.0, 20.0, 30.0, 40.0],
+                [0.0, 0.0, 100.0, 100.0],
+                0.0,
+                100.0,
+                RegionCoordSpace::Rotated90Ccw,
+            ),
+            Some([-40.0, 70.0, -20.0, 90.0])
+        );
+        assert!(extracted_cell_to_crop_px(
+            [f32::NAN, 0.0, 1.0, 1.0],
+            [0.0; 4],
+            72.0,
+            100.0,
+            RegionCoordSpace::Standard,
+        )
+        .is_none());
+        assert!(extracted_cell_to_crop_px(
+            [1.0, 1.0, 1.0, 2.0],
+            [0.0; 4],
+            72.0,
+            100.0,
+            RegionCoordSpace::Standard,
+        )
+        .is_none());
+
+        let item = test_item("A BC", 10.0, 20.0, 40.0, 12.0);
+        let tokens = split_item_into_token_subitems(&item);
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "BC"]
+        );
+        assert_eq!((tokens[0].x, tokens[0].width), (10.0, 10.0));
+        assert_eq!((tokens[1].x, tokens[1].width), (30.0, 20.0));
+        assert!(split_item_into_token_subitems(&test_item("", 0.0, 0.0, 0.0, 10.0)).is_empty());
+        assert!(split_item_into_token_subitems(&test_item("   ", 0.0, 0.0, 30.0, 10.0)).is_empty());
+    }
+
+    #[test]
+    fn tsr_public_entrypoints_cover_valid_empty_and_out_of_range_inputs() {
+        let bytes = minimal_two_page_pdf();
+        let valid = TsrTableInput {
+            page: 0,
+            crop_pdf_pt_bbox: [0.0, 0.0, 612.0, 792.0],
+            render_dpi: 72.0,
+            structure_tokens: [
+                "<table>",
+                "<tr>",
+                "<td></td>",
+                "<td></td>",
+                "</tr>",
+                "</table>",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            cell_bboxes: vec![vec![0.0, 0.0, 300.0, 0.0, 300.0, 792.0, 0.0, 792.0]],
+        };
+        let empty = TsrTableInput {
+            page: 0,
+            crop_pdf_pt_bbox: [0.0; 4],
+            render_dpi: 72.0,
+            structure_tokens: vec![],
+            cell_bboxes: vec![],
+        };
+        let out_of_range = TsrTableInput {
+            page: 99,
+            ..empty.clone()
+        };
+        let inputs = [valid.clone(), empty, out_of_range];
+
+        let cells = extract_tables_with_structure_cells_mem(&bytes, &inputs).expect("TSR cells");
+        assert_eq!(cells.len(), 3);
+        assert_eq!(cells[0].len(), 2);
+        assert!(cells[0][0].text.contains("Hello native PDF"));
+        assert_eq!(cells[0][1].page_pt_bbox, [0.0; 4]);
+        assert!(cells[1].is_empty());
+        assert!(cells[2].is_empty());
+
+        let markdown = extract_tables_with_structure_mem(&bytes, &inputs).expect("TSR markdown");
+        assert_eq!(markdown.len(), 3);
+        assert!(markdown[0].contains("Hello native PDF"));
+        assert!(markdown[1].is_empty());
+
+        let automatic = extract_tables_with_structure_auto_mem(&bytes, &[valid]).expect("TSR auto");
+        assert_eq!(automatic.len(), 1);
+        assert!(automatic[0].markdown.contains("Hello native PDF"));
+        assert!(automatic[0].fallback_reason.is_none());
+    }
+
+    #[test]
+    fn pdf_options_builder_redacts_password() {
+        let options = PdfOptions::detect_only()
+            .mode(ProcessMode::Analyze)
+            .detection(DetectionConfig::default())
+            .markdown(MarkdownOptions::default())
+            .pages([1, 3, 3])
+            .password("secret-value");
+
+        let debug = format!("{options:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("secret-value"));
+        assert_eq!(options.mode, ProcessMode::Analyze);
+        assert_eq!(options.page_filter.unwrap(), HashSet::from([1, 3]));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn public_pdf_entrypoints_cover_memory_and_file_paths() {
+        let bytes = minimal_two_page_pdf();
+
+        let classification = classify_pdf_mem(&bytes).unwrap();
+        assert_eq!(classification.page_count, 2);
+
+        let detected = detect_pdf_mem(&bytes).unwrap();
+        assert_eq!(detected.page_count, 2);
+        assert!(detected.markdown.is_none());
+
+        let analyzed = process_pdf_mem_with_options(
+            &bytes,
+            PdfOptions::new().mode(ProcessMode::Analyze).pages([1]),
+        )
+        .unwrap();
+        assert_eq!(analyzed.page_count, 2);
+        assert!(analyzed.markdown.is_none());
+
+        let full = process_pdf_mem(&bytes).unwrap();
+        assert!(full
+            .markdown
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Hello native PDF"));
+        let compat = process_pdf_mem_with_config(
+            &bytes,
+            DetectionConfig::default(),
+            MarkdownOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(compat.page_count, 2);
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        assert_eq!(process_pdf(file.path()).unwrap().page_count, 2);
+        assert_eq!(detect_pdf(file.path()).unwrap().page_count, 2);
+        assert_eq!(
+            process_pdf_with_config(
+                file.path(),
+                DetectionConfig::default(),
+                MarkdownOptions::default(),
+            )
+            .unwrap()
+            .page_count,
+            2
+        );
+        let selected = HashSet::from([1]);
+        assert_eq!(
+            process_pdf_with_config_pages(
+                file.path(),
+                DetectionConfig::default(),
+                MarkdownOptions::default(),
+                Some(&selected),
+            )
+            .unwrap()
+            .page_count,
+            2
+        );
+    }
+
+    #[test]
+    fn fish_species_borderless_table_remains_structured() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../benchmark/opendataloader-bench/pdfs/01030000000132.pdf");
+        let markdown = process_pdf(&path)
+            .expect("fish species fixture")
+            .markdown
+            .expect("engine markdown");
+
+        assert!(markdown.contains("|Potosi Pupfish|Cyprinodon alvarezi|"));
+        assert!(markdown.contains("|Golden Skiffia|Skiffia francesae|"));
+    }
+
+    #[test]
+    fn sift_prose_is_not_rendered_as_a_borderless_table() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../benchmark/opendataloader-bench/pdfs/01030000000157.pdf");
+        let markdown = process_pdf(&path)
+            .expect("SIFT prose fixture")
+            .markdown
+            .expect("engine markdown");
+
+        assert!(!markdown.contains("|Check|your emotions."));
+        assert!(markdown.contains("Check your emotions."));
+    }
+
+    #[test]
+    fn page_and_region_entrypoints_cover_selection_and_fallbacks() {
+        let bytes = minimal_two_page_pdf();
+
+        let all = extract_pages_markdown_mem(&bytes, None).unwrap();
+        assert_eq!(all.pages.len(), 2);
+        assert!(all.pages[0].markdown.contains("Hello native PDF"));
+        assert!(all.pages[1].needs_ocr);
+
+        let selected = extract_pages_markdown_mem(&bytes, Some(&[0, 9])).unwrap();
+        assert_eq!(
+            selected.pages.iter().map(|p| p.page).collect::<Vec<_>>(),
+            [0, 9]
+        );
+        assert!(selected.pages[1].needs_ocr);
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        assert_eq!(
+            extract_pages_markdown(file.path(), Some(&[0]))
+                .unwrap()
+                .pages
+                .len(),
+            1
+        );
+
+        let regions = vec![
+            (
+                0,
+                vec![[0.0, 0.0, 612.0, 792.0], [45.0, 75.0, 200.0, 110.0]],
+            ),
+            (1, vec![[0.0, 0.0, 612.0, 792.0]]),
+            (9, vec![[0.0, 0.0, 100.0, 100.0]]),
+        ];
+        let text = extract_text_in_regions_mem(&bytes, &regions).unwrap();
+        assert_eq!(text.len(), 3);
+        assert!(text[0]
+            .regions
+            .iter()
+            .any(|region| region.text.contains("Hello native PDF")));
+        assert!(text[1].regions[0].needs_ocr);
+        assert!(text[2].regions[0].needs_ocr);
+
+        let tables = extract_tables_in_regions_mem(&bytes, &regions).unwrap();
+        assert_eq!(tables.len(), 3);
+        assert!(tables
+            .iter()
+            .flat_map(|page| &page.regions)
+            .all(|region| region.needs_ocr));
+        assert!(
+            detect_vector_grid_in_region_mem(&bytes, 0, [0.0, 0.0, 612.0, 792.0], 144.0,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            detect_vector_grid_in_region_mem(&bytes, 9, [0.0, 0.0, 612.0, 792.0], 0.0,)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn public_entrypoints_report_non_pdf_inputs() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b"  <!doctype html><html></html>",
+            b"<?xml version='1.0'?><root/>",
+            b"<root/>",
+            br#"{"value":1}"#,
+            b"[1,2]",
+            b"\x89PNG\r\n",
+            b"\xff\xd8\xffjpeg",
+            b"PK\x03\x04zip",
+            b"ordinary text input",
+            &[0, 1, 2, 3, 4],
+        ];
+        for bytes in cases {
+            assert!(matches!(process_pdf_mem(bytes), Err(PdfError::NotAPdf(_))));
+        }
+        assert!(matches!(
+            process_pdf_mem(b"%PDF-1.7\nnot a PDF body"),
+            Err(PdfError::Parse(_) | PdfError::InvalidStructure)
+        ));
     }
 
     #[test]

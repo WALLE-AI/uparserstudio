@@ -133,3 +133,115 @@ fn compatibility_block(
         asset_path: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uparser_document_engine::{
+        Asset, Block as DocBlock, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentFormat,
+        DocumentUnit, Inline, List, ListItem, ListMarker, ParseWarning, Table, TableKind, UnitKind,
+        WarningCode,
+    };
+
+    #[test]
+    fn protocol_name_covers_every_structured_format() {
+        let cases = [
+            (DocumentFormat::Csv, "native:csv"),
+            (DocumentFormat::Tsv, "native:tsv"),
+            (DocumentFormat::Excel, "native:excel"),
+            (DocumentFormat::Ods, "native:ods"),
+            (DocumentFormat::Odt, "native:odt"),
+            (DocumentFormat::Odp, "native:odp"),
+            (DocumentFormat::Epub, "native:epub"),
+            (DocumentFormat::Rtf, "native:rtf"),
+            (DocumentFormat::Doc, "native:doc"),
+            (DocumentFormat::Docx, "native:docx"),
+            (DocumentFormat::Ppt, "native:ppt"),
+            (DocumentFormat::Pptx, "native:pptx"),
+            (DocumentFormat::Unknown, "native:document"),
+        ];
+        for (format, expected) in cases {
+            let result = to_parse_result(&CanonicalDocument::new(format), "input", b"bytes");
+            assert_eq!(result.protocol, expected);
+            assert!(result.pages.is_empty());
+        }
+    }
+
+    #[test]
+    fn mixed_canonical_blocks_lower_to_compatibility_ir_without_losing_assets() {
+        let table = Table {
+            kind: TableKind::Data,
+            rows: 1,
+            columns: 1,
+            header_rows: 0,
+            grid: vec![vec![CellSlot::Origin(Cell::text(
+                "cell",
+                CellValueKind::Text,
+            ))]],
+            caption: None,
+        };
+        let list = List {
+            marker: ListMarker::Bullet,
+            start: None,
+            items: vec![ListItem {
+                blocks: vec![DocBlock::paragraph("item")],
+            }],
+        };
+        let mut document = CanonicalDocument::new(DocumentFormat::Docx);
+        document.assets.push(Asset {
+            id: "image-1".to_owned(),
+            media_type: "image/png".to_owned(),
+            filename: Some("image.png".to_owned()),
+            byte_length: 3,
+            sha256: "hash".to_owned(),
+            path: None,
+            bytes: Some(vec![1, 2, 3]),
+        });
+        document.warnings.push(ParseWarning {
+            code: WarningCode::UnsupportedFeature,
+            part: None,
+            message: "kept warning".to_owned(),
+        });
+        document.units.push(DocumentUnit {
+            kind: UnitKind::Flow,
+            index: 0,
+            label: None,
+            blocks: vec![
+                DocBlock::Heading {
+                    level: 2,
+                    content: vec![Inline::text("Heading")],
+                },
+                DocBlock::List { list },
+                DocBlock::Table { table },
+                DocBlock::Figure {
+                    asset_id: Some("image-1".to_owned()),
+                    alt: Some("image".to_owned()),
+                    caption: Vec::new(),
+                },
+                DocBlock::Figure {
+                    asset_id: Some("missing".to_owned()),
+                    alt: Some("fallback".to_owned()),
+                    caption: Vec::new(),
+                },
+                DocBlock::paragraph("body"),
+            ],
+        });
+
+        let result = to_parse_result(&document, "input.docx", b"source");
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.warnings, ["kept warning"]);
+        let blocks = &result.pages[0].blocks;
+        assert_eq!(blocks.len(), 6);
+        assert_eq!(blocks[0].category_raw, "title");
+        assert_eq!(blocks[0].text.as_deref(), Some("Heading"));
+        assert_eq!(blocks[1].category.as_deref(), Some("text"));
+        assert!(blocks[1].text.as_deref().unwrap().contains("item"));
+        assert!(blocks[2].html.as_deref().unwrap().contains("cell"));
+        assert_eq!(blocks[3].asset_bytes.as_deref(), Some(&[1, 2, 3][..]));
+        assert!(blocks[3].text.is_none());
+        assert!(blocks[4].text.as_deref().unwrap().contains("fallback"));
+        assert_eq!(blocks[5].text.as_deref(), Some("body"));
+        assert_eq!(blocks[5].reading_order, Some(5));
+        assert_eq!(blocks[5].source, BlockSource::StructuredNative);
+    }
+}

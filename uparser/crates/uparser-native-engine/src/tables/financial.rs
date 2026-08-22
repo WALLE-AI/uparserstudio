@@ -116,3 +116,111 @@ pub(crate) fn try_split_financial_item(item: &TextItem) -> Option<Vec<TextItem>>
     }
     Some(sub_items)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ItemType;
+
+    fn item(text: &str, width: f32) -> TextItem {
+        TextItem {
+            text: text.to_string(),
+            x: 10.0,
+            y: 20.0,
+            width,
+            height: 12.0,
+            font: "Ledger".to_string(),
+            font_size: 10.0,
+            page: 2,
+            is_bold: true,
+            is_italic: true,
+            is_underline: true,
+            is_strikeout: true,
+            item_type: ItemType::Link("https://example.com".to_string()),
+            mcid: Some(7),
+        }
+    }
+
+    #[test]
+    fn numeric_and_dash_token_classification_is_strict() {
+        for token in ["0", "1,234.50", "(99)", "+12%", "-7"] {
+            assert!(is_numeric_token(token), "{token}");
+        }
+        for token in ["", "$12", "12x", "()", "--"] {
+            assert!(!is_numeric_token(token), "{token}");
+        }
+        for token in ["-", "\u{2012}", "\u{2013}", "\u{2014}"] {
+            assert!(is_dash_token(token), "{token}");
+        }
+        assert!(!is_dash_token("--"));
+    }
+
+    #[test]
+    fn alphabetic_word_detection_requires_adjacent_letters() {
+        assert!(has_alphabetic_words("Land $ 778,177"));
+        assert!(has_alphabetic_words("\u{6570}\u{636e} 12"));
+        assert!(!has_alphabetic_words("A 12 B 34"));
+        assert!(!has_alphabetic_words("$ 1,000 (20)"));
+    }
+
+    #[test]
+    fn financial_tokenizer_groups_currency_and_rejects_mixed_text() {
+        assert_eq!(
+            tokenize_financial_values("$ 5,147,649 114,167 \u{2014} (20)"),
+            Some(vec![
+                "$ 5,147,649".to_string(),
+                "114,167".to_string(),
+                "\u{2014}".to_string(),
+                "(20)".to_string(),
+            ])
+        );
+        assert_eq!(
+            tokenize_financial_values("1 +2% -3"),
+            Some(vec!["1".into(), "+2%".into(), "-3".into()])
+        );
+        for invalid in ["", "$", "$ value", "12 revenue", "USD 12"] {
+            assert_eq!(tokenize_financial_values(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn split_financial_item_distributes_geometry_and_preserves_metadata() {
+        let source = item("$ 300 200 (100)", 300.0);
+        let parts = try_split_financial_item(&source).expect("three financial values");
+
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["$ 300", "200", "(100)"]
+        );
+        assert_eq!(
+            parts.iter().map(|part| part.x).collect::<Vec<_>>(),
+            vec![60.0, 160.0, 260.0]
+        );
+        assert!(parts.iter().all(|part| part.width == 90.0));
+        assert!(parts.iter().all(|part| {
+            part.y == source.y
+                && part.height == source.height
+                && part.font == source.font
+                && part.font_size == source.font_size
+                && part.page == source.page
+                && part.is_bold
+                && part.is_italic
+                && part.is_underline
+                && part.is_strikeout
+                && part.mcid == source.mcid
+                && matches!(&part.item_type, ItemType::Link(url) if url == "https://example.com")
+        }));
+    }
+
+    #[test]
+    fn split_financial_item_rejects_narrow_text_and_short_value_runs() {
+        assert!(try_split_financial_item(&item("1 2 3", 200.0)).is_none());
+        assert!(try_split_financial_item(&item("Land 1 2 3", 300.0)).is_none());
+        assert!(try_split_financial_item(&item("1 2", 300.0)).is_none());
+        assert!(try_split_financial_item(&item("1 invalid 3", 300.0)).is_none());
+    }
+}

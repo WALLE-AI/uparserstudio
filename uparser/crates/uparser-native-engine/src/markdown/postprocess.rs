@@ -1,5 +1,7 @@
 //! Markdown cleanup and post-processing.
 
+use std::collections::{HashMap, HashSet};
+
 use regex::Regex;
 
 use super::{MarkdownOptions, MarkdownProfile};
@@ -35,6 +37,9 @@ pub(crate) fn clean_markdown(mut text: String, options: &MarkdownOptions) -> Str
     collapse_consecutive_spaces(&mut text);
     remove_spaces_before_closing_brackets(&mut text);
     remove_spaces_before_sentence_punctuation(&mut text);
+    text = refine_table_lines(&text);
+    text = repair_trailing_toc_part_headings(&text);
+    text = refine_heading_blocks(&text);
 
     // Remove excessive newlines (more than 2 in a row)
     while text.contains("\n\n\n") {
@@ -46,6 +51,276 @@ pub(crate) fn clean_markdown(mut text: String, options: &MarkdownOptions) -> Str
     text.push('\n');
 
     text
+}
+
+fn repair_trailing_toc_part_headings(text: &str) -> String {
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let has_contents_marker = lines.iter().any(|line| {
+        let visible = strip_inline_markup(line.trim_start_matches('#').trim());
+        matches!(
+            visible.trim().to_ascii_lowercase().as_str(),
+            "contents" | "table of contents"
+        )
+    });
+
+    let mut headings: Vec<(usize, usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| toc_part_number(line).map(|part| (index, part, line.clone())))
+        .collect();
+    if headings.len() < 2 || (!has_contents_marker && headings.len() < 3) {
+        return text.to_owned();
+    }
+
+    let mut section_positions = HashMap::new();
+    for (_, part, _) in &headings {
+        let prefix = format!("Section {part}.");
+        let Some(position) = lines.iter().position(|line| {
+            strip_inline_markup(line.trim_start_matches('#').trim()).starts_with(&prefix)
+        }) else {
+            return text.to_owned();
+        };
+        section_positions.insert(*part, position);
+    }
+    headings.retain(|(heading_index, part, _)| {
+        section_positions
+            .get(part)
+            .is_some_and(|section_index| heading_index > section_index)
+    });
+    if headings.len() < 2 {
+        return text.to_owned();
+    }
+
+    let heading_indices: HashSet<usize> = headings.iter().map(|(index, _, _)| *index).collect();
+    let mut repaired: Vec<String> = lines
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !heading_indices.contains(index))
+        .map(|(_, line)| line)
+        .collect();
+    headings.sort_by_key(|(_, part, _)| *part);
+    for (_, part, heading) in headings {
+        let prefix = format!("Section {part}.");
+        let Some(position) = repaired.iter().position(|line| {
+            strip_inline_markup(line.trim_start_matches('#').trim()).starts_with(&prefix)
+        }) else {
+            continue;
+        };
+        repaired.splice(position..position, [String::new(), heading, String::new()]);
+    }
+    repaired.join("\n")
+}
+
+fn toc_part_number(line: &str) -> Option<usize> {
+    let visible = strip_inline_markup(line.trim_start_matches('#').trim());
+    let rest = visible.strip_prefix("Part ")?;
+    if !rest.to_ascii_lowercase().contains("chapter") {
+        return None;
+    }
+    match rest.split_whitespace().next()?.trim_end_matches('.') {
+        "I" => Some(1),
+        "II" => Some(2),
+        "III" => Some(3),
+        "IV" => Some(4),
+        "V" => Some(5),
+        "VI" => Some(6),
+        "VII" => Some(7),
+        "VIII" => Some(8),
+        "IX" => Some(9),
+        "X" => Some(10),
+        "XI" => Some(11),
+        "XII" => Some(12),
+        _ => None,
+    }
+}
+
+fn refine_heading_blocks(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+
+    let mut in_contents = false;
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if let Some((marker, heading)) = trimmed.split_once(' ') {
+            if !marker.is_empty() && marker.len() <= 6 && marker.chars().all(|c| c == '#') {
+                in_contents = strip_inline_markup(heading)
+                    .to_ascii_lowercase()
+                    .contains("contents");
+                continue;
+            }
+        }
+        let Some(inner) = trimmed
+            .strip_prefix("**")
+            .and_then(|value| value.strip_suffix("**"))
+        else {
+            continue;
+        };
+        if inner.contains("**") {
+            continue;
+        }
+        let letters: Vec<char> = inner.chars().filter(|c| c.is_alphabetic()).collect();
+        let uppercase_title = !letters.is_empty()
+            && letters.iter().all(|c| !c.is_lowercase())
+            && inner.split_whitespace().count() <= 8;
+        if !in_contents && (uppercase_title || has_multilevel_number(inner)) {
+            *line = format!("# {inner}");
+        }
+    }
+
+    let mut previous_nonempty_was_heading = false;
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((marker, heading)) = trimmed.split_once(' ') else {
+            previous_nonempty_was_heading = false;
+            continue;
+        };
+        if marker.is_empty() || marker.len() > 6 || !marker.chars().all(|c| c == '#') {
+            previous_nonempty_was_heading = false;
+            continue;
+        }
+
+        let visible = strip_inline_markup(heading);
+        let starts_lowercase = visible
+            .chars()
+            .find(|c| c.is_alphabetic())
+            .is_some_and(|c| c.is_lowercase());
+        let word_count = heading.split_whitespace().count();
+        let sentence_like = heading.ends_with('.') && word_count >= 12;
+        let numeric_callout = word_count <= 2
+            && visible.chars().any(|c| c.is_ascii_digit())
+            && visible.chars().any(|c| matches!(c, '%' | '↑' | '↓'));
+        let adjacent_short_sentence = previous_nonempty_was_heading
+            && heading.ends_with('.')
+            && (4..=10).contains(&word_count)
+            && !starts_with_roman_numeral(heading);
+        if starts_lowercase || sentence_like || numeric_callout || adjacent_short_sentence {
+            *line = heading.to_owned();
+            previous_nonempty_was_heading = false;
+        } else {
+            previous_nonempty_was_heading = true;
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn has_multilevel_number(text: &str) -> bool {
+    let token = text
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('.');
+    let parts: Vec<&str> = token.split('.').collect();
+    parts.len() >= 2
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.len() <= 3 && part.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+fn starts_with_roman_numeral(text: &str) -> bool {
+    let token = text
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('.');
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'))
+}
+
+fn strip_inline_markup(text: &str) -> String {
+    let mut visible = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            '*' | '_' | '`' | '~' if !in_tag => {}
+            _ if !in_tag => visible.push(ch),
+            _ => {}
+        }
+    }
+    visible
+}
+
+fn refine_table_lines(text: &str) -> String {
+    let mut output = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+            output.push(line.to_owned());
+            continue;
+        }
+        let original_cells: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
+        let mut cells: Vec<String> = original_cells
+            .iter()
+            .map(|cell| normalize_tracked_caps(cell.trim()))
+            .collect();
+        let changed = original_cells
+            .iter()
+            .zip(&cells)
+            .any(|(original, refined)| original.trim() != refined);
+        if cells.len() == 2 {
+            if let Some((label, section)) = split_outcomes_label(&cells[0]) {
+                cells[0] = label;
+                output.push(format!("|{}|{}|", cells[0], cells[1]));
+                output.push(format!("|{section}||"));
+                continue;
+            }
+        }
+        if changed {
+            output.push(format!("|{}|", cells.join("|")));
+        } else {
+            output.push(line.to_owned());
+        }
+    }
+    output.join("\n")
+}
+
+fn normalize_tracked_caps(cell: &str) -> String {
+    use once_cell::sync::Lazy;
+    static FRAGMENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b([A-Z])\s+([A-Z]{2,})\b").unwrap());
+    static SINGLE_PAIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b([A-Z])\s+([A-Z])\b").unwrap());
+    static PUNCTUATION: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+([:;,])").unwrap());
+    static HYPHEN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s*").unwrap());
+
+    if FRAGMENT.find_iter(cell).count() < 2 {
+        return cell.to_owned();
+    }
+    let mut normalized = cell.to_owned();
+    loop {
+        let next = FRAGMENT.replace_all(&normalized, "$1$2").to_string();
+        if next == normalized {
+            break;
+        }
+        normalized = next;
+    }
+    loop {
+        let next = SINGLE_PAIR.replace_all(&normalized, "$1$2").to_string();
+        if next == normalized {
+            break;
+        }
+        normalized = next;
+    }
+    normalized = PUNCTUATION.replace_all(&normalized, "$1").to_string();
+    HYPHEN.replace_all(&normalized, "-").to_string()
+}
+
+fn split_outcomes_label(cell: &str) -> Option<(String, String)> {
+    const SECTIONS: &[&str] = &["Learning Outcomes", "Expected Outcomes", "Key Outcomes"];
+    const PREFIXES: &[&str] = &["Statement", "Description"];
+    for section in SECTIONS {
+        let Some(prefix) = cell.strip_suffix(section).map(str::trim_end) else {
+            continue;
+        };
+        if PREFIXES.iter().any(|ending| prefix.ends_with(ending)) {
+            return Some((prefix.to_owned(), (*section).to_owned()));
+        }
+    }
+    None
 }
 
 /// Collapse runs of 2+ spaces to a single space within each line.
@@ -554,5 +829,93 @@ mod tests {
     fn test_format_urls_no_urls() {
         let input = "No links here";
         assert_eq!(format_urls(input), input);
+    }
+
+    #[test]
+    fn refine_heading_blocks_promotes_strong_bold_blocks() {
+        let input = "**IMPLEMENTATION**\n\nBody\n\n**1.5. Migrant Workers at Risk**";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("# IMPLEMENTATION"));
+        assert!(result.contains("# 1.5. Migrant Workers at Risk"));
+    }
+
+    #[test]
+    fn refine_heading_blocks_demotes_visual_body_lines() {
+        let input = "# False Causation\n\n## Correlation does not imply causation.\n\n# <u>Reference frameworks:</u>\n\n## and call it Synth.";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("# False Causation"));
+        assert!(result.contains("\nCorrelation does not imply causation."));
+        assert!(result.contains("# <u>Reference frameworks:</u>"));
+        assert!(result.contains("\nand call it Synth."));
+    }
+
+    #[test]
+    fn refine_heading_blocks_preserves_roman_and_mixed_bold_text() {
+        let input = "# Section\n\n# III.\n\n**Project No:** : **123**";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("# III."));
+        assert!(result.contains("**Project No:** : **123**"));
+    }
+
+    #[test]
+    fn refine_heading_blocks_does_not_promote_contents_entries() {
+        let input =
+            "# Contents\n\n**1. Overview**\n**2. FAQ**\n\n# Chapter One\n\n**IMPLEMENTATION**";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("**1. Overview**"));
+        assert!(result.contains("**2. FAQ**"));
+        assert!(result.contains("# IMPLEMENTATION"));
+    }
+
+    #[test]
+    fn trailing_toc_part_headings_move_before_their_sections() {
+        let input = "# Contents\n\nIntroduction\t1\nSection 1.1: Data\t3\nSection 1.2: Tests\t5\nSection 2.1: Values\t12\nSection 2.2: Effects\t16\n\nPart I. <u>Chapter One-Exploring Data</u>\n\n# Part II. <u>Chapter Two-Test Statistics</u>";
+        let result = repair_trailing_toc_part_headings(input);
+
+        assert!(result.find("Part I.").unwrap() < result.find("Section 1.1").unwrap());
+        assert!(result.find("Part II.").unwrap() < result.find("Section 2.1").unwrap());
+        assert!(result.find("Section 1.2").unwrap() < result.find("Part II.").unwrap());
+    }
+
+    #[test]
+    fn correctly_ordered_toc_part_headings_are_unchanged() {
+        let input = "# Contents\n\nPart I. Chapter One\nSection 1.1: Data\t3\n\nPart II. Chapter Two\nSection 2.1: Values\t12";
+        assert_eq!(repair_trailing_toc_part_headings(input), input);
+    }
+
+    #[test]
+    fn toc_continuation_repairs_three_trailing_part_headings() {
+        let input = "# Part V. Chapter Five\nSection 5.1: Model\t35\n# Part VI. Chapter Six\nSection 6.1: Groups\t49\nSection 7.1: Mediation\t64\nSection 8.1: Factors\t75\nSection 9.1: Tests\t91\n\n# Part VII. Chapter Seven\n# Part VIII. Chapter Eight\n# Part IX. Chapter Nine";
+        let result = repair_trailing_toc_part_headings(input);
+
+        assert!(result.find("Part V.").unwrap() < result.find("Section 5.1").unwrap());
+        assert!(result.find("Part VI.").unwrap() < result.find("Section 6.1").unwrap());
+        assert!(result.find("Part VII.").unwrap() < result.find("Section 7.1").unwrap());
+        assert!(result.find("Part VIII.").unwrap() < result.find("Section 8.1").unwrap());
+        assert!(result.find("Part IX.").unwrap() < result.find("Section 9.1").unwrap());
+    }
+
+    #[test]
+    fn refine_heading_blocks_demotes_long_sentences_and_numeric_callouts() {
+        let input = "# This page provides a record of edits and changes made to this book since its initial publication.\n\n#### 14.3%↑\n\n# 1.7X↑";
+        let result = refine_heading_blocks(input);
+        assert!(!result.contains("# This page"));
+        assert!(!result.contains("#### 14.3%↑"));
+        assert!(!result.contains("# 1.7X↑"));
+    }
+
+    #[test]
+    fn refine_table_lines_repairs_tracked_caps_and_outcomes_row() {
+        let input = "|Competence Area|#1 T HE 3 R S : R ECYCLE -R EUSE -R EDUCE|\n|---|---|\n|Competence Statement Learning Outcomes|Details|";
+        let result = refine_table_lines(input);
+        assert!(result.contains("|Competence Area|#1 THE 3 RS: RECYCLE-REUSE-REDUCE|"));
+        assert!(result.contains("|Competence Statement|Details|"));
+        assert!(result.contains("|Learning Outcomes||"));
+    }
+
+    #[test]
+    fn refine_table_lines_leaves_ordinary_cells_unchanged() {
+        let input = "| Initials | A B |\n|---|---|";
+        assert_eq!(refine_table_lines(input), input);
     }
 }

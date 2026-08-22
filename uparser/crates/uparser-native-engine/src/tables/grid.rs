@@ -334,6 +334,27 @@ pub(crate) fn find_column_index(columns: &[f32], x: f32) -> Option<usize> {
         .map(|(idx, _)| idx)
 }
 
+/// Map a positioned text item to a column using its occupied horizontal span.
+///
+/// Long left-aligned headers can begin outside the normal anchor tolerance
+/// even though their bounding box unambiguously covers the intended data
+/// column. Prefer the span when it contains exactly one column anchor, then
+/// fall back to the legacy left-edge match for zero- or multi-anchor spans.
+pub(crate) fn find_item_column_index(columns: &[f32], item: &TextItem) -> Option<usize> {
+    let left_edge_column = find_column_index(columns, item.x);
+    let end_x = item.x + item.width;
+    let left = item.x.min(end_x) - 1.0;
+    let right = item.x.max(end_x) + 1.0;
+    let mut covered = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, x)| (*x >= left && *x <= right).then_some(index));
+    match (covered.next(), covered.next()) {
+        (Some(column), None) => Some(column),
+        _ => left_edge_column,
+    }
+}
+
 /// Find which row index a Y position belongs to
 pub(crate) fn find_row_index(rows: &[f32], y: f32) -> Option<usize> {
     let threshold = 15.0;
@@ -383,8 +404,17 @@ pub(crate) fn join_cell_items(items: &[&TextItem]) -> String {
             let is_sub_super = font_ratio < 0.85 && y_diff > 1.0;
             // Previous item was subscript/superscript (returning to normal size)
             let was_sub_super = reverse_font_ratio < 0.85 && y_diff > 1.0;
+            let previous_is_ordinal_suffix = was_sub_super
+                && matches!(
+                    prev_item.text.trim().to_ascii_lowercase().as_str(),
+                    "st" | "nd" | "rd" | "th"
+                )
+                && text.chars().next().is_some_and(char::is_alphabetic);
 
-            if prev_ends_with_hyphen
+            if previous_is_ordinal_suffix {
+                result.push(' ');
+                result.push_str(text);
+            } else if prev_ends_with_hyphen
                 || curr_is_hyphen
                 || curr_starts_with_hyphen
                 || is_sub_super
@@ -477,7 +507,7 @@ pub(crate) fn recover_header_row(
     let mut header_indices = Vec::new();
 
     for (idx, item) in header_items {
-        if let Some(col) = find_column_index(&table.columns, item.x) {
+        if let Some(col) = find_item_column_index(&table.columns, item) {
             let text = item.text.trim();
             if !text.is_empty() {
                 if !header_cells[col].is_empty() {
@@ -752,6 +782,45 @@ mod tests {
         let a = make_item("H", 100.0, 500.0, 12.0);
         let b = make_item("2", 110.0, 497.0, 8.0); // smaller font, Y offset
         assert_eq!(join_cell_items(&[&a, &b]), "H2");
+    }
+
+    #[test]
+    fn test_find_item_column_index_uses_unambiguous_text_span() {
+        let columns = vec![58.05, 147.53, 231.78, 366.50, 517.93];
+        let item = make_item("Recovery Rate", 102.71, 490.1, 9.0);
+
+        assert_eq!(find_column_index(&columns, item.x), None);
+        assert_eq!(find_item_column_index(&columns, &item), Some(1));
+    }
+
+    #[test]
+    fn test_find_item_column_index_span_corrects_misleading_left_edge() {
+        let columns = vec![58.05, 142.59, 224.95, 363.51, 518.54];
+        let item = make_item("Recovery Rate", 96.68, 300.88, 9.0);
+
+        assert_eq!(find_column_index(&columns, item.x), Some(0));
+        assert_eq!(find_item_column_index(&columns, &item), Some(1));
+    }
+
+    #[test]
+    fn test_find_item_column_index_rejects_multi_column_span() {
+        let columns = vec![100.0, 200.0, 300.0];
+        let mut item = make_item("Quarterly summary", 40.0, 500.0, 10.0);
+        item.width = 220.0;
+
+        assert_eq!(find_column_index(&columns, item.x), None);
+        assert_eq!(find_item_column_index(&columns, &item), None);
+    }
+
+    #[test]
+    fn test_join_cell_items_ordinal_superscript_keeps_following_word_space() {
+        let number = make_item("Achieved 1", 100.0, 500.0, 12.0);
+        let suffix = make_item("st", 150.0, 503.0, 8.0);
+        let word = make_item("place", 160.0, 500.0, 12.0);
+        assert_eq!(
+            join_cell_items(&[&number, &suffix, &word]),
+            "Achieved 1st place"
+        );
     }
 
     #[test]

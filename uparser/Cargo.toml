@@ -11,3 +11,9 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "UNLICENSED"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = "symbols"

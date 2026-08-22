@@ -510,6 +510,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn l1_maps_every_format_family_and_source_quality() {
+        for format in [
+            DocumentFormat::Ppt,
+            DocumentFormat::Pptx,
+            DocumentFormat::Odp,
+        ] {
+            let profile = profile_l1(format);
+            assert_eq!(profile.kind, DocumentKind::Slide);
+            assert_eq!(profile.genre.primary, DocumentGenre::Presentation);
+            assert_eq!(profile.source_quality, SourceQuality::Structured);
+        }
+        for format in [
+            DocumentFormat::Excel,
+            DocumentFormat::Csv,
+            DocumentFormat::Tsv,
+            DocumentFormat::Ods,
+        ] {
+            let profile = profile_l1(format);
+            assert_eq!(profile.kind, DocumentKind::Spreadsheet);
+            assert_eq!(profile.dominant_content, ContentMix::TableDense);
+        }
+        let epub = profile_l1(DocumentFormat::Epub);
+        assert_eq!(epub.kind, DocumentKind::Book);
+        assert_eq!(epub.dominant_content, ContentMix::TextDominant);
+        for format in [DocumentFormat::Png, DocumentFormat::Jpeg] {
+            assert_eq!(profile_l1(format).source_quality, SourceQuality::ImageOnly);
+        }
+    }
+
+    #[test]
+    fn keyword_genre_toc_and_numbered_clause_rules_are_deterministic() {
+        let resume = infer_genre(
+            DocumentFormat::Docx,
+            "Curriculum vitae: work experience and education",
+            DocumentGenre::Unknown,
+        );
+        assert_eq!(resume.primary, DocumentGenre::Resume);
+        assert_eq!(resume.evidence[0].source, EvidenceSource::NativeText);
+        assert!(resume.confidence >= 0.79);
+
+        let mixed = infer_genre(
+            DocumentFormat::Docx,
+            "contract agreement with financial statements",
+            DocumentGenre::Unknown,
+        );
+        assert_eq!(mixed.primary, DocumentGenre::Contract);
+        assert!(mixed.tags.contains(&DocumentGenre::FinancialReport));
+
+        let fallback = infer_genre(DocumentFormat::Epub, "plain prose", DocumentGenre::Book);
+        assert_eq!(fallback.primary, DocumentGenre::Book);
+        assert_eq!(fallback.evidence[0].source, EvidenceSource::Format);
+
+        assert!(detect_toc(
+            "Contents\n[One](#one)\n[Two](#two)\n[Three](#three)",
+            0
+        ));
+        assert!(detect_toc("Table of Contents\n# A\n# B\n# C", 3));
+        assert!(!detect_toc("Contents\nOnly one entry", 1));
+        assert!(starts_with_numbered_clause("1. Scope"));
+        assert!(starts_with_numbered_clause("2) Terms"));
+        assert!(!starts_with_numbered_clause("Scope 1.0"));
+    }
+
+    #[test]
+    fn legacy_kind_preserves_only_supported_compatibility_categories() {
+        assert_eq!(legacy_kind(DocumentGenre::Book), DocumentKind::Book);
+        assert_eq!(legacy_kind(DocumentGenre::Resume), DocumentKind::Resume);
+        assert_eq!(
+            legacy_kind(DocumentGenre::Presentation),
+            DocumentKind::Slide
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::Spreadsheet),
+            DocumentKind::Spreadsheet
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::AcademicPaper),
+            DocumentKind::AcademicPaper
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::FinancialReport),
+            DocumentKind::Report
+        );
+        assert_eq!(legacy_kind(DocumentGenre::Contract), DocumentKind::Unknown);
+    }
+
+    #[test]
     fn l1_pptx_is_slide() {
         let profile = profile_l1(DocumentFormat::Pptx);
         assert_eq!(profile.kind, DocumentKind::Slide);
@@ -547,6 +634,101 @@ mod tests {
     #[cfg(feature = "native")]
     mod l2_tests {
         use super::*;
+        use uparser_native_engine::{LayoutComplexity, PageOcrReasons, PdfProcessResult, PdfType};
+
+        fn result(
+            pdf_type: PdfType,
+            page_count: u32,
+            tables: Vec<u32>,
+            columns: Vec<u32>,
+            needs_ocr: Vec<u32>,
+            markdown: &str,
+        ) -> PdfProcessResult {
+            PdfProcessResult {
+                pdf_type,
+                markdown: Some(markdown.to_owned()),
+                page_count,
+                processing_time_ms: 1,
+                ocr_reasons_by_page: needs_ocr
+                    .iter()
+                    .map(|page| PageOcrReasons {
+                        page: *page,
+                        reasons: vec!["scanned".to_owned()],
+                    })
+                    .collect(),
+                pages_needing_ocr: needs_ocr,
+                title: None,
+                confidence: 0.9,
+                layout: LayoutComplexity {
+                    is_complex: !tables.is_empty() || !columns.is_empty(),
+                    pages_with_tables: tables,
+                    pages_with_columns: columns,
+                },
+                has_encoding_issues: false,
+                positioned_items: Vec::new(),
+            }
+        }
+
+        #[test]
+        fn l2_result_maps_pdf_types_and_structural_aggregates() {
+            let text = profile_l2_result(
+                &result(
+                    PdfType::TextBased,
+                    4,
+                    vec![],
+                    vec![],
+                    vec![],
+                    "# Report\n1. Scope",
+                ),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(text.source_quality, SourceQuality::NativeText);
+            assert_eq!(text.kind, DocumentKind::Report);
+            assert_eq!(text.dominant_content, ContentMix::TextDominant);
+            assert_eq!(text.structure.heading_depth, Some(1));
+            assert_eq!(text.page_profiles.len(), 4);
+
+            let scanned = profile_l2_result(
+                &result(PdfType::Scanned, 2, vec![], vec![], vec![1, 2], ""),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(scanned.source_quality, SourceQuality::Scanned);
+            assert_eq!(scanned.dominant_content, ContentMix::ImageDense);
+            assert_eq!(scanned.warnings.len(), 2);
+            assert_eq!(scanned.page_profiles[0].text_density, 0.0);
+            assert_eq!(scanned.page_profiles[0].image_density, 1.0);
+
+            let image = profile_l2_result(
+                &result(PdfType::ImageBased, 1, vec![], vec![], vec![1], ""),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(image.source_quality, SourceQuality::ImageOnly);
+
+            let table = profile_l2_result(
+                &result(PdfType::Mixed, 3, vec![1, 2], vec![], vec![3], ""),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(table.source_quality, SourceQuality::Mixed);
+            assert_eq!(table.dominant_content, ContentMix::TableDense);
+            assert!(table.page_profiles[0].has_table_region);
+
+            let resume = profile_l2_result(
+                &result(PdfType::Mixed, 2, vec![], vec![1], vec![2], ""),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(resume.kind, DocumentKind::Resume);
+            assert_eq!(resume.structure.multi_column_ratio, 0.5);
+        }
+
+        #[test]
+        fn empty_l2_result_falls_back_to_l1() {
+            let profile = profile_l2_result(
+                &result(PdfType::TextBased, 0, vec![], vec![], vec![], ""),
+                DocumentFormat::Pdf,
+            );
+            assert_eq!(profile.analysis_level, ProfileLevel::L1);
+            assert!(profile.page_profiles.is_empty());
+        }
 
         fn fixture_pdf_path() -> String {
             concat!(

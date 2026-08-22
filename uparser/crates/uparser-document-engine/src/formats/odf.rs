@@ -1026,11 +1026,12 @@ fn span(event: &BytesStart<'_>, name: &[u8]) -> usize {
 }
 
 fn build_table(
-    raw: TableBuilder,
+    mut raw: TableBuilder,
     options: &ParseOptions,
     expanded: &mut u64,
     warnings: &mut Vec<ParseWarning>,
 ) -> Result<Table, DocumentError> {
+    trim_trailing_empty_structure(&mut raw);
     let mut rows = Vec::new();
     for row in raw.rows {
         for _ in 0..row.repeat.max(1) {
@@ -1126,6 +1127,24 @@ fn build_table(
     })
 }
 
+fn trim_trailing_empty_structure(raw: &mut TableBuilder) {
+    for row in &mut raw.rows {
+        while row.cells.last().is_some_and(raw_cell_is_trailing_empty) {
+            row.cells.pop();
+        }
+    }
+    while raw.rows.last().is_some_and(|row| row.cells.is_empty()) {
+        raw.rows.pop();
+    }
+}
+
+fn raw_cell_is_trailing_empty(cell: &RawCell) -> bool {
+    !cell.covered
+        && cell.blocks.is_empty()
+        && cell.row_span == 1
+        && cell.column_span == 1
+}
+
 fn normalize_href(value: &str) -> String {
     value
         .trim_start_matches("./")
@@ -1137,5 +1156,84 @@ fn limit(limit_name: &'static str, value: impl std::fmt::Display) -> DocumentErr
     DocumentError::ResourceLimit {
         limit: limit_name,
         detail: format!("ODF content reached {value}"),
+    }
+}
+
+#[cfg(test)]
+mod table_trimming_tests {
+    use super::*;
+
+    fn cell(text: Option<&str>, repeat: usize) -> RawCell {
+        RawCell {
+            blocks: text.map(|value| vec![Block::paragraph(value)]).unwrap_or_default(),
+            repeat,
+            row_span: 1,
+            column_span: 1,
+            covered: false,
+        }
+    }
+
+    #[test]
+    fn trailing_empty_repeats_are_trimmed_but_internal_row_gap_is_preserved() {
+        let raw = TableBuilder {
+            rows: vec![
+                RawRow {
+                    cells: vec![cell(Some("top"), 1)],
+                    repeat: 1,
+                },
+                RawRow {
+                    cells: vec![cell(None, 1)],
+                    repeat: 120,
+                },
+                RawRow {
+                    cells: vec![cell(Some("row 122 after the gap"), 1)],
+                    repeat: 1,
+                },
+                RawRow {
+                    cells: vec![cell(None, 1)],
+                    repeat: 300,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut expanded = 0;
+        let mut warnings = Vec::new();
+
+        let table = build_table(
+            raw,
+            &ParseOptions::default(),
+            &mut expanded,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!((table.rows, table.columns), (122, 1));
+        let CellSlot::Origin(last) = &table.grid[121][0] else {
+            panic!("last used cell must remain an origin")
+        };
+        assert_eq!(last.blocks, vec![Block::paragraph("row 122 after the gap")]);
+    }
+
+    #[test]
+    fn trailing_cells_are_trimmed_but_internal_column_gap_is_preserved() {
+        let raw = TableBuilder {
+            rows: vec![RawRow {
+                cells: vec![cell(Some("left"), 1), cell(None, 1010), cell(Some("right"), 1), cell(None, 500)],
+                repeat: 1,
+            }],
+            ..Default::default()
+        };
+        let mut expanded = 0;
+        let mut warnings = Vec::new();
+
+        let table = build_table(
+            raw,
+            &ParseOptions::default(),
+            &mut expanded,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!((table.rows, table.columns), (1, 1012));
     }
 }

@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-22T13:24:03.605398+00:00",
+  "host": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "python": "3.13.15"
+  },
+  "methodology": {
+    "resource_class": "R0-native-text",
+    "cache": "engine result caches disabled where exposed",
+    "output": "markdown, no extracted assets",
+    "performance": "CLI end-to-end; no startup subtraction and no best-of-N"
+  },
+  "engines": [
+    {
+      "name": "uparser-native",
+      "repo": "uparser",
+      "commit": "3afa5842728cb9a4dc165964379d7a98ce533db7",
+      "describe": "v0.3.0-3-g3afa584-dirty",
+      "binary": "uparser\\target\\release\\uparser.exe",
+      "binary_sha256": "7c3c4ac53786ffc4e62656cbaf8587c0849e3159b88bdde859498958d31838fb",
+      "build": [
+        "cargo",
+        "build",
+        "--release",
+        "--features",
+        "native",
+        "-p",
+        "uparser-core",
+        "--bin",
+        "uparser"
+      ],
+      "license": "UNLICENSED",
+      "default_configuration": "unified runner in explicit native mode; Markdown with no assets or cache",
+      "suites": [
+        "pdf",
+        "office"
+      ]
+    },
+    {
+      "name": "liteparse-text",
+      "repo": "opensource\\liteparse",
+      "commit": "2fd644a9e10ceeee7379949a55fa77aaf26d4b9b",
+      "describe": "crates-v2.12.0",
+      "binary": "opensource\\liteparse\\target\\release\\lit.exe",
+      "binary_sha256": "7025664eb0921300462a15e49afa38958dd99f8370386a657ad0efd2296cf63d",
+      "build": [
+        "cargo",
+        "build",
+        "--release",
+        "--no-default-features",
+        "-p",
+        "liteparse",
+        "--bin",
+        "lit"
+      ],
+      "license": "Apache-2.0",
+      "default_configuration": "text-only Markdown; OCR and images disabled",
+      "suites": [
+        "pdf"
+      ]
+    },
+    {
+      "name": "pdf-inspector",
+      "repo": "opensource\\pdf-inspector",
+      "commit": "2543abe3715848589903754f30b5dca54f6b33a6",
+      "describe": "v1.14.2-2-g2543abe",
+      "binary": "opensource\\pdf-inspector\\target\\release\\pdf2md.exe",
+      "binary_sha256": "12d4b21033aec208acf41c0999565a868c9657c82228de9be1a61bf5cf156250",
+      "build": [
+        "cargo",
+        "build",
+        "--release",
+        "--bin",
+        "pdf2md"
+      ],
+      "license": "MIT",
+      "default_configuration": "raw Markdown",
+      "suites": [
+        "pdf"
+      ]
+    },
+    {
+      "name": "anydoc",
+      "repo": "opensource\\anydoc",
+      "commit": "e754e1d33a1a540ebc9226e36f11d3f401852c9e",
+      "describe": "v0.1.9",
+      "binary": "opensource\\anydoc\\target\\release\\examples\\convert.exe",
+      "binary_sha256": "71792f3f28dc0031d994809bff97c0f6431a6ae1a192093083c1d9adb3b79e1f",
+      "build": [
+        "cargo",
+        "build",
+        "--release",
+        "--example",
+        "convert"
+      ],
+      "license": "MIT",
+      "default_configuration": "Markdown conversion example",
+      "suites": [
+        "office"
+      ]
+    }
+  ]
+}

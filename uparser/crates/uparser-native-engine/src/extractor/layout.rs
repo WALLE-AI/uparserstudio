@@ -235,7 +235,8 @@ fn try_xy_cut_split(
 ) -> Option<Vec<ColumnRegion>> {
     const MIN_GAP: f32 = 15.0; // minimum gap to consider a split
     const MIN_ITEMS_MAJOR: usize = 10; // major column must have ≥10 items
-    const MIN_ITEMS_MINOR: usize = 3; // minor column (sidebar) must have ≥3
+    const MIN_ITEMS_MINOR: usize = 3;
+    const MIN_SPARSE_TITLE_ITEMS: usize = 2;
 
     let page_width = page_x_max - page_x_min;
     if page_width < 200.0 {
@@ -306,7 +307,7 @@ fn try_xy_cut_split(
         (right_count, left_count)
     };
 
-    if major < MIN_ITEMS_MAJOR || minor < MIN_ITEMS_MINOR {
+    if major < MIN_ITEMS_MAJOR || minor < MIN_SPARSE_TITLE_ITEMS {
         return None;
     }
 
@@ -339,8 +340,51 @@ fn try_xy_cut_split(
     let overlap = (overlap_max - overlap_min).max(0.0);
     let y_range = (l_y_max.max(r_y_max) - l_y_min.min(r_y_min)).max(1.0);
 
-    if overlap / y_range < 0.20 {
-        return None;
+    // A normal secondary column needs at least three blocks and meaningful
+    // vertical overlap.  Two-block columns are accepted only when they have
+    // the stronger sparse-title-rail evidence below; otherwise short table
+    // columns can be mistaken for independent reading flows.
+    if minor < MIN_ITEMS_MINOR || overlap / y_range < 0.20 {
+        let (minor_items, major_items, minor_is_left) = if left_count <= right_count {
+            (&left_items, &right_items, true)
+        } else {
+            (&right_items, &left_items, false)
+        };
+        let mut major_sizes: Vec<f32> = major_items
+            .iter()
+            .map(|item| item.font_size)
+            .filter(|size| size.is_finite() && *size > 0.0)
+            .collect();
+        major_sizes.sort_by(|a, b| a.total_cmp(b));
+        let body_size = major_sizes
+            .get(major_sizes.len() / 2)
+            .copied()
+            .unwrap_or(0.0);
+        let body_top = major_items
+            .iter()
+            .map(|item| item.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let title_count = minor_items
+            .iter()
+            .filter(|item| {
+                item.font_size >= body_size * 2.0
+                    && item.text.split_whitespace().count() <= 5
+                    && item.text.trim().chars().count() <= 40
+            })
+            .count();
+        let sparse_title_rail = minor_is_left
+            && body_size > 0.0
+            && title_count >= 2
+            && major_items.len() >= 15
+            && minor_items.iter().all(|item| {
+                let is_title = item.font_size >= body_size * 2.0
+                    && item.text.split_whitespace().count() <= 5
+                    && item.text.trim().chars().count() <= 40;
+                is_title || item.y > body_top + 30.0
+            });
+        if !sparse_title_rail {
+            return None;
+        }
     }
 
     debug!(
@@ -1685,6 +1729,64 @@ pub(crate) fn is_newspaper_layout(
     let max_lines = per_column_lines.iter().map(|c| c.len()).max().unwrap_or(0);
 
     if min_lines < 5 {
+        // Editorial layouts sometimes reserve a sparse left rail for a
+        // multi-line section title while the right column contains the full
+        // article. Require every rail line to be short and much larger than
+        // the body so ordinary labels and borderless tables remain tabular.
+        if columns.len() == 2 && (2..=4).contains(&min_lines) && max_lines >= 15 {
+            let sparse_idx = if per_column_lines[0].len() <= per_column_lines[1].len() {
+                0
+            } else {
+                1
+            };
+            let body_idx = 1 - sparse_idx;
+            if sparse_idx == 0 {
+                let mut body_sizes: Vec<f32> = per_column_lines[body_idx]
+                    .iter()
+                    .flat_map(|line| line.items.iter().map(|item| item.font_size))
+                    .filter(|size| size.is_finite() && *size > 0.0)
+                    .collect();
+                body_sizes.sort_by(|a, b| a.total_cmp(b));
+                let body_size = body_sizes.get(body_sizes.len() / 2).copied().unwrap_or(0.0);
+                let body_top = per_column_lines[body_idx]
+                    .iter()
+                    .map(|line| line.y)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let title_count = per_column_lines[sparse_idx]
+                    .iter()
+                    .filter(|line| {
+                        let text = line.text();
+                        let font_size = line
+                            .items
+                            .iter()
+                            .map(|item| item.font_size)
+                            .fold(0.0, f32::max);
+                        !text.trim().is_empty()
+                            && text.split_whitespace().count() <= 5
+                            && text.trim().chars().count() <= 40
+                            && font_size >= body_size * 2.0
+                    })
+                    .count();
+                let title_rail = body_size > 0.0
+                    && title_count >= 2
+                    && per_column_lines[sparse_idx].iter().all(|line| {
+                        let text = line.text();
+                        let font_size = line
+                            .items
+                            .iter()
+                            .map(|item| item.font_size)
+                            .fold(0.0, f32::max);
+                        let is_title = !text.trim().is_empty()
+                            && text.split_whitespace().count() <= 5
+                            && text.trim().chars().count() <= 40
+                            && font_size >= body_size * 2.0;
+                        is_title || line.y > body_top + 30.0
+                    });
+                if title_rail {
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -2340,6 +2442,26 @@ fn group_single_column(items: Vec<TextItem>, adaptive_threshold: f32) -> Vec<Tex
             if y_diff >= y_tolerance {
                 return false;
             }
+            // Drop caps often share the baseline of the second or third body
+            // line. Keep the oversized initial separate so markdown
+            // preprocessing can attach it to the actual paragraph start.
+            if let Some(last_item) = last_line.items.last() {
+                let (large, small) = if last_item.font_size >= item.font_size {
+                    (last_item, &item)
+                } else {
+                    (&item, last_item)
+                };
+                let large_text = large.text.trim();
+                let is_drop_cap = large_text.chars().count() <= 2
+                    && large_text
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_uppercase())
+                    && large.font_size >= small.font_size * 2.5;
+                if is_drop_cap {
+                    return false;
+                }
+            }
             // Check if this looks like a new line despite similar Y:
             // If items are at the same X position (left margin) but different Y,
             // they're vertically stacked lines, not the same line
@@ -2368,6 +2490,19 @@ fn group_single_column(items: Vec<TextItem>, adaptive_threshold: f32) -> Vec<Tex
             // start with digits) stay joined.
             if let Some(last_item) = last_line.items.last() {
                 let gap = item.x - (last_item.x + last_item.width);
+                let starts_lowercase_prose = item
+                    .text
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_lowercase())
+                    && item.text.split_whitespace().count() >= 2;
+                let heading_to_body_column_break = last_item.font_size >= item.font_size * 2.0
+                    && gap > (item.font_size * 1.5).max(15.0)
+                    && starts_lowercase_prose;
+                if heading_to_body_column_break {
+                    return false;
+                }
                 if gap > (item.font_size.max(last_item.font_size) * 3.0).max(30.0)
                     && item
                         .text
@@ -2463,6 +2598,51 @@ mod tests {
             item_type: ItemType::Text,
             mcid: None,
         }
+    }
+
+    #[test]
+    fn oversized_initial_does_not_absorb_body_text_on_same_baseline() {
+        let mut drop_cap = make_item(1, 65.0, 423.9, "T");
+        drop_cap.font_size = 53.0;
+        drop_cap.height = 53.0;
+        let body = make_item(1, 98.0, 423.9, "of those stories");
+
+        let lines = group_single_column(vec![drop_cap, body], 0.10);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text(), "T");
+        assert_eq!(lines[1].text(), "of those stories");
+    }
+
+    #[test]
+    fn large_heading_does_not_absorb_neighboring_column_body() {
+        let mut heading = make_item(1, 99.0, 718.1, "Executive");
+        heading.font_size = 34.0;
+        heading.height = 34.0;
+        heading.width = 155.0;
+        heading.is_bold = true;
+        let body = make_item(1, 339.0, 718.1, "ndia suffers from regulatory");
+
+        let lines = group_single_column(vec![heading, body], 0.10);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text(), "Executive");
+        assert_eq!(lines[1].text(), "ndia suffers from regulatory");
+    }
+
+    #[test]
+    fn adjacent_mixed_size_runs_remain_on_the_same_line() {
+        let mut label = make_item(1, 99.0, 718.1, "Important");
+        label.font_size = 24.0;
+        label.height = 24.0;
+        label.width = 105.0;
+        label.is_bold = true;
+        let value = make_item(1, 210.0, 718.1, "details follow here");
+
+        let lines = group_single_column(vec![label, value], 0.10);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text(), "Important details follow here");
     }
 
     /// Generate dense items in a horizontal zone across many Y positions.
@@ -2735,6 +2915,48 @@ mod tests {
             !is_newspaper_layout(&[col1, col2], &cols),
             "Equal-width equal-row columns should NOT be newspaper (borderless table)"
         );
+    }
+
+    #[test]
+    fn sparse_large_title_rail_is_an_independent_flow() {
+        let mut title = make_lines(2, 99.0);
+        title[0].items[0].text = "Executive".to_string();
+        title[1].items[0].text = "Summary".to_string();
+        for line in &mut title {
+            line.items[0].font_size = 34.0;
+            line.items[0].height = 34.0;
+        }
+        let body = make_lines(40, 307.0);
+        let cols = vec![
+            ColumnRegion {
+                x_min: 99.0,
+                x_max: 270.0,
+            },
+            ColumnRegion {
+                x_min: 307.0,
+                x_max: 560.0,
+            },
+        ];
+
+        assert!(is_newspaper_layout(&[title, body], &cols));
+    }
+
+    #[test]
+    fn sparse_normal_size_labels_are_not_a_title_rail() {
+        let labels = make_lines(3, 99.0);
+        let body = make_lines(40, 307.0);
+        let cols = vec![
+            ColumnRegion {
+                x_min: 99.0,
+                x_max: 270.0,
+            },
+            ColumnRegion {
+                x_min: 307.0,
+                x_max: 560.0,
+            },
+        ];
+
+        assert!(!is_newspaper_layout(&[labels, body], &cols));
     }
 
     #[test]

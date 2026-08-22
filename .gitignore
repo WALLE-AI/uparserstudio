@@ -26,6 +26,12 @@ benchmark
 benchmark/*
 !benchmark/evaluate_architecture_v2.py
 !benchmark/run_format_matrix.py
+!benchmark/compare_competitors.py
+!benchmark/tests/
+!benchmark/tests/**
+!benchmark/baselines/
+benchmark/baselines/*
+!benchmark/baselines/competitor_lock.json
 benchmark/format_matrix/
 !benchmark/format_matrix/**
 !benchmark/results/
@@ -34,5 +40,8 @@ benchmark/results/*
 !benchmark/results/architecture_v2_bench_a_20260821.json
 !benchmark/results/architecture_v2_omnidoc_metric_20260821.json
 !benchmark/results/architecture_v2_omnidoc_summary_20260821.json
+!benchmark/results/gate_GC.json
+!benchmark/results/coverage_v2_current.json
 output
 data
+tools

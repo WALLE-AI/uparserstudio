@@ -6,8 +6,8 @@ use log::debug;
 
 use super::financial::try_split_financial_item;
 use super::grid::{
-    find_column_boundaries, find_column_index, find_row_boundaries, find_row_index,
-    join_cell_items, recover_header_row,
+    find_column_boundaries, find_column_index, find_item_column_index, find_row_boundaries,
+    find_row_index, join_cell_items, recover_header_row,
 };
 use super::{Table, TableDetectionMode};
 
@@ -288,10 +288,19 @@ fn find_table_regions(items: &[(usize, &TextItem)]) -> Vec<(f32, f32)> {
     let mut y_positions: Vec<f32> = items.iter().map(|(_, i)| i.y).collect();
     y_positions.sort_by(|a, b| a.total_cmp(b));
 
-    // Find clusters of Y positions (table regions)
+    // Find clusters of Y positions (table regions). Wrapped rows may be much
+    // taller than their internal line spacing, so derive the gap from unique
+    // baselines while retaining a conservative upper bound.
     let mut regions = Vec::new();
-    let gap_threshold = 30.0; // Smaller gap threshold to separate header from content
-
+    let mut baselines = y_positions.clone();
+    baselines.dedup_by(|a, b| (*a - *b).abs() < 5.0);
+    let gap_threshold = if baselines.len() >= 3 {
+        let mut gaps: Vec<f32> = baselines.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        gaps.sort_by(|a, b| a.total_cmp(b));
+        (gaps[gaps.len() / 2] * 4.0).clamp(30.0, 72.0)
+    } else {
+        30.0
+    };
     let mut region_start = y_positions[0];
     let mut region_end = y_positions[0];
     let mut region_count = 1;
@@ -379,8 +388,9 @@ fn find_table_regions_strict(items: &[(usize, &TextItem)]) -> Vec<(f32, f32, f32
     }
 
     // Step 3: Find contiguous runs of qualifying rows.
-    // Use adaptive gap: median spacing × 3 (handles wrapped cells where
-    // qualifying rows are spaced further apart), with a floor of 25pt.
+    // Use the conservative page-wide spacing threshold first. Tall wrapped
+    // rows are joined below only when the column anchors on both sides of a
+    // larger gap agree.
     qualifying_rows.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let max_gap = if qualifying_rows.len() >= 3 {
@@ -412,6 +422,30 @@ fn find_table_regions_strict(items: &[(usize, &TextItem)]) -> Vec<(f32, f32, f32
     if current_region.len() >= 3 {
         candidate_regions.push(current_region);
     }
+
+    // A wrapped cell can create a 50-70pt gap inside a real table. Merge such
+    // segments only when their boundary rows expose the same fixed columns;
+    // prose fragments have drifting X positions and remain separate.
+    let mut merged_regions: Vec<Vec<&(f32, Vec<f32>)>> = Vec::new();
+    for region in candidate_regions {
+        let should_merge = merged_regions.last().is_some_and(|previous| {
+            let left = previous.last().unwrap();
+            let right = region.first().unwrap();
+            let gap = right.0 - left.0;
+            let matches = left
+                .1
+                .iter()
+                .filter(|&&x| right.1.iter().any(|&other| (x - other).abs() < 10.0))
+                .count();
+            gap <= 72.0 && left.1.len() == right.1.len() && matches == left.1.len()
+        });
+        if should_merge {
+            merged_regions.last_mut().unwrap().extend(region);
+        } else {
+            merged_regions.push(region);
+        }
+    }
+    let candidate_regions = merged_regions;
 
     // Step 4: Cross-row column alignment check per region
     // Real tables have consistent column X positions across rows (high pairwise score).
@@ -530,10 +564,24 @@ fn detect_table_in_region(items: &[(usize, &TextItem)], mode: TableDetectionMode
     let mut cell_items: Vec<Vec<Vec<&TextItem>>> =
         vec![vec![Vec::new(); columns.len()]; rows.len()];
     let mut item_indices = Vec::new();
+    let body_items: Vec<&TextItem> = items
+        .iter()
+        .filter_map(|(_, item)| {
+            find_row_index(&rows, item.y)
+                .is_some_and(|row| row > 0)
+                .then_some(*item)
+        })
+        .collect();
+    let numeric_body_items = body_items
+        .iter()
+        .filter(|item| looks_like_numeric_table_item(&item.text))
+        .count();
+    let allow_header_span_alignment =
+        body_items.len() >= 4 && numeric_body_items * 2 >= body_items.len();
 
     for (idx, item) in items {
-        let col = find_column_index(&columns, item.x);
         let row = find_row_index(&rows, item.y);
+        let col = find_table_item_column(&columns, item, row, allow_header_span_alignment);
 
         if let (Some(col), Some(row)) = (col, row) {
             cell_items[row][col].push(item);
@@ -690,6 +738,32 @@ fn detect_table_in_region(items: &[(usize, &TextItem)], mode: TableDetectionMode
     );
 
     Some(Table::new(columns, rows, cells, item_indices))
+}
+
+fn find_table_item_column(
+    columns: &[f32],
+    item: &TextItem,
+    row: Option<usize>,
+    allow_header_span_alignment: bool,
+) -> Option<usize> {
+    if row == Some(0) && allow_header_span_alignment {
+        find_item_column_index(columns, item)
+    } else {
+        find_column_index(columns, item.x)
+    }
+}
+
+fn looks_like_numeric_table_item(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty()
+        && text.chars().any(|character| character.is_ascii_digit())
+        && text.chars().all(|character| {
+            character.is_ascii_digit()
+                || matches!(
+                    character,
+                    '.' | ',' | '-' | '+' | '%' | '$' | '(' | ')' | ' ' | '/' | ':'
+                )
+        })
 }
 
 /// Check if this looks like a key-value pair layout rather than a table
@@ -1646,6 +1720,96 @@ fn try_add_label_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ItemType;
+
+    fn region_item(x: f32, y: f32) -> TextItem {
+        TextItem {
+            text: "cell value".to_string(),
+            x,
+            y,
+            width: 40.0,
+            height: 11.0,
+            font: "Helvetica".to_string(),
+            font_size: 11.0,
+            page: 1,
+            is_bold: false,
+            is_italic: false,
+            is_underline: false,
+            is_strikeout: false,
+            item_type: ItemType::Text,
+            mcid: None,
+        }
+    }
+
+    fn strict_region_inputs(row_ys: &[f32]) -> Vec<TextItem> {
+        row_ys
+            .iter()
+            .flat_map(|&y| [50.0, 140.0, 400.0, 670.0].map(|x| region_item(x, y)))
+            .collect()
+    }
+
+    #[test]
+    fn header_span_alignment_does_not_reassign_data_rows() {
+        let columns = vec![58.05, 142.59, 224.95, 363.51, 518.54];
+        let mut item = region_item(96.68, 300.88);
+        item.text = "Recovery Rate".into();
+        item.width = 69.0;
+
+        assert_eq!(
+            find_table_item_column(&columns, &item, Some(0), true),
+            Some(1)
+        );
+        assert_eq!(
+            find_table_item_column(&columns, &item, Some(0), false),
+            Some(0)
+        );
+        assert_eq!(
+            find_table_item_column(&columns, &item, Some(3), true),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn numeric_table_item_requires_an_entire_numeric_value() {
+        assert!(looks_like_numeric_table_item("$100,000"));
+        assert!(looks_like_numeric_table_item("11.52%"));
+        assert!(!looks_like_numeric_table_item("46% of respondents"));
+        assert!(!looks_like_numeric_table_item("Recovery Rate"));
+    }
+
+    #[test]
+    fn strict_regions_keep_tall_wrapped_table_rows_together() {
+        let items = strict_region_inputs(&[
+            60.0, 77.0, 93.0, 110.0, 126.0, 143.0, 203.0, 220.0, 236.0, 252.0, 305.0, 321.0, 338.0,
+            375.0,
+        ]);
+        let indexed: Vec<_> = items.iter().enumerate().collect();
+        assert_eq!(find_table_regions_strict(&indexed).len(), 1);
+    }
+
+    #[test]
+    fn strict_regions_still_separate_distant_tables() {
+        let items = strict_region_inputs(&[100.0, 117.0, 134.0, 240.0, 257.0, 274.0]);
+        let indexed: Vec<_> = items.iter().enumerate().collect();
+        assert_eq!(find_table_regions_strict(&indexed).len(), 2);
+    }
+
+    #[test]
+    fn small_font_regions_keep_tall_wrapped_rows_together() {
+        let items = strict_region_inputs(&[
+            60.0, 77.0, 93.0, 110.0, 126.0, 143.0, 203.0, 220.0, 236.0, 252.0, 305.0, 321.0, 338.0,
+            375.0,
+        ]);
+        let indexed: Vec<_> = items.iter().enumerate().collect();
+        assert_eq!(find_table_regions(&indexed).len(), 1);
+    }
+
+    #[test]
+    fn small_font_regions_still_separate_distant_tables() {
+        let items = strict_region_inputs(&[100.0, 117.0, 134.0, 240.0, 257.0, 274.0]);
+        let indexed: Vec<_> = items.iter().enumerate().collect();
+        assert_eq!(find_table_regions(&indexed).len(), 2);
+    }
 
     #[test]
     fn is_table_of_contents_rejects_toc() {

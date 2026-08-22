@@ -17,7 +17,7 @@ use super::classify::{
 use super::heading::classify_heading_sequences;
 use super::postprocess::clean_markdown;
 use super::preprocess::{merge_drop_caps, merge_heading_lines};
-use super::{item_is_in_chart_region, MarkdownOptions, CHART_SEPARATOR_PAD};
+use super::{CHART_SEPARATOR_PAD, MarkdownOptions, item_is_in_chart_region};
 
 /// Logical stream geometry for a page where one full-width chart separates
 /// two prose columns. Positioned non-text blocks use this same ordering so a
@@ -328,6 +328,71 @@ fn starts_with_section_number(t: &str) -> bool {
     groups >= 2
         && rest.starts_with(char::is_whitespace)
         && rest.trim_start().starts_with(|c: char| c.is_alphabetic())
+}
+
+fn is_numbered_uppercase_cover(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some((number, title)) = trimmed.split_once(". ") else {
+        return false;
+    };
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let letters: Vec<char> = title.chars().filter(|c| c.is_alphabetic()).collect();
+    (8..=120).contains(&title.chars().count())
+        && !letters.is_empty()
+        && letters.iter().all(|c| !c.is_lowercase())
+}
+
+fn is_offer_cover_heading(lines: &[TextLine], line_idx: usize, first_idx: usize) -> bool {
+    if line_idx != first_idx + 1 {
+        return false;
+    }
+    let label = lines[first_idx].text();
+    let label = label.trim();
+    if label.is_empty() || label.split_whitespace().count() > 4 || label.ends_with(['.', ':']) {
+        return false;
+    }
+    let text = lines[line_idx].text();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if !(6..=28).contains(&words.len()) {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    [" offers ", " provides ", " presents ", " introduces "]
+        .iter()
+        .any(|verb| lower.contains(verb))
+}
+
+fn is_visual_page_furniture(
+    lines: &[TextLine],
+    line_idx: usize,
+    first_idx: usize,
+    last_idx: usize,
+) -> bool {
+    let line = &lines[line_idx];
+    let text = line.text();
+    let trimmed = text.trim();
+    let at_edge = line_idx == first_idx || line_idx == last_idx;
+    if at_edge {
+        let token = trimmed.split_whitespace().next().unwrap_or_default();
+        if token.chars().all(|c| c.is_ascii_digit())
+            && token.parse::<u32>().is_ok_and(|number| number >= 10)
+            && trimmed.split_whitespace().count() >= 3
+        {
+            return true;
+        }
+    }
+    if line_idx == first_idx
+        && line.items.iter().all(|item| item.is_underline)
+        && trimmed.split_whitespace().count() >= 3
+    {
+        let upper = trimmed.to_ascii_uppercase();
+        return ["COLLEGE", "UNIVERSITY", "SCHOOL", "INSTITUTE"]
+            .iter()
+            .any(|marker| upper.contains(marker));
+    }
+    false
 }
 
 fn merge_wrapped_bold_heading_groups(
@@ -763,6 +828,13 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
 
     // Detect struct heading levels that are overused (body text mistagged as headings)
     let overused_heading_levels = detect_overused_struct_heading_levels(&lines, struct_roles);
+    let mut page_line_bounds: HashMap<u32, (usize, usize)> = HashMap::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        page_line_bounds
+            .entry(line.page)
+            .and_modify(|bounds| bounds.1 = line_idx)
+            .or_insert((line_idx, line_idx));
+    }
 
     let mut output = String::new();
     let mut current_page = 0u32;
@@ -775,6 +847,7 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
     let mut prev_had_dot_leaders = false;
     let mut paragraph_in_wrapped_bold_run = false;
     let mut toc_suppress_page: Option<u32> = None;
+    let mut wrapped_caption: Option<(u32, f32)> = None;
     let mut inserted_tables: HashSet<(u32, usize)> = HashSet::new();
     let mut inserted_images: HashSet<(u32, usize)> = HashSet::new();
 
@@ -949,6 +1022,22 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             in_code_block = false;
         }
 
+        let continues_caption = wrapped_caption.take().is_some_and(|(page, previous_y)| {
+            page == line.page
+                && (previous_y - line.y).abs() <= para_threshold * 2.0
+                && crate::markdown::analysis::line_is_mostly_bold(line)
+        });
+        if continues_caption {
+            if in_paragraph {
+                output.push_str("\n\n");
+                in_paragraph = false;
+                paragraph_in_wrapped_bold_run = false;
+            }
+            output.push_str(trimmed);
+            output.push_str("\n\n");
+            continue;
+        }
+
         if struct_role
             .as_ref()
             .is_some_and(|r| matches!(r, StructRole::Caption))
@@ -961,6 +1050,11 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             }
             output.push_str(trimmed);
             output.push_str("\n\n");
+            if plain_trimmed.split_whitespace().count() >= 5
+                && !plain_trimmed.ends_with(['.', ':', ';'])
+            {
+                wrapped_caption = Some((line.page, line.y));
+            }
             continue;
         }
 
@@ -997,7 +1091,16 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
         let non_heading_role = struct_role
             .as_ref()
             .is_some_and(StructRole::is_non_heading_content);
-        let heuristic_heading = if options.detect_headers
+        let (page_first_idx, page_last_idx) = page_line_bounds
+            .get(&line.page)
+            .copied()
+            .unwrap_or((line_idx, line_idx));
+        let cover_heading = options.detect_headers
+            && (is_numbered_uppercase_cover(plain_trimmed)
+                || is_offer_cover_heading(&lines, line_idx, page_first_idx));
+        let heuristic_heading = if cover_heading {
+            Some(1)
+        } else if options.detect_headers
             && !non_heading_role
             && !is_code_line
             && !looks_like_list_continuation
@@ -1068,6 +1171,9 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
         } else {
             None
         };
+
+        let heuristic_heading = heuristic_heading
+            .filter(|_| !is_visual_page_furniture(&lines, line_idx, page_first_idx, page_last_idx));
 
         if let Some(level) = struct_heading.or(heuristic_heading) {
             if in_paragraph {
@@ -1569,6 +1675,41 @@ mod tests {
         let mut item = make_item(text, page, None);
         item.y = y;
         make_line(vec![item])
+    }
+
+    #[test]
+    fn cover_heading_rules_require_strong_text_evidence() {
+        assert!(is_numbered_uppercase_cover(
+            "6. ECO CIRCLE COMPETENCE FRAMEWORK"
+        ));
+        assert!(!is_numbered_uppercase_cover("6. Ordinary list item"));
+
+        let lines = vec![
+            line_at("AI Pack", 1, 700.0),
+            line_at(
+                "Upstage offers three packs that process unstructured business data",
+                1,
+                680.0,
+            ),
+        ];
+        assert!(is_offer_cover_heading(&lines, 1, 0));
+        assert!(!is_offer_cover_heading(&lines, 0, 0));
+    }
+
+    #[test]
+    fn page_furniture_rule_preserves_numbered_cover_titles() {
+        let mut institution = make_item("MOHAVE COMMUNITY COLLEGE BIO181", 1, None);
+        institution.is_underline = true;
+        let lines = vec![
+            make_line(vec![institution]),
+            line_at("Body paragraph", 1, 680.0),
+            line_at("76 Running publication title", 1, 20.0),
+        ];
+        assert!(is_visual_page_furniture(&lines, 0, 0, 2));
+        assert!(is_visual_page_furniture(&lines, 2, 0, 2));
+
+        let cover = vec![line_at("6. ECO CIRCLE COMPETENCE FRAMEWORK", 1, 700.0)];
+        assert!(!is_visual_page_furniture(&cover, 0, 0, 0));
     }
 
     #[test]

@@ -5,8 +5,8 @@ use crate::ooxml::{
 use crate::package::Package;
 use crate::{
     AssetId, Block, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentError,
-    DocumentFormat, DocumentUnit, Inline, List, ListItem, ListMarker, Note, NoteKind, ParseOptions,
-    ParseWarning, Table, TableKind, UnitKind, WarningCode,
+    DocumentFormat, DocumentUnit, Inline, LinkTarget, List, ListItem, ListMarker, Note, NoteKind,
+    ParseOptions, ParseWarning, Table, TableKind, UnitKind, WarningCode,
 };
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -24,6 +24,11 @@ pub(crate) fn parse(
     let mut document = CanonicalDocument::new(DocumentFormat::Pptx);
     document.metadata.variant = Some("pptx".to_owned());
     let slide_names = ordered_slide_parts(&mut package, options, &mut document.warnings)?;
+    let slide_anchors: HashMap<_, _> = slide_names
+        .iter()
+        .enumerate()
+        .map(|(index, part)| (part.clone(), format!("slide-{}", index + 1)))
+        .collect();
 
     for (index, name) in slide_names.into_iter().enumerate() {
         let xml = package.read_required(&name)?;
@@ -36,7 +41,15 @@ pub(crate) fn parse(
             &mut document.assets,
             &mut document.warnings,
         )?;
-        let blocks = parse_slide_xml(&xml, &name, options, &image_ids, &mut document.warnings)?;
+        let blocks = parse_slide_xml(
+            &xml,
+            &name,
+            options,
+            &image_ids,
+            &relationships,
+            &slide_anchors,
+            &mut document.warnings,
+        )?;
         let label = blocks.iter().find_map(|block| match block {
             Block::Heading { content, .. } => inline_text(content),
             _ => None,
@@ -64,6 +77,8 @@ pub(crate) fn parse(
                 &note_name,
                 options,
                 &HashMap::new(),
+                &HashMap::new(),
+                &slide_anchors,
                 &mut document.warnings,
             )?
             .into_iter()
@@ -191,7 +206,7 @@ struct PictureState {
 
 #[derive(Default)]
 struct Paragraph {
-    text: String,
+    content: Vec<Inline>,
     listed: bool,
     level: u8,
 }
@@ -217,6 +232,8 @@ fn parse_slide_xml(
     part: &str,
     options: &ParseOptions,
     image_ids: &HashMap<String, AssetId>,
+    relationships: &Relationships,
+    slide_anchors: &HashMap<String, String>,
     warnings: &mut Vec<ParseWarning>,
 ) -> Result<Vec<Block>, DocumentError> {
     let mut reader = Reader::from_reader(xml);
@@ -226,6 +243,7 @@ fn parse_slide_xml(
     let mut picture: Option<PictureState> = None;
     let mut table: Option<RawTable> = None;
     let mut paragraph: Option<Paragraph> = None;
+    let mut run_link: Option<LinkTarget> = None;
     let mut in_text = false;
     let mut nodes = 0usize;
     let mut depth = 0usize;
@@ -245,7 +263,12 @@ fn parse_slide_xml(
                         table.as_mut().unwrap().cell = Some(raw_cell(&event));
                     }
                     b"p" => paragraph = Some(Paragraph::default()),
+                    b"r" | b"fld" => run_link = None,
                     b"t" => in_text = true,
+                    b"hlinkClick" => {
+                        run_link =
+                            slide_link_target(&event, part, relationships, slide_anchors, warnings)
+                    }
                     b"pPr" => update_paragraph_properties(&event, &mut paragraph),
                     b"ph" => mark_title(&event, &mut shape),
                     b"cNvPr" => update_picture_alt(&event, &mut picture),
@@ -265,8 +288,12 @@ fn parse_slide_xml(
                 }
                 b"br" => {
                     if let Some(paragraph) = paragraph.as_mut() {
-                        paragraph.text.push('\n');
+                        paragraph.content.push(Inline::LineBreak);
                     }
+                }
+                b"hlinkClick" => {
+                    run_link =
+                        slide_link_target(&event, part, relationships, slide_anchors, warnings)
                 }
                 b"cNvPr" => update_picture_alt(&event, &mut picture),
                 b"blip" => update_picture_asset(&event, image_ids, &mut picture, warnings, part),
@@ -277,20 +304,30 @@ fn parse_slide_xml(
                     .unescape()
                     .map_err(|error| malformed_part(part, error))?;
                 if let Some(paragraph) = paragraph.as_mut() {
-                    paragraph.text.push_str(&value);
+                    let text = Inline::text(value.into_owned());
+                    paragraph.content.push(match run_link.clone() {
+                        Some(target) => Inline::Link {
+                            target,
+                            content: vec![text],
+                        },
+                        None => text,
+                    });
                 }
             }
             Ok(Event::End(event)) => {
                 depth = depth.saturating_sub(1);
                 match event.local_name().as_ref() {
                     b"t" => in_text = false,
+                    b"r" | b"fld" => run_link = None,
                     b"p" => {
                         if let Some(paragraph) = paragraph.take()
-                            && !paragraph.text.trim().is_empty()
+                            && !paragraph.content.is_empty()
                         {
                             if let Some(cell) = table.as_mut().and_then(|table| table.cell.as_mut())
                             {
-                                cell.blocks.push(Block::paragraph(paragraph.text));
+                                cell.blocks.push(Block::Paragraph {
+                                    content: paragraph.content,
+                                });
                             } else if let Some(shape) = shape.as_mut() {
                                 shape.paragraphs.push(paragraph);
                             }
@@ -499,20 +536,22 @@ fn append_shape(output: &mut Vec<Block>, shape: ShapeState) {
         if shape.title && index == 0 {
             output.push(Block::Heading {
                 level: 1,
-                content: vec![Inline::text(paragraph.text)],
+                content: paragraph.content,
             });
         } else if paragraph.listed {
-            append_list_item(output, paragraph.text, paragraph.level);
+            append_list_item(output, paragraph.content, paragraph.level);
         } else {
-            output.push(Block::paragraph(paragraph.text));
+            output.push(Block::Paragraph {
+                content: paragraph.content,
+            });
         }
     }
 }
 
-fn append_list_item(output: &mut Vec<Block>, text: String, _level: u8) {
+fn append_list_item(output: &mut Vec<Block>, content: Vec<Inline>, _level: u8) {
     if let Some(Block::List { list }) = output.last_mut() {
         list.items.push(ListItem {
-            blocks: vec![Block::paragraph(text)],
+            blocks: vec![Block::Paragraph { content }],
         });
     } else {
         output.push(Block::List {
@@ -520,11 +559,41 @@ fn append_list_item(output: &mut Vec<Block>, text: String, _level: u8) {
                 marker: ListMarker::Bullet,
                 start: None,
                 items: vec![ListItem {
-                    blocks: vec![Block::paragraph(text)],
+                    blocks: vec![Block::Paragraph { content }],
                 }],
             },
         });
     }
+}
+
+fn slide_link_target(
+    event: &BytesStart<'_>,
+    part: &str,
+    relationships: &Relationships,
+    slide_anchors: &HashMap<String, String>,
+    warnings: &mut Vec<ParseWarning>,
+) -> Option<LinkTarget> {
+    let id = relationship_id(event)?;
+    let Some(relationship) = relationships.get(&id) else {
+        warnings.push(ParseWarning {
+            code: WarningCode::BrokenRelationship,
+            part: Some(part.to_owned()),
+            message: format!("hyperlink relationship {id} is missing"),
+        });
+        return None;
+    };
+    if relationship.external {
+        return Some(LinkTarget::External(relationship.target.clone()));
+    }
+    let Some(target) = resolve_internal_target(part, &relationship.target) else {
+        warnings.push(ParseWarning {
+            code: WarningCode::BrokenRelationship,
+            part: Some(part.to_owned()),
+            message: format!("hyperlink relationship {id} escapes the package"),
+        });
+        return None;
+    };
+    slide_anchors.get(&target).cloned().map(LinkTarget::Anchor)
 }
 
 fn update_paragraph_properties(event: &BytesStart<'_>, paragraph: &mut Option<Paragraph>) {
@@ -577,12 +646,18 @@ fn mark_title(event: &BytesStart<'_>, shape: &mut Option<ShapeState>) {
 fn inline_text(content: &[Inline]) -> Option<String> {
     let text = content
         .iter()
-        .filter_map(|inline| match inline {
-            Inline::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
+        .filter_map(inline_plain_text)
         .collect::<String>();
     (!text.is_empty()).then_some(text)
+}
+
+fn inline_plain_text(inline: &Inline) -> Option<String> {
+    match inline {
+        Inline::Text { text, .. } => Some(text.clone()),
+        Inline::Link { content, .. } => inline_text(content),
+        Inline::LineBreak => Some("\n".to_owned()),
+        _ => None,
+    }
 }
 
 fn is_placeholder_note(block: &Block) -> bool {
@@ -630,5 +705,114 @@ fn malformed_part(part: &str, error: impl std::fmt::Display) -> DocumentError {
     DocumentError::Malformed {
         part: Some(part.to_owned()),
         detail: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod hyperlink_tests {
+    use super::*;
+    use crate::ooxml::Relationship;
+
+    #[test]
+    fn run_hyperlinks_preserve_external_and_slide_targets() {
+        let xml = br#"<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r"><p:cSld><p:spTree>
+          <p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody>
+            <a:p><a:r><a:rPr><a:hlinkClick r:id="rId5"/></a:rPr><a:t>Next</a:t></a:r></a:p>
+            <a:p><a:r><a:rPr><a:hlinkClick r:id="rId6"/></a:rPr><a:t>Web</a:t></a:r></a:p>
+          </p:txBody></p:sp>
+        </p:spTree></p:cSld></p:sld>"#;
+        let relationships = HashMap::from([
+            (
+                "rId5".to_owned(),
+                Relationship {
+                    target: "slide2.xml".to_owned(),
+                    kind: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+                        .to_owned(),
+                    external: false,
+                },
+            ),
+            (
+                "rId6".to_owned(),
+                Relationship {
+                    target: "https://example.com/".to_owned(),
+                    kind: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+                        .to_owned(),
+                    external: true,
+                },
+            ),
+        ]);
+        let anchors = HashMap::from([("ppt/slides/slide2.xml".to_owned(), "slide-2".to_owned())]);
+        let mut warnings = Vec::new();
+        let blocks = parse_slide_xml(
+            xml,
+            "ppt/slides/slide1.xml",
+            &ParseOptions::default(),
+            &HashMap::new(),
+            &relationships,
+            &anchors,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty());
+        assert!(matches!(
+            &blocks[0],
+            Block::Paragraph { content }
+                if matches!(&content[0], Inline::Link {
+                    target: LinkTarget::Anchor(target), content
+                } if target == "slide-2" && inline_text(content).as_deref() == Some("Next"))
+        ));
+        assert!(matches!(
+            &blocks[1],
+            Block::Paragraph { content }
+                if matches!(&content[0], Inline::Link {
+                    target: LinkTarget::External(target), content
+                } if target == "https://example.com/" && inline_text(content).as_deref() == Some("Web"))
+        ));
+    }
+
+    #[test]
+    fn broken_run_hyperlinks_are_dropped_with_relationship_warnings() {
+        let mut missing = BytesStart::new("a:hlinkClick");
+        missing.push_attribute(("r:id", "missing"));
+        let mut warnings = Vec::new();
+        assert_eq!(
+            slide_link_target(
+                &missing,
+                "ppt/slides/slide1.xml",
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut warnings,
+            ),
+            None
+        );
+
+        let relationships = HashMap::from([(
+            "escape".to_owned(),
+            Relationship {
+                target: "../../../../outside.xml".to_owned(),
+                kind: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+                    .to_owned(),
+                external: false,
+            },
+        )]);
+        let mut escaping = BytesStart::new("a:hlinkClick");
+        escaping.push_attribute(("r:id", "escape"));
+        assert_eq!(
+            slide_link_target(
+                &escaping,
+                "ppt/slides/slide1.xml",
+                &relationships,
+                &HashMap::new(),
+                &mut warnings,
+            ),
+            None
+        );
+        assert_eq!(warnings.len(), 2);
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.code == WarningCode::BrokenRelationship)
+        );
     }
 }

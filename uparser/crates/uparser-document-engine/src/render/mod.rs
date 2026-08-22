@@ -50,8 +50,14 @@ pub fn markdown(document: &CanonicalDocument) -> String {
     let links = AssetLinks::new(document);
     let mut output = String::new();
     for (unit_index, unit) in document.units.iter().enumerate() {
-        if let Some(label) = unit_label_heading(document, unit_index) {
+        if unit.kind == UnitKind::Slide {
             if unit_index > 0 {
+                output.push('\n');
+            }
+            output.push_str(&format!("<a id=\"slide-{}\"></a>\n\n", unit_index + 1));
+        }
+        if let Some(label) = unit_label_heading(document, unit_index) {
+            if unit_index > 0 && unit.kind != UnitKind::Slide {
                 output.push('\n');
             }
             output.push_str("# ");
@@ -760,6 +766,18 @@ mod tests {
     }
 
     #[test]
+    fn canonical_document_empty_state_follows_unit_blocks() {
+        let mut document = CanonicalDocument::new(DocumentFormat::Docx);
+        assert!(document.is_empty());
+        document
+            .units
+            .push(DocumentUnit::new(UnitKind::Flow, 0, None));
+        assert!(document.is_empty());
+        document.units[0].blocks.push(Block::paragraph("content"));
+        assert!(!document.is_empty());
+    }
+
+    #[test]
     fn renders_regular_table_as_gfm() {
         let mut document = CanonicalDocument::new(DocumentFormat::Csv);
         let mut unit = DocumentUnit::new(UnitKind::Sheet, 0, Some("Data".to_owned()));
@@ -952,6 +970,24 @@ mod tests {
         unit.blocks.push(Block::paragraph("body"));
         document.units.push(unit);
         assert!(markdown(&document).contains("# Q1"));
+    }
+
+    #[test]
+    fn slides_receive_stable_anchors_without_changing_model_blocks() {
+        let mut document = CanonicalDocument::new(DocumentFormat::Pptx);
+        for (index, title) in ["Custom title", "Second title"].into_iter().enumerate() {
+            let mut unit = DocumentUnit::new(UnitKind::Slide, index, Some(title.to_owned()));
+            unit.blocks.push(Block::Heading {
+                level: 1,
+                content: vec![Inline::text(title)],
+            });
+            document.units.push(unit);
+        }
+
+        let value = markdown(&document);
+        assert!(value.starts_with("<a id=\"slide-1\"></a>\n\n# Custom title"));
+        assert!(value.contains("<a id=\"slide-2\"></a>\n\n# Second title"));
+        assert_eq!(document.units[0].blocks.len(), 1);
     }
 
     #[test]

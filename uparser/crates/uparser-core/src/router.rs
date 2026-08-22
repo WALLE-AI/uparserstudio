@@ -47,6 +47,7 @@ pub enum RouteOrigin {
 #[derive(Debug, Clone, Copy)]
 pub struct RoutingEnvironment {
     pub native: bool,
+    pub local_ocr: bool,
     pub model_protocol: bool,
     pub pipeline: bool,
 }
@@ -64,6 +65,7 @@ impl Default for RoutingEnvironment {
     fn default() -> Self {
         Self {
             native: cfg!(feature = "native"),
+            local_ocr: cfg!(feature = "pdfium") && crate::adapters::local_tesseract::available(),
             model_protocol: true,
             // Mode 3 exists as an explicit compatibility adapter, but is not
             // auto-feasible until its stage deployment and G-R gate are known.
@@ -94,6 +96,7 @@ pub fn route_with_preference(
 ) -> RouteDecision {
     let mut candidates = vec![
         native_candidate(profile, environment.native),
+        local_ocr_candidate(profile, environment.local_ocr),
         model_candidate(profile, environment.model_protocol),
         pipeline_candidate(profile, environment.pipeline),
     ];
@@ -146,9 +149,34 @@ fn preference_adjustment(preference: RoutePreference, protocol: &str) -> i32 {
         (RoutePreference::Speed, "mineru-vlm") => -10,
         (RoutePreference::Speed, "pipeline") => -20,
         (RoutePreference::Cost, "native") => 45,
+        (RoutePreference::Speed | RoutePreference::Cost, "tesseract") => 20,
         (RoutePreference::Cost, "mineru-vlm") => -20,
         (RoutePreference::Cost, "pipeline") => -10,
         _ => 0,
+    }
+}
+
+fn local_ocr_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidate {
+    let applicable = matches!(
+        profile.source_quality,
+        SourceQuality::Scanned | SourceQuality::ImageOnly
+    );
+    RouteCandidate {
+        protocol: "tesseract".to_owned(),
+        score: if applicable { 130 } else { -100 },
+        feasible: available && applicable,
+        reason_codes: if applicable {
+            vec![RouteReasonCode::VisualRequired]
+        } else {
+            Vec::new()
+        },
+        rejection: (!(available && applicable)).then(|| {
+            if !available {
+                "local Tesseract or PDF rasterization is unavailable".to_owned()
+            } else {
+                "local OCR is reserved for scanned/image-only sources".to_owned()
+            }
+        }),
     }
 }
 
@@ -297,6 +325,7 @@ mod tests {
     fn all_available() -> RoutingEnvironment {
         RoutingEnvironment {
             native: true,
+            local_ocr: true,
             model_protocol: true,
             pipeline: true,
         }
@@ -316,14 +345,14 @@ mod tests {
     }
 
     #[test]
-    fn scanned_document_routes_model() {
+    fn scanned_document_routes_local_ocr() {
         let p = profile(
             DocumentGenre::Unknown,
             SourceQuality::Scanned,
             ContentMix::ImageDense,
         );
         let decision = route_with_environment(&p, all_available());
-        assert_eq!(decision.protocol, "mineru-vlm");
+        assert_eq!(decision.protocol, "tesseract");
         assert!(
             !decision
                 .candidates
@@ -332,6 +361,23 @@ mod tests {
                 .unwrap()
                 .feasible
         );
+    }
+
+    #[test]
+    fn scanned_document_falls_back_to_model_without_local_ocr() {
+        let p = profile(
+            DocumentGenre::Unknown,
+            SourceQuality::Scanned,
+            ContentMix::ImageDense,
+        );
+        let decision = route_with_environment(
+            &p,
+            RoutingEnvironment {
+                local_ocr: false,
+                ..all_available()
+            },
+        );
+        assert_eq!(decision.protocol, "mineru-vlm");
     }
 
     #[test]

@@ -901,6 +901,28 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::{dictionary, Stream};
+
+    fn element(
+        role: StructRole,
+        content_refs: Vec<MarkedContentRef>,
+        children: Vec<StructElement>,
+    ) -> StructElement {
+        StructElement {
+            role,
+            alt_text: None,
+            actual_text: None,
+            lang: None,
+            content_refs,
+            children,
+        }
+    }
+
+    fn fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../opensource/pdf-inspector/tests/fixtures")
+            .join(name)
+    }
 
     #[test]
     fn non_heading_content_roles() {
@@ -1141,6 +1163,187 @@ mod tests {
     }
 
     #[test]
+    fn extracts_tagged_tables_through_row_groups_and_nested_cells() {
+        let page_one = (5, 0);
+        let page_two = (6, 0);
+        let page_ids = std::collections::BTreeMap::from([(1, page_one), (2, page_two)]);
+        let mcref = |mcid, page_id| MarkedContentRef {
+            mcid,
+            page_id: Some(page_id),
+        };
+        let header = element(
+            StructRole::TH,
+            vec![mcref(1, page_one)],
+            vec![element(StructRole::Span, vec![mcref(2, page_one)], vec![])],
+        );
+        let data = element(StructRole::TD, vec![mcref(3, page_two)], vec![]);
+        let ignored_page = element(StructRole::TD, vec![mcref(4, (99, 0))], vec![]);
+        let table = element(
+            StructRole::Table,
+            vec![],
+            vec![
+                element(
+                    StructRole::THead,
+                    vec![],
+                    vec![element(
+                        StructRole::TR,
+                        vec![],
+                        vec![header, element(StructRole::P, vec![], vec![])],
+                    )],
+                ),
+                element(
+                    StructRole::TBody,
+                    vec![],
+                    vec![element(StructRole::TR, vec![], vec![data, ignored_page])],
+                ),
+            ],
+        );
+        let rejected_one_row = element(
+            StructRole::Table,
+            vec![],
+            vec![element(StructRole::TR, vec![], vec![])],
+        );
+        let tree = StructTree {
+            children: vec![element(
+                StructRole::Document,
+                vec![],
+                vec![table, rejected_one_row],
+            )],
+        };
+
+        let tables = tree.extract_tables(&page_ids);
+
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].rows.len(), 2);
+        assert!(tables[0].rows[0].cells[0].is_header);
+        assert_eq!(tables[0].rows[0].cells[0].mcids, vec![(1, 1), (2, 1)]);
+        assert!(!tables[0].rows[1].cells[0].is_header);
+        assert_eq!(tables[0].rows[1].cells[0].mcids, vec![(3, 2)]);
+        assert!(tables[0].rows[1].cells[1].mcids.is_empty());
+    }
+
+    #[test]
+    fn parses_synthetic_structure_tree_variants() {
+        let mut doc = Document::new();
+        let page_id = doc.add_object(dictionary! { "Type" => "Page" });
+        let role_map_id = doc.add_object(dictionary! {
+            "CustomHeading" => "H2",
+            "Ignored" => Object::Integer(1),
+        });
+        let paragraph_id = doc.add_object(dictionary! {
+            "Type" => "StructElem",
+            "S" => "P",
+            "K" => Object::Integer(5),
+        });
+        let stream_child = Object::Stream(Stream::new(
+            dictionary! {
+                "Type" => "StructElem",
+                "S" => "Code",
+                "K" => Object::Integer(6),
+            },
+            Vec::new(),
+        ));
+        let heading_id = doc.add_object(dictionary! {
+            "Type" => "StructElem",
+            "S" => "CustomHeading",
+            "Pg" => Object::Reference(page_id),
+            "Alt" => Object::string_literal("Alternative"),
+            "ActualText" => Object::string_literal("Actual"),
+            "Lang" => Object::string_literal("en-US"),
+            "K" => vec![
+                Object::Integer(3),
+                Object::Dictionary(dictionary! {
+                    "Type" => "MCR",
+                    "MCID" => Object::Integer(4),
+                }),
+                Object::Dictionary(dictionary! { "Type" => "OBJR" }),
+                Object::Reference(paragraph_id),
+                stream_child,
+                Object::Null,
+            ],
+        });
+        let struct_root_id = doc.add_object(dictionary! {
+            "Type" => "StructTreeRoot",
+            "RoleMap" => Object::Reference(role_map_id),
+            "K" => vec![
+                Object::Integer(1),
+                Object::Dictionary(dictionary! {
+                    "Type" => "MCR",
+                    "MCID" => Object::Integer(2),
+                    "Pg" => Object::Reference(page_id),
+                }),
+                Object::Dictionary(dictionary! { "Type" => "OBJR" }),
+                Object::Reference(heading_id),
+            ],
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "StructTreeRoot" => Object::Reference(struct_root_id),
+        });
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+
+        let tree = StructTree::from_doc(&doc).expect("synthetic tagged tree");
+        let flat = tree.flatten();
+
+        assert!(flat.iter().any(|item| item.role == StructRole::H2));
+        let heading = tree
+            .children
+            .iter()
+            .find(|item| item.role == StructRole::H2)
+            .expect("mapped heading");
+        assert_eq!(heading.alt_text.as_deref(), Some("Alternative"));
+        assert_eq!(heading.actual_text.as_deref(), Some("Actual"));
+        assert_eq!(heading.lang.as_deref(), Some("en-US"));
+        assert_eq!(tree.mcid_count(), 6);
+
+        let roles = tree.mcid_to_roles(&std::collections::BTreeMap::from([(1, page_id)]));
+        assert_eq!(roles[&1][&4], StructRole::H2);
+        assert_eq!(roles[&1][&5], StructRole::P);
+        assert_eq!(roles[&1][&6], StructRole::Code);
+    }
+
+    #[test]
+    fn parser_helpers_reject_depth_limits_and_invalid_roots() {
+        let doc = Document::new();
+        let role_map = HashMap::new();
+        let no_kids = dictionary! {};
+        assert!(parse_kids(&doc, &no_kids, &role_map, None, 0).is_empty());
+
+        let integer_kid = dictionary! { "K" => Object::Integer(7) };
+        assert_eq!(parse_kids(&doc, &integer_kid, &role_map, None, 0).len(), 1);
+        assert!(parse_kids(&doc, &integer_kid, &role_map, None, MAX_DEPTH).is_empty());
+
+        let mut out = Vec::new();
+        parse_struct_element_dict(
+            &doc,
+            &dictionary! { "S" => Object::Integer(1) },
+            &role_map,
+            None,
+            0,
+            &mut out,
+        );
+        parse_struct_element_dict(
+            &doc,
+            &dictionary! { "S" => "P" },
+            &role_map,
+            None,
+            MAX_DEPTH,
+            &mut out,
+        );
+        assert!(out.is_empty());
+
+        let mut invalid_catalog = Document::new();
+        let catalog_id = invalid_catalog.add_object(dictionary! {
+            "Type" => "Catalog",
+            "StructTreeRoot" => Object::Integer(1),
+        });
+        invalid_catalog
+            .trailer
+            .set("Root", Object::Reference(catalog_id));
+        assert!(StructTree::from_doc(&invalid_catalog).is_none());
+    }
+
+    #[test]
     fn test_fix_bare_struct_names() {
         // Verify the byte-level pre-processor fixes bare names.
         // All inputs include /StructTreeRoot to pass the early-return guard.
@@ -1181,7 +1384,7 @@ mod tests {
         // Some PDF generators (e.g. fpdf2) write /S Code instead of /S /Code.
         // lopdf silently drops objects with invalid tokens. Our pre-processor
         // fixes these before loading.
-        let raw = std::fs::read("tests/fixtures/bare_name_struct.pdf").unwrap();
+        let raw = std::fs::read(fixture_path("bare_name_struct.pdf")).unwrap();
         let fixed = fix_bare_struct_names(&raw);
         let doc = Document::load_mem(fixed.as_ref()).unwrap();
 
@@ -1206,7 +1409,7 @@ mod tests {
 
     #[test]
     fn test_parse_real_tagged_pdf() {
-        let doc = Document::load("tests/fixtures/2013-app2.pdf").unwrap();
+        let doc = Document::load(fixture_path("2013-app2.pdf")).unwrap();
         let tree = StructTree::from_doc(&doc);
         assert!(tree.is_some(), "2013-app2.pdf should have a structure tree");
         let tree = tree.unwrap();

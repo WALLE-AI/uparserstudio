@@ -719,4 +719,166 @@ mod tests {
         // 10 pages / window_size=4 -> windows of [4, 4, 2].
         assert_eq!(*window_sizes.lock().unwrap(), vec![4, 4, 2]);
     }
+
+    #[tokio::test]
+    async fn run_streaming_isolates_adapter_errors_and_panics() {
+        let scheduler = Scheduler::new(4);
+        let (_, errors, _) = scheduler
+            .run_streaming(
+                Arc::new(MockAdapter {
+                    fail_on_page: Some(2),
+                }),
+                Arc::new(Transport::new()),
+                Arc::new(Semaphore::new(2)),
+                fake_pages(3),
+                |_, _, _| {},
+            )
+            .await;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].page_num, 2);
+
+        let (_, errors, _) = scheduler
+            .run_streaming(
+                Arc::new(PanicOnPageAdapter { panic_on_page: 2 }),
+                Arc::new(Transport::new()),
+                Arc::new(Semaphore::new(2)),
+                fake_pages(3),
+                |_, _, _| {},
+            )
+            .await;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].page_num, 2);
+        assert_eq!(errors[0].stage.as_deref(), Some("scheduler"));
+    }
+
+    #[tokio::test]
+    async fn run_source_consumes_windows_and_reports_progress() {
+        use crate::frontend::{CancellationToken, MemoryPageSource};
+        use crate::ingest::DocumentFormat;
+
+        let cancellation = CancellationToken::default();
+        let mut source = MemoryPageSource::new(
+            DocumentFormat::Png,
+            "digest",
+            fake_pages(5),
+            cancellation.clone(),
+        );
+        let windows = Arc::new(Mutex::new(Vec::new()));
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let windows_out = Arc::clone(&windows);
+        let progress_out = Arc::clone(&progress);
+        let result = Scheduler::new(2)
+            .with_cancellation(cancellation)
+            .run_source(
+                Arc::new(WarningAdapter),
+                Arc::new(Transport::new()),
+                Arc::new(Semaphore::new(2)),
+                &mut source,
+                move |pages, errors, warnings| {
+                    windows_out
+                        .lock()
+                        .unwrap()
+                        .push((pages.len(), errors.len(), warnings.len()));
+                },
+                move |event| progress_out.lock().unwrap().push(event.clone()),
+            )
+            .await
+            .expect("memory page source succeeds");
+
+        assert_eq!(result.0.len(), 5);
+        assert!(result.1.is_empty());
+        assert_eq!(result.2.len(), 5);
+        assert_eq!(
+            *windows.lock().unwrap(),
+            vec![(2, 0, 2), (2, 0, 2), (1, 0, 1)]
+        );
+        let progress = progress.lock().unwrap();
+        assert_eq!(progress.len(), 5);
+        assert_eq!(progress.last().unwrap().completed, 5);
+        assert!(progress.iter().all(|event| event.ok && event.total == 5));
+    }
+
+    struct CancellingAdapter {
+        cancellation: crate::frontend::CancellationToken,
+    }
+
+    #[async_trait]
+    impl ProtocolAdapter for CancellingAdapter {
+        fn name(&self) -> &'static str {
+            "cancelling"
+        }
+        fn coordinate_system(&self) -> CoordinateSystem {
+            CoordinateSystem::PixelAbs
+        }
+        fn provides_reading_order(&self) -> bool {
+            true
+        }
+        fn category_vocab(&self) -> &[&'static str] {
+            &[]
+        }
+        fn raw_output_format(&self) -> RawOutputFormat {
+            RawOutputFormat::None
+        }
+        fn emitted_signals(&self) -> PostprocessSignals {
+            PostprocessSignals::default()
+        }
+        fn model_stages(&self) -> Vec<ModelStage> {
+            vec![]
+        }
+        async fn parse_page(
+            &self,
+            _page: &RenderedPage,
+            _ctx: &ParseCtx,
+        ) -> Result<Vec<Block>, PageError> {
+            self.cancellation.cancel();
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_source_honors_cancellation_before_and_after_a_window() {
+        use crate::frontend::{CancellationToken, MemoryPageSource, PageSourceError};
+        use crate::ingest::DocumentFormat;
+
+        let cancelled = CancellationToken::default();
+        cancelled.cancel();
+        let mut source = MemoryPageSource::new(
+            DocumentFormat::Png,
+            "digest",
+            fake_pages(1),
+            cancelled.clone(),
+        );
+        let result = Scheduler::new(1)
+            .with_cancellation(cancelled)
+            .run_source(
+                Arc::new(MockAdapter { fail_on_page: None }),
+                Arc::new(Transport::new()),
+                Arc::new(Semaphore::new(1)),
+                &mut source,
+                |_, _, _| {},
+                |_| {},
+            )
+            .await;
+        assert!(matches!(result, Err(PageSourceError::Cancelled)));
+
+        let cancellation = CancellationToken::default();
+        let mut source = MemoryPageSource::new(
+            DocumentFormat::Png,
+            "digest",
+            fake_pages(2),
+            cancellation.clone(),
+        );
+        let result = Scheduler::new(1)
+            .with_cancellation(cancellation.clone())
+            .run_source(
+                Arc::new(CancellingAdapter { cancellation }),
+                Arc::new(Transport::new()),
+                Arc::new(Semaphore::new(1)),
+                &mut source,
+                |_, _, _| {},
+                |_| {},
+            )
+            .await;
+        assert!(matches!(result, Err(PageSourceError::Cancelled)));
+    }
 }

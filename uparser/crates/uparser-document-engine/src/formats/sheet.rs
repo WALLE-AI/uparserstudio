@@ -266,3 +266,123 @@ fn format_datetime(value: &calamine::ExcelDateTime) -> String {
         None => format_number(value.as_f64()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use calamine::{CellErrorType, ExcelDateTime, ExcelDateTimeType};
+
+    #[test]
+    fn table_preserves_types_formulas_and_merged_cells() {
+        let mut values = Range::new((2, 3), (3, 5));
+        values.set_value((2, 3), Data::String("Name".to_owned()));
+        values.set_value((2, 4), Data::String("Active".to_owned()));
+        values.set_value((2, 5), Data::String("Score".to_owned()));
+        values.set_value((3, 3), Data::Int(7));
+        values.set_value((3, 4), Data::Bool(true));
+        values.set_value((3, 5), Data::Float(2.5));
+        let mut formulas = Range::new((2, 3), (3, 5));
+        formulas.set_value((3, 5), "=1+1.5".to_owned());
+        let merges = [Dimensions::new((2, 3), (2, 4))];
+        let mut warnings = Vec::new();
+
+        let table = build_table(&values, Some(&formulas), &merges, &mut warnings, "Metrics");
+
+        assert_eq!((table.rows, table.columns, table.header_rows), (2, 3, 1));
+        assert!(warnings.is_empty());
+        let CellSlot::Origin(header) = &table.grid[0][0] else {
+            panic!("merge origin must remain a cell")
+        };
+        assert_eq!((header.row_span, header.column_span), (1, 2));
+        assert!(matches!(
+            table.grid[0][1],
+            CellSlot::Covered {
+                origin_row: 0,
+                origin_column: 0
+            }
+        ));
+        let CellSlot::Origin(score) = &table.grid[1][2] else {
+            panic!("score must remain an origin cell")
+        };
+        assert_eq!(score.blocks, vec![Block::paragraph("2.5")]);
+        assert_eq!(score.value_kind, CellValueKind::Number);
+        assert_eq!(
+            score.formula,
+            Some(FormulaSource::Spreadsheet("=1+1.5".to_owned()))
+        );
+    }
+
+    #[test]
+    fn merges_outside_the_used_range_are_warned_and_ignored() {
+        let mut values = Range::new((4, 4), (5, 5));
+        values.set_value((4, 4), Data::String("A".to_owned()));
+        values.set_value((5, 5), Data::Int(1));
+        let merges = [
+            Dimensions::new((3, 4), (4, 4)),
+            Dimensions::new((4, 4), (6, 5)),
+        ];
+        let mut warnings = Vec::new();
+
+        let table = build_table(&values, None, &merges, &mut warnings, "Offset");
+
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().all(|warning| {
+            warning.code == WarningCode::InvalidSpanClamped
+                && warning.part.as_deref() == Some("Offset")
+        }));
+        assert!(matches!(table.grid[0][0], CellSlot::Origin(_)));
+    }
+
+    #[test]
+    fn cell_values_have_stable_user_visible_rendering() {
+        let cases = [
+            (Data::Empty, "", CellValueKind::Empty),
+            (Data::String("text".to_owned()), "text", CellValueKind::Text),
+            (Data::Int(-2), "-2", CellValueKind::Number),
+            (Data::Float(3.25), "3.25", CellValueKind::Number),
+            (Data::Bool(false), "FALSE", CellValueKind::Boolean),
+            (
+                Data::DateTimeIso("2026-08-22".to_owned()),
+                "2026-08-22",
+                CellValueKind::DateTime,
+            ),
+            (
+                Data::DurationIso("PT90M".to_owned()),
+                "PT90M",
+                CellValueKind::DateTime,
+            ),
+            (
+                Data::Error(CellErrorType::Div0),
+                "#DIV/0!",
+                CellValueKind::Error,
+            ),
+        ];
+        for (input, expected_text, expected_kind) in cases {
+            let (text, kind) = data_value(&input);
+            assert_eq!(text, expected_text);
+            assert_eq!(kind, expected_kind);
+        }
+
+        let duration = ExcelDateTime::new(1.5, ExcelDateTimeType::TimeDelta, false);
+        assert_eq!(data_value(&Data::DateTime(duration)).0, "36:00:00");
+        let date = ExcelDateTime::new(45_292.0, ExcelDateTimeType::DateTime, false);
+        assert_eq!(data_value(&Data::DateTime(date)).0, "2024-01-01");
+    }
+
+    #[test]
+    fn header_inference_and_number_formatting_cover_boundaries() {
+        assert_eq!(infer_header_rows(&Range::<Data>::empty()), 0);
+        assert_eq!(infer_header_rows(&Range::new((0, 0), (0, 1))), 0);
+
+        let mut values = Range::new((0, 0), (1, 1));
+        values.set_value((0, 0), Data::String("Name".to_owned()));
+        values.set_value((0, 1), Data::String("Value".to_owned()));
+        values.set_value((1, 0), Data::String("alpha".to_owned()));
+        values.set_value((1, 1), Data::Int(42));
+        assert_eq!(infer_header_rows(&values), 1);
+
+        assert_eq!(format_number(42.0), "42");
+        assert_eq!(format_number(-0.125), "-0.125");
+        assert_eq!(format_number(1.230_000_000_01), "1.23");
+    }
+}

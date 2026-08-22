@@ -17,8 +17,22 @@ pub fn table_to_markdown(table: &Table) -> String {
         return format_toc_as_list(&table.cells, &[]);
     }
 
+    let leading_caption = leading_table_caption(&table.cells);
+    let repaired_cells = if leading_caption.is_none() {
+        repair_spanning_header(table)
+    } else {
+        None
+    };
+    let cells = if leading_caption.is_some() {
+        &table.cells[1..]
+    } else if let Some(repaired) = repaired_cells.as_deref() {
+        repaired
+    } else {
+        &table.cells[..]
+    };
+
     // Clean up the table: merge continuation rows, extract footnotes, remove empty rows
-    let (cleaned_cells, footnotes) = clean_table_cells(&table.cells);
+    let (cleaned_cells, footnotes) = clean_table_cells(cells);
 
     if cleaned_cells.is_empty() {
         return String::new();
@@ -26,6 +40,11 @@ pub fn table_to_markdown(table: &Table) -> String {
 
     let num_cols = cleaned_cells[0].len();
     let mut output = String::new();
+
+    if let Some(caption) = leading_caption {
+        output.push_str(caption);
+        output.push_str("\n\n");
+    }
 
     // Compact format: no padding, minimal separators. Optimized for token
     // efficiency — AI agents are the primary consumer, not human eyes.
@@ -57,6 +76,141 @@ pub fn table_to_markdown(table: &Table) -> String {
     }
 
     output
+}
+
+fn repair_spanning_header(table: &Table) -> Option<Vec<Vec<String>>> {
+    let column_count = table.cells.first()?.len();
+    if table.cells.len() < 3 || column_count < 2 || table.columns.len() != column_count {
+        return None;
+    }
+
+    let mut header_cells = table.cells[0]
+        .iter()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty());
+    let header = header_cells.next()?;
+    if header_cells.next().is_some() {
+        return None;
+    }
+
+    // A real spanning title is commonly followed by another textual header.
+    // Only repair when two complete-looking numeric data rows establish that
+    // the sparse first row itself was the header lost during wide-item joining.
+    if !table.cells[1..3].iter().all(|row| {
+        row.len() == column_count
+            && row.iter().all(|cell| !cell.trim().is_empty())
+            && row
+                .iter()
+                .filter(|cell| cell.chars().any(|ch| ch.is_ascii_digit()))
+                .count()
+                * 4
+                >= column_count * 3
+    }) {
+        return None;
+    }
+
+    let words: Vec<&str> = header.split_whitespace().collect();
+    if words.len() < column_count {
+        return None;
+    }
+    let groups = partition_words_by_column_width(&words, &table.columns)?;
+    let mut repaired = table.cells.clone();
+    repaired[0] = groups;
+    Some(repaired)
+}
+
+fn partition_words_by_column_width(words: &[&str], columns: &[f32]) -> Option<Vec<String>> {
+    let group_count = columns.len();
+    if group_count < 2 || words.len() < group_count {
+        return None;
+    }
+
+    let widths: Vec<f32> = (0..group_count)
+        .map(|index| match index {
+            0 => columns[1] - columns[0],
+            index if index + 1 == group_count => columns[index] - columns[index - 1],
+            index => (columns[index + 1] - columns[index - 1]) / 2.0,
+        })
+        .collect();
+    if widths.iter().any(|width| *width <= 0.0) {
+        return None;
+    }
+
+    let total_width: f32 = widths.iter().sum();
+    let total_chars = words.iter().map(|word| word.chars().count()).sum::<usize>()
+        + words.len().saturating_sub(1);
+    let mut costs = vec![vec![f32::INFINITY; words.len() + 1]; group_count + 1];
+    let mut previous = vec![vec![None; words.len() + 1]; group_count + 1];
+    costs[0][0] = 0.0;
+
+    for group in 1..=group_count {
+        let target = total_chars as f32 * widths[group - 1] / total_width;
+        for end in group..=words.len() {
+            for start in (group - 1)..end {
+                if !costs[group - 1][start].is_finite() {
+                    continue;
+                }
+                let chars = words[start..end]
+                    .iter()
+                    .map(|word| word.chars().count())
+                    .sum::<usize>()
+                    + end
+                    - start
+                    - 1;
+                let cost = costs[group - 1][start] + (chars as f32 - target).powi(2);
+                if cost < costs[group][end] {
+                    costs[group][end] = cost;
+                    previous[group][end] = Some(start);
+                }
+            }
+        }
+    }
+
+    let mut boundaries = Vec::with_capacity(group_count + 1);
+    let mut end = words.len();
+    boundaries.push(end);
+    for group in (1..=group_count).rev() {
+        end = previous[group][end]?;
+        boundaries.push(end);
+    }
+    boundaries.reverse();
+    Some(
+        boundaries
+            .windows(2)
+            .map(|range| words[range[0]..range[1]].join(" "))
+            .collect(),
+    )
+}
+
+fn leading_table_caption(cells: &[Vec<String>]) -> Option<&str> {
+    if cells.len() < 3 {
+        return None;
+    }
+    let first = &cells[0];
+    let mut nonempty = first
+        .iter()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty());
+    let caption = nonempty.next()?;
+    if nonempty.next().is_some() {
+        return None;
+    }
+    let lower = caption.to_ascii_lowercase();
+    let after_table = lower.strip_prefix("table ")?;
+    if !after_table
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let columns = first.len();
+    let next_filled = cells[1]
+        .iter()
+        .filter(|cell| !cell.trim().is_empty())
+        .count();
+    (next_filled >= 2 && next_filled * 2 >= columns).then_some(caption)
 }
 
 /// Render a table-of-contents as a flat per-row text block.
@@ -254,6 +408,42 @@ fn ends_like_incomplete_phrase(cell: &str) -> bool {
         || lower.ends_with('/')
 }
 
+fn is_year_only_date_continuation(row: &[String], previous: Option<&Vec<String>>) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    if !row.first().is_some_and(|cell| cell.trim().is_empty()) {
+        return false;
+    }
+
+    let filled: Vec<(usize, &str)> = row
+        .iter()
+        .enumerate()
+        .filter_map(|(column, cell)| {
+            let cell = cell.trim();
+            (!cell.is_empty()).then_some((column, cell))
+        })
+        .collect();
+    if filled.is_empty()
+        || filled.iter().any(|(column, _)| {
+            previous
+                .get(*column)
+                .is_none_or(|cell| cell.trim().is_empty())
+        })
+    {
+        return false;
+    }
+
+    filled.iter().any(|(column, year)| {
+        year.len() == 4
+            && year.chars().all(|character| character.is_ascii_digit())
+            && previous.get(*column).is_some_and(|cell| {
+                let prefix = cell.trim_end();
+                prefix.ends_with(',') && prefix.chars().any(|character| character.is_alphabetic())
+            })
+    })
+}
+
 /// Clean up table cells: merge continuation rows, extract footnotes, remove empty rows
 fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
     let mut cleaned: Vec<Vec<String>> = Vec::new();
@@ -293,7 +483,10 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
             .map(|c| c.trim())
             .filter(|c| !c.is_empty())
             .collect();
-        let is_short_subheader = non_first_cells.len() == 1 && non_first_cells[0].len() <= 5;
+        let is_year_date_continuation = is_year_only_date_continuation(row, cleaned.last());
+        let is_short_subheader = non_first_cells.len() == 1
+            && non_first_cells[0].len() <= 5
+            && !is_year_date_continuation;
         // Rows with multiple short-valued cells (e.g. numeric data in a lookup
         // table) are data rows with a merged/spanning first column, not text
         // overflow from the previous row.  Continuation rows typically have
@@ -308,7 +501,8 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
             .iter()
             .filter(|c| {
                 c.chars().all(|ch| {
-                    ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == ',' || ch == ' '
+                    ch.is_ascii_digit()
+                        || matches!(ch, '.' | '-' | ',' | ' ' | '%' | '$' | '+' | '(' | ')')
                 })
             })
             .count();
@@ -414,7 +608,8 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
             && !looks_like_section_label_row
             && !is_short_subheader;
 
-        let is_continuation = is_classic_continuation || is_wrapped_continuation;
+        let is_continuation =
+            is_year_date_continuation || is_classic_continuation || is_wrapped_continuation;
 
         if is_continuation {
             // Merge with previous row
@@ -608,6 +803,51 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_table_cells_year_continues_wrapped_date() {
+        let cells = vec![
+            vec![
+                "Version".into(),
+                "Date".into(),
+                "Change".into(),
+                "Affected Sections".into(),
+            ],
+            vec![
+                "1.0".into(),
+                "June 3,".into(),
+                "Small edits for clarity on Creative".into(),
+                "Introduction to Open Educational".into(),
+            ],
+            vec![
+                "".into(),
+                "2022".into(),
+                "Commons licensing and attribution.".into(),
+                "Resources".into(),
+            ],
+        ];
+
+        let (cleaned, _) = clean_table_cells(&cells);
+
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[1][1], "June 3, 2022");
+        assert!(cleaned[1][2].ends_with("Commons licensing and attribution."));
+        assert!(cleaned[1][3].ends_with("Resources"));
+    }
+
+    #[test]
+    fn test_clean_table_cells_standalone_year_remains_a_row() {
+        let cells = vec![
+            vec!["Category".into(), "Year".into()],
+            vec!["Archive".into(), "Published".into()],
+            vec!["".into(), "2022".into()],
+        ];
+
+        let (cleaned, _) = clean_table_cells(&cells);
+
+        assert_eq!(cleaned.len(), 3);
+        assert_eq!(cleaned[2][1], "2022");
+    }
+
+    #[test]
     fn test_clean_table_cells_numeric_data_row_not_merged() {
         let cells = vec![
             vec!["Header".into(), "A".into(), "B".into(), "C".into()],
@@ -617,6 +857,25 @@ mod tests {
         let (cleaned, _) = clean_table_cells(&cells);
         // Numeric data row with empty first col should not merge
         assert_eq!(cleaned.len(), 3);
+    }
+
+    #[test]
+    fn test_clean_table_cells_sparse_percentage_rows_not_merged() {
+        let cells = vec![
+            vec![
+                "Year".into(),
+                "3-Year".into(),
+                "5-Year".into(),
+                "7-Year".into(),
+            ],
+            vec!["4".into(), "7.41%".into(), "11.52%".into(), "12.49%".into()],
+            vec!["5".into(), "".into(), "11.52%".into(), "8.93%".into()],
+            vec!["6".into(), "".into(), "5.76%".into(), "8.93%".into()],
+        ];
+
+        let (cleaned, _) = clean_table_cells(&cells);
+
+        assert_eq!(cleaned, cells);
     }
 
     #[test]
@@ -867,6 +1126,104 @@ mod tests {
         assert!(md.contains("|---|"));
         assert!(md.contains("|Alice|"));
         assert!(md.contains("|Bob|"));
+    }
+
+    #[test]
+    fn test_table_to_markdown_moves_sparse_numbered_caption_before_header() {
+        let table = Table {
+            columns: vec![100.0, 200.0, 300.0, 400.0],
+            rows: vec![520.0, 500.0, 480.0],
+            cells: vec![
+                vec![
+                    "".into(),
+                    "".into(),
+                    "Table 2. Contents of Saccharometers".into(),
+                    "".into(),
+                ],
+                vec![
+                    "Saccharometer".into(),
+                    "DI Water".into(),
+                    "Glucose Solution".into(),
+                    "Yeast Suspension".into(),
+                ],
+                vec!["1".into(), "8 ml".into(), "6 ml".into(), "0 ml".into()],
+            ],
+            item_indices: vec![],
+            kind: TableKind::Data,
+        };
+
+        let markdown = table_to_markdown(&table);
+
+        assert!(markdown.starts_with("Table 2. Contents of Saccharometers\n\n"));
+        assert!(markdown.contains(
+            "|Saccharometer|DI Water|Glucose Solution|Yeast Suspension|\n|---|---|---|---|"
+        ));
+        assert!(!markdown.contains("|||Table 2."));
+    }
+
+    #[test]
+    fn test_table_to_markdown_keeps_sparse_non_caption_header() {
+        let table = Table {
+            columns: vec![100.0, 200.0, 300.0],
+            rows: vec![500.0, 480.0, 460.0],
+            cells: vec![
+                vec!["Summary".into(), "".into(), "".into()],
+                vec!["Name".into(), "Value".into(), "Unit".into()],
+                vec!["Length".into(), "10".into(), "mm".into()],
+            ],
+            item_indices: vec![],
+            kind: TableKind::Data,
+        };
+
+        let markdown = table_to_markdown(&table);
+
+        assert!(markdown.starts_with("|Summary|||\n|---|---|---|"));
+    }
+
+    #[test]
+    fn test_table_to_markdown_repairs_wide_joined_header_before_numeric_rows() {
+        let table = Table {
+            columns: vec![112.92, 178.32, 249.0, 339.66],
+            rows: vec![709.32, 692.52, 675.72, 660.42],
+            cells: vec![
+                vec![
+                    "".into(),
+                    "".into(),
+                    "Saccharometer DI Water Glucose Solution Yeast Suspension".into(),
+                    "".into(),
+                ],
+                vec!["2".into(), "24 ml".into(), "0 ml".into(), "4 ml".into()],
+                vec!["3".into(), "12 ml".into(), "12 ml".into(), "4 ml".into()],
+                vec!["4".into(), "4 ml".into(), "12 ml".into(), "12 ml".into()],
+            ],
+            item_indices: vec![],
+            kind: TableKind::Data,
+        };
+
+        let markdown = table_to_markdown(&table);
+
+        assert!(markdown.starts_with(
+            "|Saccharometer|DI Water|Glucose Solution|Yeast Suspension|\n|---|---|---|---|"
+        ));
+    }
+
+    #[test]
+    fn test_table_to_markdown_keeps_true_spanning_title_before_text_header() {
+        let table = Table {
+            columns: vec![100.0, 200.0, 300.0],
+            rows: vec![520.0, 500.0, 480.0],
+            cells: vec![
+                vec!["Quarterly Sales Summary".into(), "".into(), "".into()],
+                vec!["Region".into(), "Revenue".into(), "Margin".into()],
+                vec!["North".into(), "$100".into(), "20%".into()],
+            ],
+            item_indices: vec![],
+            kind: TableKind::Data,
+        };
+
+        let markdown = table_to_markdown(&table);
+
+        assert!(markdown.starts_with("|Quarterly Sales Summary|||\n|---|---|---|"));
     }
 
     #[test]

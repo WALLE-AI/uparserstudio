@@ -2080,4 +2080,178 @@ end",
         // invalid CMap result — so it must not clear the gid flag.
         assert!(gid_flagged(Some("<01> <FFFD>\n<02> <FFFD>")));
     }
+
+    #[test]
+    fn cmap_decision_cache_accumulates_samples_and_sticks_to_its_choice() {
+        let mut remapped = CMapDecisionCache::new();
+        assert_eq!(remapped.get_choice(7), None);
+        assert_eq!(
+            remapped.consider(7, "@@@@", "the quick brown fox", 120),
+            None
+        );
+        assert_eq!(
+            remapped.consider(7, "####", " and the document", 120),
+            Some(CMapChoice::Remapped)
+        );
+        assert_eq!(remapped.get_choice(7), Some(CMapChoice::Remapped));
+        assert_eq!(
+            remapped.consider(7, "good primary text", "bad", usize::MAX),
+            Some(CMapChoice::Remapped)
+        );
+
+        let mut primary = CMapDecisionCache::new();
+        assert_eq!(
+            primary.consider(9, "the report and document", "@@@@", 240),
+            Some(CMapChoice::Primary)
+        );
+    }
+
+    #[test]
+    fn font_width_parsers_resolve_indirect_simple_and_cid_shapes() {
+        let mut doc = Document::new();
+        let first_id = doc.add_object(Object::Integer(31));
+        let last_id = doc.add_object(Object::Integer(34));
+        let width_id = doc.add_object(Object::Integer(700));
+        let widths_id = doc.add_object(vec![
+            500.into(),
+            Object::Real(400.0),
+            Object::Reference(width_id),
+            Object::Null,
+        ]);
+        let type3 = dictionary! {
+            "Subtype" => "Type3",
+            "FirstChar" => Object::Reference(first_id),
+            "LastChar" => Object::Reference(last_id),
+            "Widths" => Object::Reference(widths_id),
+            "FontMatrix" => vec![Object::Real(-0.002), 0.into(), 0.into(), Object::Real(0.002), 0.into(), 0.into()],
+        };
+        let simple = parse_font_widths(&doc, &type3).expect("Type3 widths");
+        assert_eq!(simple.widths.get(&31), Some(&500));
+        assert_eq!(simple.widths.get(&33), Some(&700));
+        assert_eq!(simple.space_width, 400);
+        assert_eq!(simple.units_scale, 0.002);
+        assert!(!simple.is_cid);
+
+        let no_space = dictionary! {
+            "Subtype" => "Type3", "FirstChar" => 65, "LastChar" => 66,
+            "Widths" => vec![1000.into(), 500.into()], "FontMatrix" => vec![Object::Real(0.002)],
+        };
+        let estimated = parse_simple_font_widths(&doc, &no_space).expect("estimated space");
+        assert_eq!(estimated.space_width, 337);
+
+        let unknown = dictionary! { "Subtype" => "Unknown", "Encoding" => Object::Null };
+        let mut font_dicts = std::collections::BTreeMap::new();
+        font_dicts.insert(b"F0".to_vec(), &type3);
+        font_dicts.insert(b"F1".to_vec(), &unknown);
+        let built = build_font_widths(&doc, &font_dicts);
+        assert_eq!(built.len(), 1);
+        assert!(built.contains_key("F0"));
+
+        let indirect_widths = doc.add_object(vec![600.into(), Object::Real(610.0), Object::Null]);
+        let cid_font_id = doc.add_object(dictionary! {
+            "DW" => Object::Real(800.0),
+            "W" => vec![
+                3.into(), Object::Reference(indirect_widths),
+                Object::Real(10.0), Object::Real(11.0), Object::Real(620.0),
+                20.into(), 21.into(), 630.into(),
+                Object::Name(b"skip".to_vec()),
+            ],
+        });
+        let type0 = dictionary! {
+            "Subtype" => "Type0",
+            "DescendantFonts" => vec![Object::Reference(cid_font_id)],
+            "WMode" => 1,
+        };
+        let cid = parse_type0_widths(&doc, &type0).expect("CID widths");
+        assert_eq!(cid.default_width, 800);
+        assert_eq!(cid.space_width, 600);
+        assert_eq!(cid.widths.get(&4), Some(&610));
+        assert_eq!(cid.widths.get(&11), Some(&620));
+        assert_eq!(cid.widths.get(&21), Some(&630));
+        assert_eq!(cid.wmode, 1);
+        assert!(cid.is_cid);
+
+        let default_cid_font = doc.add_object(dictionary! { "DW" => 0 });
+        let default_type0 = dictionary! {
+            "DescendantFonts" => vec![Object::Reference(default_cid_font)], "WMode" => "invalid",
+        };
+        let default_cid = parse_type0_widths(&doc, &default_type0).expect("CID defaults");
+        assert_eq!(
+            (
+                default_cid.default_width,
+                default_cid.space_width,
+                default_cid.wmode
+            ),
+            (0, 250, 0)
+        );
+
+        assert!(resolve_array(&doc, &Object::Integer(1)).is_none());
+        assert!(resolve_dict(&doc, &Object::Integer(1)).is_none());
+        assert!(parse_font_widths(&doc, &dictionary! { "Subtype" => "Unknown" }).is_none());
+        assert!(parse_type0_widths(
+            &doc,
+            &dictionary! { "DescendantFonts" => Vec::<Object>::new() }
+        )
+        .is_none());
+
+        let non_integer_id = doc.add_object(Object::Null);
+        let missing_id = (u32::MAX, 0);
+        assert!(resolve_array(&doc, &Object::Reference(non_integer_id)).is_none());
+        assert!(parse_simple_font_widths(&doc, &dictionary! { "FirstChar" => "bad" }).is_none());
+        assert!(parse_simple_font_widths(
+            &doc,
+            &dictionary! { "FirstChar" => Object::Reference(non_integer_id) }
+        )
+        .is_none());
+        assert!(parse_simple_font_widths(
+            &doc,
+            &dictionary! { "FirstChar" => 1, "LastChar" => "bad" }
+        )
+        .is_none());
+        assert!(parse_simple_font_widths(
+            &doc,
+            &dictionary! { "FirstChar" => 1, "LastChar" => Object::Reference(non_integer_id) }
+        )
+        .is_none());
+        assert!(parse_simple_font_widths(&doc, &dictionary! { "FirstChar" => 1, "LastChar" => 1, "Widths" => Object::Reference(non_integer_id) }).is_none());
+
+        let real_width_id = doc.add_object(Object::Real(333.0));
+        let mixed_widths = dictionary! {
+            "FirstChar" => 1, "LastChar" => 4,
+            "Widths" => vec![Object::Reference(real_width_id), Object::Reference(non_integer_id), Object::Reference(missing_id), 444.into(), 555.into()],
+        };
+        let mixed = parse_simple_font_widths(&doc, &mixed_widths).expect("mixed indirect widths");
+        assert_eq!(mixed.widths, HashMap::from([(1, 333), (4, 444)]));
+
+        for matrix in [
+            Object::Array(vec![Object::Integer(-2)]),
+            Object::Array(vec![Object::Null]),
+            Object::Array(Vec::new()),
+            Object::Integer(1),
+        ] {
+            let font = dictionary! { "FirstChar" => 65, "LastChar" => 65, "Widths" => vec![500.into()], "FontMatrix" => matrix };
+            assert!(parse_simple_font_widths(&doc, &font).is_some());
+        }
+
+        let mut malformed_widths = HashMap::new();
+        for values in [
+            vec![1.into()],
+            vec![1.into(), Object::Reference(missing_id)],
+            vec![1.into(), 2.into()],
+            vec![1.into(), 2.into(), Object::Real(321.0)],
+            vec![1.into(), 2.into(), Object::Null],
+            vec![Object::Real(1.0), Object::Real(2.0)],
+            vec![Object::Real(1.0), Object::Real(2.0), 322.into()],
+            vec![Object::Real(1.0), Object::Real(2.0), Object::Null],
+            vec![1.into(), Object::Null],
+            vec![
+                1.into(),
+                Object::Array(vec![Object::Real(323.0), Object::Null]),
+            ],
+        ] {
+            parse_cid_w_array(&doc, &values, &mut malformed_widths);
+        }
+        assert_eq!(malformed_widths.get(&1), Some(&323));
+        assert!(get_operand_bytes(&Object::Null).is_none());
+    }
 }

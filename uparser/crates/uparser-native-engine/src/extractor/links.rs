@@ -378,6 +378,103 @@ mod tests {
     use super::*;
     use lopdf::{dictionary, Object};
 
+    fn install_form(doc: &mut Document, fields: Vec<Object>, indirect_acroform: bool) {
+        let fields_id = doc.add_object(Object::Array(fields));
+        let acroform = dictionary! {
+            "Fields" => Object::Reference(fields_id),
+        };
+        let acroform = if indirect_acroform {
+            Object::Reference(doc.add_object(acroform))
+        } else {
+            Object::Dictionary(acroform)
+        };
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "AcroForm" => acroform,
+        });
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+    }
+
+    #[test]
+    fn extracts_direct_and_indirect_uri_links_and_filters_other_annotations() {
+        let mut doc = Document::new();
+        let action_id = doc.add_object(dictionary! {
+            "S" => "URI",
+            "URI" => Object::string_literal("https://example.com/indirect"),
+        });
+        let indirect_link_id = doc.add_object(dictionary! {
+            "Subtype" => "Link",
+            "Rect" => vec![10.into(), 20.into(), 110.into(), 45.into()],
+            "A" => Object::Reference(action_id),
+        });
+        let direct_link = Object::Dictionary(dictionary! {
+            "Subtype" => "Link",
+            "Rect" => vec![1.into(), 2.into(), 4.into(), 8.into()],
+            "A" => dictionary! {
+                "URI" => Object::string_literal("https://example.com/direct"),
+            },
+        });
+        let not_a_link = Object::Dictionary(dictionary! {
+            "Subtype" => "Widget",
+            "Rect" => vec![0.into(), 0.into(), 1.into(), 1.into()],
+            "A" => dictionary! {
+                "URI" => Object::string_literal("https://example.com/ignored"),
+            },
+        });
+        let annotations_id = doc.add_object(Object::Array(vec![
+            Object::Reference(indirect_link_id),
+            direct_link,
+            not_a_link,
+            Object::Null,
+        ]));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Annots" => Object::Reference(annotations_id),
+        });
+
+        let links = extract_page_links(&doc, page_id, 3);
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].text, "https://example.com/indirect");
+        assert_eq!((links[0].x, links[0].y), (10.0, 20.0));
+        assert_eq!((links[0].width, links[0].height), (100.0, 25.0));
+        assert_eq!(links[0].page, 3);
+        assert!(matches!(&links[0].item_type, ItemType::Link(url) if url.ends_with("indirect")));
+        assert_eq!(links[1].text, "https://example.com/direct");
+    }
+
+    #[test]
+    fn ignores_links_without_a_valid_rectangle_or_uri() {
+        let mut doc = Document::new();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Annots" => vec![
+                Object::Dictionary(dictionary! {
+                    "Subtype" => "Link",
+                    "Rect" => vec![1.into(), 2.into(), 3.into()],
+                    "A" => dictionary! { "URI" => Object::string_literal("short") },
+                }),
+                Object::Dictionary(dictionary! {
+                    "Subtype" => "Link",
+                    "Rect" => Object::string_literal("not-an-array"),
+                    "A" => dictionary! { "URI" => Object::string_literal("bad-rect") },
+                }),
+                Object::Dictionary(dictionary! {
+                    "Subtype" => "Link",
+                    "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                    "A" => dictionary! { "URI" => 42 },
+                }),
+                Object::Dictionary(dictionary! {
+                    "Subtype" => "Link",
+                    "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                }),
+            ],
+        });
+
+        assert!(extract_page_links(&doc, page_id, 1).is_empty());
+        assert!(extract_page_links(&doc, (999, 0), 1).is_empty());
+    }
+
     #[test]
     fn widget_without_page_reference_uses_owning_page_annotation() {
         let mut doc = Document::new();
@@ -410,5 +507,104 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].page, 2);
         assert_eq!(items[0].text, "customer: Alice");
+    }
+
+    #[test]
+    fn nested_fields_inherit_type_and_build_qualified_names() {
+        let mut doc = Document::new();
+        let page_id = doc.add_object(dictionary! { "Type" => "Page" });
+        let child_id = doc.add_object(dictionary! {
+            "T" => Object::string_literal("country"),
+            "V" => vec![
+                Object::string_literal("France"),
+                Object::Integer(7),
+                Object::string_literal("Japan"),
+            ],
+            "Rect" => vec![110.into(), 40.into(), 10.into(), 20.into()],
+            "P" => Object::Reference(page_id),
+        });
+        let parent_id = doc.add_object(dictionary! {
+            "FT" => "Ch",
+            "T" => Object::string_literal("shipping"),
+            "Kids" => vec![Object::Reference(child_id), Object::Null],
+        });
+        install_form(
+            &mut doc,
+            vec![Object::Reference(parent_id), Object::Integer(1)],
+            true,
+        );
+
+        let items = extract_form_fields(&doc, &HashMap::from([(page_id, 4)]));
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "shipping.country: France, Japan");
+        assert_eq!(items[0].page, 4);
+        assert_eq!((items[0].x, items[0].y), (110.0, 20.0));
+        assert_eq!((items[0].width, items[0].height), (100.0, 20.0));
+    }
+
+    #[test]
+    fn extracts_button_values_and_filters_empty_or_unsupported_fields() {
+        let mut doc = Document::new();
+        let yes_id = doc.add_object(dictionary! {
+            "FT" => "Btn",
+            "T" => Object::string_literal("accepted"),
+            "V" => "Yes",
+        });
+        let custom_id = doc.add_object(dictionary! {
+            "FT" => "Btn",
+            "V" => "Maybe",
+            "Rect" => Object::string_literal("invalid"),
+        });
+        let off_id = doc.add_object(dictionary! { "FT" => "Btn", "V" => "Off" });
+        let signature_id = doc.add_object(dictionary! { "FT" => "Sig", "V" => "Signed" });
+        let empty_id = doc.add_object(dictionary! {
+            "FT" => "Tx",
+            "V" => Object::string_literal(""),
+        });
+        let invalid_array_id = doc.add_object(dictionary! {
+            "FT" => "Ch",
+            "V" => vec![Object::Integer(1)],
+        });
+        let missing_type_id = doc.add_object(dictionary! {
+            "V" => Object::string_literal("ignored"),
+        });
+        install_form(
+            &mut doc,
+            vec![
+                Object::Reference(yes_id),
+                Object::Reference(custom_id),
+                Object::Reference(off_id),
+                Object::Reference(signature_id),
+                Object::Reference(empty_id),
+                Object::Reference(invalid_array_id),
+                Object::Reference(missing_type_id),
+            ],
+            false,
+        );
+
+        let items = extract_form_fields(&doc, &HashMap::new());
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].text, "accepted: Yes");
+        assert_eq!(items[1].text, "Maybe");
+        assert_eq!(items[1].page, 1);
+        assert_eq!((items[1].x, items[1].y), (0.0, 0.0));
+    }
+
+    #[test]
+    fn malformed_acroform_roots_return_no_fields() {
+        let mut no_root = Document::new();
+        assert!(extract_form_fields(&no_root, &HashMap::new()).is_empty());
+
+        no_root.trailer.set("Root", Object::Integer(1));
+        assert!(extract_form_fields(&no_root, &HashMap::new()).is_empty());
+
+        let mut no_acroform = Document::new();
+        let catalog_id = no_acroform.add_object(dictionary! { "Type" => "Catalog" });
+        no_acroform
+            .trailer
+            .set("Root", Object::Reference(catalog_id));
+        assert!(extract_form_fields(&no_acroform, &HashMap::new()).is_empty());
     }
 }

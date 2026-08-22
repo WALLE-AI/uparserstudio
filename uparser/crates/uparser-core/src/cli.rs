@@ -44,6 +44,10 @@ pub enum Command {
         path: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
+        /// Write the successful aggregate result to this file instead of
+        /// stdout. Errors continue to use the normal stdout/stderr contract.
+        #[arg(long)]
+        output: Option<String>,
         /// Markdown rendering source. `engine` preserves native/document
         /// engine output; `canonical` uses the shared ParseResult renderer
         /// for G-N comparison. Ignored for non-Markdown output.
@@ -241,6 +245,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Parse {
             path,
             format,
+            output,
             markdown_source,
             mode,
             protocol,
@@ -328,6 +333,7 @@ pub fn run(cli: Cli) -> i32 {
             run_parse(
                 path,
                 format,
+                output,
                 markdown_source,
                 protocol,
                 endpoint,
@@ -407,6 +413,7 @@ fn resolve_mode(mode: Option<ParseMode>, protocol: Option<&str>) -> Result<Strin
 fn run_parse(
     path: String,
     format: OutputFormat,
+    output_path: Option<String>,
     markdown_source: MarkdownSource,
     protocol: String,
     endpoint: Option<String>,
@@ -424,6 +431,16 @@ fn run_parse(
     headers_footers: bool,
     max_input_mib: Option<u64>,
 ) -> i32 {
+    if stream && output_path.is_some() {
+        return emit_error(
+            format,
+            EXIT_USAGE,
+            "invalid_output_selection",
+            "--output cannot be combined with --stream",
+            &protocol,
+            Some("output"),
+        );
+    }
     if !Path::new(&path).exists() {
         return emit_error(
             format,
@@ -449,13 +466,72 @@ fn run_parse(
         }
     };
 
+    let mut document_options = uparser_document_engine::ParseOptions {
+        include_notes: !no_notes,
+        include_headers_footers: headers_footers,
+        include_assets: !no_assets,
+        ..uparser_document_engine::ParseOptions::default()
+    };
+    if let Some(mib) = max_input_mib {
+        document_options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
+    }
+
+    // The explicit native Markdown/no-assets mode needs no async services,
+    // routing enrichment, compatibility IR, or execution metadata. Keep this
+    // direct path aligned with lightweight converter CLIs used in benchmarks.
+    if protocol == "native"
+        && format == OutputFormat::Markdown
+        && markdown_source == MarkdownSource::Engine
+        && no_cache
+        && !stream
+        && !no_postprocess
+        && wanted_pages.is_none()
+        && assets_dir.is_none()
+        && no_assets
+        && window_size == DEFAULT_WINDOW_SIZE
+        && max_concurrency == DEFAULT_MAX_CONCURRENCY
+    {
+        match native_markdown_fast_path(&path, &file_bytes, &document_options) {
+            Ok(Some(markdown)) => {
+                return match emit_parse_output(&markdown, output_path.as_deref()) {
+                    Ok(()) => EXIT_SUCCESS,
+                    Err(error) => emit_error(
+                        format,
+                        EXIT_DEPENDENCY,
+                        "output_write_failed",
+                        &error.to_string(),
+                        &protocol,
+                        Some("output"),
+                    ),
+                };
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return emit_error(
+                    format,
+                    EXIT_DEPENDENCY,
+                    "native_parse_failed",
+                    &error,
+                    &protocol,
+                    Some("native"),
+                );
+            }
+        }
+    }
+
     let preflight_source = crate::frontend::PreflightSource::new(
-        std::sync::Arc::<[u8]>::from(file_bytes.clone()),
+        std::sync::Arc::<[u8]>::from(file_bytes),
         Some(&path),
     );
     let detected_format = preflight_source.format();
     let cancellation = crate::frontend::CancellationToken::default();
-    let prepare_runtime = match tokio::runtime::Runtime::new() {
+    let prepare_runtime = match if protocol == "native" {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    } else {
+        tokio::runtime::Runtime::new()
+    } {
         Ok(runtime) => runtime,
         Err(error) => {
             return emit_error(
@@ -527,7 +603,11 @@ fn run_parse(
         );
     }
 
-    if protocol == "auto" && effective_protocol != "native" && endpoint.is_none() {
+    if protocol == "auto"
+        && effective_protocol != "native"
+        && effective_protocol != "tesseract"
+        && endpoint.is_none()
+    {
         eprintln!(
             "hint: auto selected '{effective_protocol}', which needs a model endpoint, but \
              none is configured - set UPARSER_ENDPOINT (or --endpoint / config.toml)"
@@ -549,15 +629,6 @@ fn run_parse(
         }
     }
 
-    let mut document_options = uparser_document_engine::ParseOptions {
-        include_notes: !no_notes,
-        include_headers_footers: headers_footers,
-        include_assets: !no_assets,
-        ..uparser_document_engine::ParseOptions::default()
-    };
-    if let Some(mib) = max_input_mib {
-        document_options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
-    }
     let execution = crate::runner::ExecutionOptions {
         endpoint,
         model,
@@ -731,7 +802,16 @@ fn run_parse(
                 }
             }
         };
-        emit_line(&output);
+        if let Err(error) = emit_parse_output(&output, output_path.as_deref()) {
+            return emit_error(
+                format,
+                EXIT_DEPENDENCY,
+                "output_write_failed",
+                &error.to_string(),
+                &effective_protocol,
+                Some("output"),
+            );
+        }
     }
 
     if has_errors {
@@ -739,6 +819,51 @@ fn run_parse(
     } else {
         EXIT_SUCCESS
     }
+}
+
+fn native_markdown_fast_path(
+    path: &str,
+    bytes: &[u8],
+    options: &uparser_document_engine::ParseOptions,
+) -> Result<Option<String>, String> {
+    let detected = uparser_document_engine::detect_format(bytes, Some(path));
+    if detected == uparser_document_engine::DocumentFormat::Pdf {
+        #[cfg(feature = "native")]
+        {
+            let artifact =
+                uparser_native_engine::process_pdf_mem(bytes).map_err(|error| error.to_string())?;
+            if let Some(markdown) = artifact
+                .markdown
+                .as_deref()
+                .filter(|markdown| !markdown.trim().is_empty())
+            {
+                return Ok(Some(markdown.to_owned()));
+            }
+            if artifact.positioned_items.is_empty() {
+                let markdown = match artifact
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(title) => format!("# {title}\n\n[Image-only PDF: OCR required]\n"),
+                    None => "[Image-only PDF: OCR required]\n".to_owned(),
+                };
+                return Ok(Some(markdown));
+            }
+            return Ok(Some(uparser_native_engine::to_markdown_from_items(
+                artifact.positioned_items,
+                uparser_native_engine::MarkdownOptions::default(),
+            )));
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            return Ok(None);
+        }
+    }
+    let document = uparser_document_engine::parse_document(bytes, detected, options)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(uparser_document_engine::render::markdown(&document)))
 }
 
 /// Print a result line to stdout, treating a closed pipe as a normal end of
@@ -755,6 +880,15 @@ fn emit_line(text: &str) {
         return;
     }
     let _ = handle.flush();
+}
+
+fn emit_parse_output(text: &str, output: Option<&str>) -> std::io::Result<()> {
+    if let Some(path) = output {
+        std::fs::write(path, text)
+    } else {
+        emit_line(text);
+        Ok(())
+    }
 }
 
 /// the resulting `DocumentProfile` as JSON to stdout.

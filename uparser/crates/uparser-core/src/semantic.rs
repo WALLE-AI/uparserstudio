@@ -218,6 +218,103 @@ mod tests {
         .unwrap();
         assert_eq!(prediction.primary, DocumentGenre::Resume);
         assert_eq!(prediction.confidence, 1.0);
+
+        let plain = decode_prediction(
+            "{\"primary\":\"contract\",\"tags\":[\"tender\"],\"confidence\":-0.2}",
+        )
+        .unwrap();
+        assert_eq!(plain.primary, DocumentGenre::Contract);
+        assert_eq!(plain.tags, [DocumentGenre::Tender]);
+        assert_eq!(plain.confidence, 0.0);
+        assert!(decode_prediction("```json\nnot json\n```").is_err());
+    }
+
+    #[test]
+    fn structured_samples_escalate_and_are_bounded() {
+        let mut value = report();
+        let mut document = uparser_document_engine::CanonicalDocument::new(DocumentFormat::Docx);
+        let mut unit = uparser_document_engine::DocumentUnit::new(
+            uparser_document_engine::UnitKind::Flow,
+            0,
+            None,
+        );
+        unit.blocks.push(uparser_document_engine::Block::paragraph(
+            "x".repeat(MAX_SAMPLE_CHARS + 50),
+        ));
+        document.units.push(unit);
+        value.artifacts = AnalysisArtifacts::Structured(document);
+
+        assert!(should_escalate(&value));
+        assert_eq!(sample_text(&value).chars().count(), MAX_SAMPLE_CHARS);
+    }
+
+    #[test]
+    fn legacy_kind_mapping_is_exhaustive_for_compatibility_categories() {
+        assert_eq!(legacy_kind(DocumentGenre::Book), DocumentKind::Book);
+        assert_eq!(legacy_kind(DocumentGenre::Resume), DocumentKind::Resume);
+        assert_eq!(
+            legacy_kind(DocumentGenre::Presentation),
+            DocumentKind::Slide
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::Spreadsheet),
+            DocumentKind::Spreadsheet
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::AcademicPaper),
+            DocumentKind::AcademicPaper
+        );
+        assert_eq!(
+            legacy_kind(DocumentGenre::FinancialReport),
+            DocumentKind::Report
+        );
+        assert_eq!(legacy_kind(DocumentGenre::Contract), DocumentKind::Unknown);
+    }
+
+    #[tokio::test]
+    async fn classifier_decodes_success_and_reports_invalid_payloads() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "{\"primary\":\"manual\",\"tags\":[],\"confidence\":0.8}"
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let prediction = match classify(
+            &server.uri(),
+            "classifier",
+            "document sample",
+            crate::frontend::CancellationToken::default(),
+        )
+        .await
+        {
+            Ok(prediction) => prediction,
+            Err(_) => panic!("valid classifier response"),
+        };
+        assert_eq!(prediction.primary, DocumentGenre::Manual);
+
+        let invalid = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"finish_reason": "stop", "message": {"content": "not json"}}]
+            })))
+            .mount(&invalid)
+            .await;
+        assert!(matches!(
+            classify(
+                &invalid.uri(),
+                "classifier",
+                "document sample",
+                crate::frontend::CancellationToken::default(),
+            )
+            .await,
+            Err(ClassifyError::Failed(_))
+        ));
     }
 
     #[tokio::test]

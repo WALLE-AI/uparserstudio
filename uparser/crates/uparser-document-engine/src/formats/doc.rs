@@ -585,6 +585,70 @@ fn read_u32_checked(bytes: &[u8], at: usize) -> Result<u32, DocumentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn fib_bytes(
+        flags: u16,
+        lid: u16,
+        fc_min: u32,
+        fc_mac: u32,
+        main_text_length: u32,
+        clx_offset: u32,
+        clx_length: u32,
+    ) -> Vec<u8> {
+        let mut bytes = vec![0u8; 326];
+        bytes[0..2].copy_from_slice(&0xA5ECu16.to_le_bytes());
+        bytes[6..8].copy_from_slice(&lid.to_le_bytes());
+        bytes[10..12].copy_from_slice(&flags.to_le_bytes());
+        bytes[24..28].copy_from_slice(&fc_min.to_le_bytes());
+        bytes[28..32].copy_from_slice(&fc_mac.to_le_bytes());
+        bytes[32..34].copy_from_slice(&0u16.to_le_bytes());
+        bytes[34..36].copy_from_slice(&4u16.to_le_bytes());
+        bytes[48..52].copy_from_slice(&main_text_length.to_le_bytes());
+        bytes[52..54].copy_from_slice(&34u16.to_le_bytes());
+        bytes[318..322].copy_from_slice(&clx_offset.to_le_bytes());
+        bytes[322..326].copy_from_slice(&clx_length.to_le_bytes());
+        bytes
+    }
+
+    fn plc_pcd(cps: &[u32], descriptors: &[(u32, bool)]) -> Vec<u8> {
+        assert_eq!(cps.len(), descriptors.len() + 1);
+        let mut body = Vec::new();
+        for cp in cps {
+            body.extend_from_slice(&cp.to_le_bytes());
+        }
+        for &(offset, compressed) in descriptors {
+            body.extend_from_slice(&0u16.to_le_bytes());
+            let raw = if compressed {
+                0x4000_0000 | offset.saturating_mul(2)
+            } else {
+                offset
+            };
+            body.extend_from_slice(&raw.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+        }
+        body
+    }
+
+    fn clx(body: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0x01, 2, 0, 0xAA, 0xBB, 0x02];
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    fn ole(streams: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut compound = cfb::CompoundFile::create(Cursor::new(&mut bytes)).unwrap();
+            for &(name, contents) in streams {
+                let mut stream = compound.create_stream(name).unwrap();
+                stream.write_all(contents).unwrap();
+            }
+            compound.flush().unwrap();
+        }
+        bytes
+    }
 
     #[test]
     fn paragraph_marks_split_blocks() {
@@ -637,6 +701,217 @@ mod tests {
             blocks_from_text(text, &options),
             Err(DocumentError::ResourceLimit {
                 limit: "max_expansion",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fib_walks_variable_sections_and_reads_flags() {
+        let bytes = fib_bytes(0x4200, 0x0411, 400, 450, 9, 17, 23);
+        let fib = Fib::parse(&bytes).unwrap();
+        assert!(fib.uses_table_1);
+        assert!(fib.far_east);
+        assert_eq!(fib.lid, 0x0411);
+        assert_eq!((fib.fc_min, fib.fc_mac), (400, 450));
+        assert_eq!(fib.main_text_length, 9);
+        assert_eq!((fib.clx_offset, fib.clx_length), (17, 23));
+    }
+
+    #[test]
+    fn short_fib_variants_fall_back_or_fail_cleanly() {
+        assert!(matches!(
+            Fib::parse(&[0u8; 33]),
+            Err(DocumentError::Malformed { .. })
+        ));
+
+        let mut minimal = vec![0u8; 36];
+        minimal[0..2].copy_from_slice(&0xA5ECu16.to_le_bytes());
+        let fib = Fib::parse(&minimal).unwrap();
+        assert_eq!(fib.main_text_length, 0);
+        assert_eq!((fib.clx_offset, fib.clx_length), (0, 0));
+
+        minimal[34..36].copy_from_slice(&4u16.to_le_bytes());
+        assert!(matches!(
+            Fib::parse(&minimal),
+            Err(DocumentError::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn piece_table_decodes_compressed_and_utf16_text() {
+        let body = plc_pcd(&[0, 3, 5], &[(400, true), (500, false)]);
+        let table = clx(&body);
+        let fib = Fib::parse(&fib_bytes(0, 0x0409, 0, 0, 5, 0, table.len() as u32)).unwrap();
+        let mut word = vec![0u8; 504];
+        word[400..403].copy_from_slice(b"Hi ");
+        word[500..504].copy_from_slice(&[0x16, 0x4E, 0x4C, 0x75]);
+        let mut warnings = Vec::new();
+        assert_eq!(
+            extract_text(&fib, &word, &table, &mut warnings).unwrap(),
+            "Hi 世界"
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn main_text_length_clips_and_skips_later_pieces() {
+        let body = plc_pcd(&[0, 4, 8], &[(100, true), (110, true)]);
+        let table = clx(&body);
+        let fib = Fib::parse(&fib_bytes(0, 0x0409, 0, 0, 2, 0, table.len() as u32)).unwrap();
+        let mut word = vec![0u8; 114];
+        word[100..104].copy_from_slice(b"body");
+        word[110..114].copy_from_slice(b"tail");
+        assert_eq!(
+            extract_text(&fib, &word, &table, &mut Vec::new()).unwrap(),
+            "bo"
+        );
+    }
+
+    #[test]
+    fn invalid_or_truncated_pieces_degrade_with_warnings() {
+        let body = plc_pcd(&[0, 4], &[(100, true)]);
+        let table = clx(&body);
+        let fib = Fib::parse(&fib_bytes(0, 0, 1, 4, 0, 0, table.len() as u32)).unwrap();
+        let mut warnings = Vec::new();
+        assert_eq!(
+            extract_text(&fib, b" fallback", &table, &mut warnings).unwrap(),
+            ""
+        );
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, WarningCode::TruncatedContent);
+
+        let outside = Fib::parse(&fib_bytes(0, 0, 1, 4, 0, 999, 10)).unwrap();
+        warnings.clear();
+        assert_eq!(
+            extract_text(&outside, b" fallback", b"tiny", &mut warnings).unwrap(),
+            "fal"
+        );
+        assert!(warnings[0].message.contains("outside"));
+    }
+
+    #[test]
+    fn malformed_clx_and_plc_are_handled() {
+        let fib = Fib::parse(&fib_bytes(0, 0, 0, 0, 0, 0, 4)).unwrap();
+        assert!(matches!(
+            parse_piece_table(&fib, &[0x01, 0xFF], &mut Vec::new()),
+            Err(DocumentError::Malformed { .. })
+        ));
+
+        let mut warnings = Vec::new();
+        assert!(
+            parse_piece_table(&fib, &[0, 0, 0, 0], &mut warnings)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(warnings[0].message.contains("no piece table"));
+        assert!(parse_plc_pcd(&[0; 15]).is_empty());
+
+        let invalid_cp = plc_pcd(&[5, 5], &[(20, true)]);
+        assert!(parse_plc_pcd(&invalid_cp).is_empty());
+    }
+
+    #[test]
+    fn contiguous_text_uses_language_codepages_and_bounds() {
+        let cyrillic = Fib::parse(&fib_bytes(0, 0x0419, 1, 7, 0, 0, 0)).unwrap();
+        assert_eq!(
+            contiguous_text(&cyrillic, b" \xCF\xF0\xE8\xE2\xE5\xF2"),
+            "Привет"
+        );
+
+        let japanese = Fib::parse(&fib_bytes(0x4000, 0, 0, 4, 0, 0, 0)).unwrap();
+        assert_eq!(
+            contiguous_text(&japanese, &[0x93, 0xFA, 0x96, 0x7B]),
+            "日本"
+        );
+
+        let empty = Fib::parse(&fib_bytes(0, 0, 10, 2, 0, 0, 0)).unwrap();
+        assert!(contiguous_text(&empty, b"short").is_empty());
+    }
+
+    #[test]
+    fn codepage_mapping_covers_language_families() {
+        assert_eq!(codepage_for(0x0411).name(), "Shift_JIS");
+        assert_eq!(codepage_for(0x0412).name(), "EUC-KR");
+        assert_eq!(codepage_for(0x0419).name(), "windows-1251");
+        assert_eq!(codepage_for(0x0405).name(), "windows-1250");
+        assert_eq!(codepage_for(0x0408).name(), "windows-1253");
+        assert_eq!(codepage_for(0x041F).name(), "windows-1254");
+        assert_eq!(codepage_for(0x040D).name(), "windows-1255");
+        assert_eq!(codepage_for(0x0401).name(), "windows-1256");
+        assert_eq!(codepage_for(0x0425).name(), "windows-1257");
+        assert_eq!(codepage_for(0x0404).name(), "Big5");
+        assert_eq!(codepage_for(0x0804).name(), "GBK");
+        assert_eq!(codepage_for(0).name(), "windows-1252");
+    }
+
+    #[test]
+    fn block_conversion_handles_breaks_controls_and_uneven_tables() {
+        let blocks = blocks_from_text(
+            "one\u{b}two\u{c}A\u{7}B\u{7}\rC\u{7}\r\u{1}tail",
+            &ParseOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(blocks[0], Block::paragraph("one\ntwo"));
+        assert_eq!(blocks[1], Block::Rule);
+        let Block::Table { table } = &blocks[2] else {
+            panic!("{blocks:?}")
+        };
+        assert_eq!((table.rows, table.columns), (2, 2));
+        let CellSlot::Origin(empty) = &table.grid[1][1] else {
+            panic!()
+        };
+        assert_eq!(empty.value_kind, CellValueKind::Empty);
+        assert_eq!(blocks[3], Block::paragraph("tail"));
+
+        let trailing = blocks_from_text("x\u{7}y", &ParseOptions::default()).unwrap();
+        assert!(matches!(trailing[0], Block::Table { .. }));
+    }
+
+    #[test]
+    fn text_budget_is_enforced() {
+        let mut options = ParseOptions::default();
+        options.limits.max_text_bytes = 3;
+        assert!(matches!(
+            enforce_text_budget(4, &options),
+            Err(DocumentError::ResourceLimit {
+                limit: "max_text_bytes",
+                ..
+            })
+        ));
+        enforce_text_budget(3, &options).unwrap();
+    }
+
+    #[test]
+    fn real_ole_parse_uses_selected_table_stream() {
+        let body = plc_pcd(&[0, 6], &[(400, true)]);
+        let table = clx(&body);
+        let mut word = fib_bytes(0x0200, 0x0409, 0, 0, 6, 0, table.len() as u32);
+        word.resize(406, 0);
+        word[400..406].copy_from_slice(b"Hello\r");
+        let bytes = ole(&[("WordDocument", &word), ("1Table", &table)]);
+        let document = parse(&bytes, &ParseOptions::default()).unwrap();
+        assert_eq!(document.metadata.format, DocumentFormat::Doc);
+        assert_eq!(document.units[0].blocks[0], Block::paragraph("Hello"));
+        assert_eq!(document.warnings.len(), 1);
+    }
+
+    #[test]
+    fn ole_parse_reports_missing_stream_and_entry_limit() {
+        let bytes = ole(&[("Other", b"data")]);
+        assert!(matches!(
+            parse(&bytes, &ParseOptions::default()),
+            Err(DocumentError::MissingPart { .. })
+        ));
+
+        let word = fib_bytes(0, 0x0409, 0, 0, 0, 0, 0);
+        let bytes = ole(&[("WordDocument", &word)]);
+        let mut options = ParseOptions::default();
+        options.limits.max_entry_bytes = 10;
+        assert!(matches!(
+            parse(&bytes, &options),
+            Err(DocumentError::ResourceLimit {
+                limit: "max_entry_bytes",
                 ..
             })
         ));

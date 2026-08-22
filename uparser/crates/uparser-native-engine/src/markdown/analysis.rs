@@ -626,4 +626,111 @@ mod tests {
         assert!(!is_heading_fragment("Sales by Region (2024)"));
         assert!(!is_heading_fragment("Results (preliminary)"));
     }
+
+    #[test]
+    fn font_statistics_ignore_small_text_and_break_ties_deterministically() {
+        let items = vec![
+            line_of("body one", 12.0, false, 700.0).items.remove(0),
+            line_of("body two", 12.0, false, 680.0).items.remove(0),
+            line_of("caption", 8.0, false, 660.0).items.remove(0),
+            line_of("heading one", 16.0, true, 640.0).items.remove(0),
+            line_of("heading two", 16.0, true, 620.0).items.remove(0),
+        ];
+        let stats = calculate_font_stats_from_items(&items);
+        assert_eq!(stats.most_common_size, 12.0);
+        assert_eq!(stats.total_lines, 4);
+        assert_eq!(font_size_rarity(12.0, &stats), 0.5);
+        assert_eq!(font_size_rarity(20.0, &stats), 1.0);
+        assert_eq!(
+            font_size_rarity(
+                12.0,
+                &FontStats {
+                    most_common_size: 12.0,
+                    size_counts: HashMap::new(),
+                    total_lines: 0,
+                },
+            ),
+            0.0
+        );
+
+        let lines = vec![
+            line_of("sixteen", 16.0, true, 700.0),
+            line_of("twelve", 12.0, false, 680.0),
+            TextLine {
+                items: vec![],
+                y: 660.0,
+                page: 1,
+                adaptive_threshold: 0.1,
+            },
+        ];
+        let tied = calculate_font_stats(&lines);
+        assert_eq!(tied.most_common_size, 12.0);
+        assert_eq!(tied.total_lines, 2);
+    }
+
+    #[test]
+    fn dot_leaders_and_heading_levels_cover_fallback_boundaries() {
+        assert!(has_dot_leaders("Chapter One .... 1"));
+        assert!(has_dot_leaders("Chapter ...   ... 1"));
+        assert!(!has_dot_leaders("Version 1.2.3"));
+        assert_eq!(bold_heading_level(&[]), 2);
+        assert_eq!(bold_heading_level(&[18.0, 16.0]), 3);
+        assert_eq!(bold_heading_level(&[20.0; 8]), 6);
+
+        assert_eq!(detect_header_level(24.0, 12.0, &[], false), Some(1));
+        assert_eq!(detect_header_level(18.0, 12.0, &[], false), Some(2));
+        assert_eq!(detect_header_level(15.0, 12.0, &[], false), Some(3));
+        assert_eq!(detect_header_level(14.5, 12.0, &[], false), Some(4));
+        assert_eq!(
+            detect_header_level(19.0, 12.0, &[24.0, 18.0], false),
+            Some(3)
+        );
+        assert_eq!(detect_header_level(16.0, 12.0, &[24.0, 18.0], false), None);
+    }
+
+    #[test]
+    fn paragraph_threshold_uses_same_page_median_and_fallback() {
+        let sparse = vec![
+            line_of("first", 10.0, false, 700.0),
+            line_of("second", 10.0, false, 685.0),
+        ];
+        assert_eq!(compute_paragraph_threshold(&sparse, 10.0), 18.0);
+
+        let mut regular = Vec::new();
+        for (index, y) in [700.0, 686.0, 672.0, 658.0, 644.0, 630.0, 616.0]
+            .into_iter()
+            .enumerate()
+        {
+            regular.push(line_of(&format!("line {index}"), 10.0, false, y));
+        }
+        assert!((compute_paragraph_threshold(&regular, 10.0) - 18.2).abs() < 0.001);
+    }
+
+    #[test]
+    fn heading_tiers_cluster_cap_and_bold_mass_are_stable() {
+        let lines = vec![
+            line_of("Title", 24.0, true, 700.0),
+            line_of("Near title", 23.7, true, 680.0),
+            line_of("Section", 20.0, true, 660.0),
+            line_of("Subsection", 18.0, true, 640.0),
+            line_of("Minor", 16.0, true, 620.0),
+            line_of("Extra", 14.0, true, 600.0),
+        ];
+        assert_eq!(
+            compute_heading_tiers(&lines, 10.0),
+            vec![24.0, 20.0, 18.0, 16.0]
+        );
+
+        let mut mixed = line_of("12. ", 12.0, false, 500.0);
+        mixed
+            .items
+            .push(line_of("Mostly Bold", 12.0, true, 500.0).items.remove(0));
+        assert!(line_is_mostly_bold(&mixed));
+        assert!(!line_is_mostly_bold(&TextLine {
+            items: vec![],
+            y: 0.0,
+            page: 1,
+            adaptive_threshold: 0.1,
+        }));
+    }
 }

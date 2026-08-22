@@ -74,6 +74,111 @@ fn parse_markdown(source: &std::path::Path, extra: &[&str]) -> String {
     String::from_utf8(output).unwrap()
 }
 
+#[test]
+fn lightweight_native_cli_converts_structured_markdown() {
+    let mut source = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    source.write_all(b"name,value\nalpha,42\n").unwrap();
+
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .args([
+            "parse",
+            source.path().to_str().unwrap(),
+            "--protocol",
+            "native",
+            "--format",
+            "markdown",
+            "--no-assets",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("| alpha | 42 |"));
+}
+
+#[test]
+fn lightweight_native_cli_validates_arguments_and_writes_output_files() {
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("usage: uparser-native"));
+
+    for args in [
+        vec![],
+        vec!["--unknown"],
+        vec!["--ocr-lang"],
+        vec!["input.csv", "extra.csv"],
+        vec!["input.csv", "--format", "json"],
+        vec!["input.csv", "--protocol", "mock"],
+        vec!["input.csv", "--output"],
+    ] {
+        Command::cargo_bin("uparser-native")
+            .unwrap()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("error:"));
+    }
+
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .arg("Z:\\no-such-input.csv")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("read failed"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("rows.csv");
+    let output = dir.path().join("rows.md");
+    std::fs::write(&source, b"name,value\nalpha,42\n").unwrap();
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .args([
+            source.to_str().unwrap(),
+            "--no-ocr",
+            "--ocr-lang",
+            "deu",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+    assert!(
+        std::fs::read_to_string(output)
+            .unwrap()
+            .contains("| alpha | 42 |")
+    );
+}
+
+#[test]
+fn lightweight_native_cli_reports_pdf_and_output_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let broken_pdf = dir.path().join("broken.pdf");
+    std::fs::write(&broken_pdf, b"%PDF-1.7\nnot valid").unwrap();
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .arg(broken_pdf.to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("PDF parse failed"));
+
+    let source = dir.path().join("rows.csv");
+    std::fs::write(&source, b"name,value\nalpha,42\n").unwrap();
+    Command::cargo_bin("uparser-native")
+        .unwrap()
+        .args([
+            source.to_str().unwrap(),
+            "--output",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("write failed"));
+}
+
 /// Structured formats previously kept their embedded images only in memory:
 /// the Markdown referenced an opaque `asset-<hash>` id and nothing was ever
 /// written, so every image link was dead.
@@ -111,7 +216,7 @@ fn no_assets_writes_nothing_and_emits_no_image_link() {
     let source = dir.path().join("pictured.docx");
     std::fs::write(&source, docx_with_image_bytes()).unwrap();
 
-    assert!(!parse_markdown(&source, &["--no-assets"]).contains("!["));
+    assert!(!parse_markdown(&source, &["--no-assets", "--no-cache"]).contains("!["));
     assert!(!dir.path().join("pictured_images").exists());
 }
 
