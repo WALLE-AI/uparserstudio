@@ -264,15 +264,87 @@ fn plan_reports_mode_conflicts_and_missing_inputs_as_structured_errors() {
 }
 
 #[cfg(feature = "native")]
-fn native_pdf_fixture() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../opensource/pdf-inspector/tests/fixtures/bare_name_struct.pdf")
+fn build_pdf(objects: &[Vec<u8>], info_object: Option<usize>) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        pdf.extend_from_slice(object);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    let info = info_object
+        .map(|object| format!(" /Info {object} 0 R"))
+        .unwrap_or_default();
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R{info} >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
 }
 
 #[cfg(feature = "native")]
-fn image_only_pdf_fixture() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../benchmark/opendataloader-bench/pdfs/01030000000141.pdf")
+fn pdf_fixture(objects: &[Vec<u8>], info_object: Option<usize>) -> tempfile::NamedTempFile {
+    let mut file = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+    file.write_all(&build_pdf(objects, info_object)).unwrap();
+    file
+}
+
+#[cfg(feature = "native")]
+fn native_pdf_fixture() -> tempfile::NamedTempFile {
+    let content = b"BT /F1 12 Tf 72 720 Td (Hello release) Tj ET";
+    pdf_fixture(
+        &[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(),
+                content,
+                b"\nendstream",
+            ]
+            .concat(),
+        ],
+        None,
+    )
+}
+
+#[cfg(feature = "native")]
+fn image_only_pdf_fixture(title: Option<&str>) -> tempfile::NamedTempFile {
+    let content = b"q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        [
+            &b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n"[..],
+            &[255, 255, 255][..],
+            &b"\nendstream"[..],
+        ]
+        .concat(),
+        [
+            format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(),
+            content,
+            b"\nendstream",
+        ]
+        .concat(),
+    ];
+    let info_object = title.map(|value| {
+        objects.push(format!("<< /Title ({value}) >>").into_bytes());
+        objects.len()
+    });
+    pdf_fixture(&objects, info_object)
 }
 
 #[cfg(feature = "native")]
@@ -297,12 +369,11 @@ fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
         .stdout(predicate::str::contains("| alpha | 42 |"));
 
     let pdf = native_pdf_fixture();
-    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
     Command::cargo_bin("uparser")
         .unwrap()
         .args([
             "parse",
-            pdf.to_str().unwrap(),
+            pdf.path().to_str().unwrap(),
             "--protocol",
             "native",
             "--format",
@@ -337,14 +408,13 @@ fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
 #[cfg(feature = "native")]
 #[test]
 fn native_markdown_fast_path_reports_image_only_pdf_metadata() {
-    let pdf = image_only_pdf_fixture();
-    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
+    let pdf = image_only_pdf_fixture(Some("INFOGRAPHIC- 10 Things to Know about Copyright"));
 
     Command::cargo_bin("uparser")
         .unwrap()
         .args([
             "parse",
-            pdf.to_str().unwrap(),
+            pdf.path().to_str().unwrap(),
             "--protocol",
             "native",
             "--format",
@@ -363,15 +433,7 @@ fn native_markdown_fast_path_reports_image_only_pdf_metadata() {
 #[cfg(feature = "native")]
 #[test]
 fn native_markdown_fast_path_reports_image_only_pdf_without_metadata() {
-    let mut bytes = std::fs::read(image_only_pdf_fixture()).unwrap();
-    let title_key = b"/Title(";
-    let key_start = bytes
-        .windows(title_key.len())
-        .position(|window| window == title_key)
-        .expect("fixture Info dictionary title");
-    bytes[key_start + 1] = b'X';
-    let mut pdf = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
-    pdf.write_all(&bytes).unwrap();
+    let pdf = image_only_pdf_fixture(None);
 
     Command::cargo_bin("uparser")
         .unwrap()
@@ -452,12 +514,11 @@ fn output_write_failure_is_a_dependency_error() {
 #[test]
 fn native_pdf_rejects_document_json_and_native_flags_warn_when_ignored() {
     let pdf = native_pdf_fixture();
-    assert!(pdf.is_file(), "missing fixture: {}", pdf.display());
     Command::cargo_bin("uparser")
         .unwrap()
         .args([
             "parse",
-            pdf.to_str().unwrap(),
+            pdf.path().to_str().unwrap(),
             "--protocol",
             "native",
             "--format",
