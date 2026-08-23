@@ -1436,6 +1436,39 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    #[cfg(feature = "native")]
+    fn minimal_text_pdf() -> Vec<u8> {
+        let content = "BT /F1 12 Tf 72 720 Td (Hello release) Tj ET";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
     fn text_block(text: &str) -> crate::types::Block {
         crate::types::Block {
             geom: crate::types::Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
@@ -1516,11 +1549,7 @@ mod tests {
     #[cfg(feature = "native")]
     #[tokio::test]
     async fn native_runner_reuses_pdf_artifact_and_preserves_engine_markdown() {
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../opensource/liteparse/integration_tests_data/sample.pdf"
-        );
-        let bytes: Arc<[u8]> = std::fs::read(fixture).unwrap().into();
+        let bytes: Arc<[u8]> = minimal_text_pdf().into();
         let expected = uparser_native_engine::process_pdf_mem(&bytes)
             .unwrap()
             .markdown
