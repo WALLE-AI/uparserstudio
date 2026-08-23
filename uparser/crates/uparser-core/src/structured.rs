@@ -131,6 +131,7 @@ fn compatibility_block(
         error: None,
         asset_bytes,
         asset_path: None,
+        asset_caption: None,
     }
 }
 

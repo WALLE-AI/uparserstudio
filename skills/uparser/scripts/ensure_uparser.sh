@@ -18,7 +18,8 @@ set -euo pipefail
 # back to a from-source build, so only move it once the asset exists.
 VERSION="${UPARSER_VERSION:-0.3.0}"
 REPO="${UPARSER_REPO:-WALLE-AI/uparserstudio}"
-CACHE="${UPARSER_HOME:-$HOME/.cache/uparser}/bin"
+CACHE_ROOT="${UPARSER_HOME:-$HOME/.cache/uparser}"
+CACHE="$CACHE_ROOT/versions/v$VERSION/$(uname -s)-$(uname -m)"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 0) explicit binary (use this for an unreleased workspace build)

@@ -177,11 +177,11 @@ uparserstudio/
 
 | Crate | 版本 | 类型 | 说明 | License |
 |---|---|---|---|---|
-| `uparser-core` | 0.1.0 | lib + bin(`uparser`) | 核心解析引擎、六协议适配器、调度、缓存、CLI | UNLICENSED |
-| `uparser-napi` | 0.1.0 | cdylib + rlib | Node.js 绑定,导出 async `parse`/`classify` | UNLICENSED |
-| `uparser-python` | 0.1.0 | cdylib(`_uparser`)| Python 绑定,导出 `parse`/`classify` | UNLICENSED |
+| `uparser-core` | 0.4.0-rc.1 | lib + bin(`uparser`) | 核心解析引擎、六协议适配器、调度、缓存、CLI | UNLICENSED |
+| `uparser-napi` | 0.4.0-rc.1 | cdylib + rlib | Node.js 绑定,导出 async `parse`/`classify` | UNLICENSED |
+| `uparser-python` | 0.4.0-rc.1 | cdylib(`_uparser`)| Python 绑定,导出 `parse`/`classify` | UNLICENSED |
 | `uparser-native-engine` | 0.1.7 | lib | `native` 协议的纯 Rust **PDF** 引擎(lopdf,无 PDFium/无 OCR),内部化自 firecrawl/pdf-inspector | **MIT** |
-| `uparser-document-engine` | 0.1.0 | lib | `native` 协议的**多格式结构化文档**引擎:DOCX/PPTX/XLS(X)/ODT/ODS/ODP/RTF/EPUB/CSV/TSV + legacy `.doc`/`.ppt`,不依赖 anydoc 或其他外部转换器 | UNLICENSED |
+| `uparser-document-engine` | 0.4.0-rc.1 | lib | `native` 协议的**多格式结构化文档**引擎:DOCX/PPTX/XLS(X)/ODT/ODS/ODP/RTF/EPUB/CSV/TSV + legacy `.doc`/`.ppt`,不依赖 anydoc 或其他外部转换器 | UNLICENSED |
 
 ### 构建特性(features,均非默认)
 
@@ -216,7 +216,7 @@ cp -r skills/uparser ~/.claude/skills/uparser
 cp -r skills/uparser <项目>/.claude/skills/uparser
 ```
 
-首次调用时,skill 的 `ensure_uparser.sh` 会按 `PATH → 缓存 → 从 GitHub Release 下载版本固定的预编译包(直连→ghfast.top 镜像兜底,校验 sha256 + 冒烟)→ 源码构建兜底` 解析出 `uparser` 并缓存到 `~/.cache/uparser/bin/`。启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
+首次调用时,skill 的 `ensure_uparser.sh` 会按 `PATH → 版本化缓存 → 从 GitHub Release 下载版本固定的预编译包(直连→ghfast.top 镜像兜底,校验 sha256 + 冒烟)→ 源码构建兜底` 解析出 `uparser` 并缓存到 `~/.cache/uparser/versions/<version>/<platform>/`。启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
 
 **端点配置化**(免每次带 `--endpoint`):把端点写进 `~/.config/uparser/config.toml`(模板见 `skills/uparser/references/config.example.toml`),用包装器调用——`scripts/uparser-run.sh`(Linux/WSL)或 `scripts/uparser-run.ps1`(Windows)——它会先确保二进制就位,再按 `--protocol` 自动注入 `--endpoint`/`--model`:
 
@@ -245,7 +245,7 @@ skills/uparser/scripts/uparser-run.sh parse --protocol mineru-vlm --format markd
 
 ## 📦 分发
 
-- **[GitHub Releases](https://github.com/WALLE-AI/uparserstudio/releases)**:提供预编译二进制(当前 **Windows x86_64**,`--features native,pdfium` 构建)+ `SHA256SUMS`。Skill 的 `ensure_uparser.ps1`/`.sh` 会自动下载并校验。
+- **[GitHub Releases](https://github.com/WALLE-AI/uparserstudio/releases)**:提供预编译二进制(当前 **Windows x86_64**,`--features native,pdfium` 构建)、配套 PDFium 动态库、完整 ZIP 和 `SHA256SUMS`。Skill 的 `ensure_uparser.ps1`/`.sh` 会按版本缓存并校验；Windows 的 PDFium 动态库必须与 EXE 放在同一目录。
 - **同平台(glibc ≥ 2.35 的 Linux x86_64)**:历史 Release(v0.1.1)提供过静态链接 PDFium 的 Linux 二进制;后续版本视构建环境情况补充。
 - **不同架构 / glibc < 2.35 / 无匹配 Release 资产**:在目标机从源码构建(`cargo build --release --features native,pdfium`,或 `scripts/build-windows.ps1`)。
 

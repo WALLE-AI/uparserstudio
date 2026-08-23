@@ -11,6 +11,7 @@ name = "uparser_native_engine"
 crate-type = ["lib"]
 
 [dependencies]
+encoding_rs = "0.8"
 # Error handling
 thiserror = "2.0"
 # Logging

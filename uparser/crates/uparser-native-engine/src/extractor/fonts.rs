@@ -1169,6 +1169,17 @@ pub(crate) fn extract_text_from_operand(
                 }
             }
 
+            // Classic Computer Modern OT1 fonts encode their five Latin
+            // ligatures in control-code slots 0x0B..=0x0F. Generic PDF text
+            // decoders discard those bytes, producing "Eciency" from
+            // "Efficiency". Apply the standard vector only when the BaseFont
+            // proves this is a CM OT1 text font and every other byte is plain
+            // printable ASCII. Valid ToUnicode/Differences evidence above has
+            // already had priority.
+            if let Some(text) = decode_tex_ot1_ligatures(bytes, base_font_name) {
+                return Some(text);
+            }
+
             // Try to decode using cached font encoding from lopdf
             if let Some(encoding) = encoding_cache.get(current_font) {
                 if let Ok(text) = Document::decode_text(encoding, bytes) {
@@ -1221,7 +1232,26 @@ pub(crate) fn extract_text_from_operand(
     result.map(|text| {
         let text = clean_symbol_pua(text);
         let text = remap_texcm_math_symbols(text, base_font_name);
-        normalize_cp1252_controls(text, use_cp1252_fallback)
+        let text = normalize_cp1252_controls(text, use_cp1252_fallback);
+        let source_has_tex_ligature_slot = matches!(obj, Object::String(bytes, _) if bytes.iter().any(|byte| matches!(*byte, 0x0b..=0x0f | 0x80..=0x9f)));
+        if std::env::var_os("UPARSER_FONT_TRACE").is_some()
+            && (source_has_tex_ligature_slot && !use_cp1252_fallback
+                || text
+                    .chars()
+                    .any(|ch| matches!(ch as u32, 0x80..=0x9f | 0xe000..=0xf8ff)))
+        {
+            let source_hex = match obj {
+                Object::String(bytes, _) => bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<String>(),
+                _ => String::new(),
+            };
+            eprintln!(
+                "UPARSER_FONT_TRACE font={current_font:?} base={base_font_name:?} source={source_hex} decoded={text:?}"
+            );
+        }
+        text
     })
 }
 
@@ -1256,6 +1286,35 @@ fn decode_single_byte_fallback(bytes: &[u8], use_cp1252_fallback: bool) -> Strin
         .iter()
         .map(|&b| decode_single_byte_fallback_char(b, use_cp1252_fallback))
         .collect()
+}
+
+fn decode_tex_ot1_ligatures(bytes: &[u8], base_font_name: Option<&str>) -> Option<String> {
+    let font_name = strip_subset_prefix(base_font_name?).to_ascii_lowercase();
+    let is_cm_ot1_text = ["cmr", "cmb", "cmsl", "cmti", "cmss", "cmtt"]
+        .iter()
+        .any(|prefix| font_name.starts_with(prefix));
+    if !is_cm_ot1_text || !bytes.iter().any(|byte| matches!(*byte, 0x0b..=0x0f)) {
+        return None;
+    }
+    if bytes
+        .iter()
+        .any(|byte| !matches!(*byte, 0x0b..=0x0f | 0x20..=0x7e))
+    {
+        return None;
+    }
+
+    let mut decoded = String::with_capacity(bytes.len() + 4);
+    for byte in bytes {
+        match *byte {
+            0x0b => decoded.push_str("ff"),
+            0x0c => decoded.push_str("fi"),
+            0x0d => decoded.push_str("fl"),
+            0x0e => decoded.push_str("ffi"),
+            0x0f => decoded.push_str("ffl"),
+            printable => decoded.push(printable as char),
+        }
+    }
+    Some(decoded)
 }
 
 fn decode_single_byte_fallback_char(byte: u8, use_cp1252_fallback: bool) -> char {
@@ -1962,6 +2021,38 @@ mod tests {
             Some("cmr10"),
             false
         ));
+    }
+
+    #[test]
+    fn computer_modern_ot1_ligature_slots_expand_to_multiple_characters() {
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"E\x0eciency", Some("TVYGJA+CMBX12")),
+            Some("Efficiency".to_string())
+        );
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"di\x0beren re\x0dection", Some("WTPNTZ+CMR10")),
+            Some("differen reflection".to_string())
+        );
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"\x0b\x0c\x0d\x0e\x0f", Some("CMTI10")),
+            Some("fffiflffiffl".to_string())
+        );
+    }
+
+    #[test]
+    fn ot1_ligature_fallback_is_font_scoped_and_rejects_unknown_controls() {
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"E\x0eciency", Some("Times-Roman")),
+            None
+        );
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"E\x0eciency", Some("ECRM1000")),
+            None
+        );
+        assert_eq!(
+            decode_tex_ot1_ligatures(b"bad\x01\x0c", Some("CMR10")),
+            None
+        );
     }
 
     #[test]

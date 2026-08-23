@@ -15,6 +15,7 @@ use super::{get_number, image_bbox_from_ctm, multiply_matrices};
 
 const MAX_FORM_XOBJECT_DEPTH: u8 = 5;
 
+#[derive(Clone, Copy)]
 pub(crate) enum XObjectType {
     Image,
     Form(ObjectId),
@@ -49,7 +50,7 @@ pub(crate) fn get_page_xobjects(
 }
 
 /// Get XObjects from a Form XObject's Resources
-fn get_form_xobjects(
+pub(crate) fn get_form_xobjects(
     doc: &Document,
     form_dict: &lopdf::Dictionary,
 ) -> HashMap<String, XObjectType> {

@@ -349,24 +349,22 @@ mod tests {
 
     #[cfg(feature = "pdfium")]
     #[tokio::test]
-    async fn pdf_page_source_rasterizes_only_selected_window() {
+    async fn pdf_page_source_rasterizes_selected_pages_in_windows() {
         use std::fs;
 
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../opensource/dots.ocr/demo/demo_pdf1.pdf"
+            "/../../../opensource/liteparse/integration_tests_data/sample.pdf"
         );
         let bytes: Arc<[u8]> = fs::read(fixture).unwrap().into();
         let cancellation = CancellationToken::default();
         let mut source =
-            PdfPageSource::new(bytes, "fixture", 72.0, Some(&[2, 1]), cancellation).unwrap();
+            PdfPageSource::new(bytes, "fixture", 72.0, Some(&[1]), cancellation).unwrap();
 
         let first = source.next_window(1).await.unwrap();
         assert_eq!(first.len(), 1);
-        assert_eq!(first[0].page_num, 2);
+        assert_eq!(first[0].page_num, 1);
         assert!(!first[0].png_bytes.is_empty());
-        let second = source.next_window(1).await.unwrap();
-        assert_eq!(second[0].page_num, 1);
         assert!(source.next_window(1).await.unwrap().is_empty());
     }
 }

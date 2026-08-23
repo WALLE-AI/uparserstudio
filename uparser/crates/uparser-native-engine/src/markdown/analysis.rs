@@ -158,7 +158,11 @@ pub(crate) fn is_toc_entry_line(text: &str) -> bool {
 /// titles that look exactly like headings but must not be promoted.
 pub(crate) fn is_toc_marker_heading(text: &str) -> bool {
     let t = text.trim().trim_end_matches(':').trim().to_lowercase();
-    matches!(t.as_str(), "contents" | "table of contents")
+    let compact: String = t.chars().filter(|ch| !ch.is_whitespace()).collect();
+    matches!(
+        compact.as_str(),
+        "contents" | "tableofcontents" | "目录" | "目錄" | "目次"
+    )
 }
 
 /// Lines that resemble headings structurally but are display-math fragments:
@@ -592,6 +596,7 @@ mod tests {
         assert!(is_toc_marker_heading("CONTENTS"));
         assert!(is_toc_marker_heading("Table of Contents"));
         assert!(is_toc_marker_heading("Table of contents:"));
+        assert!(is_toc_marker_heading("目 次"));
         assert!(!is_toc_marker_heading("Contents of the Shipment"));
         assert!(!is_toc_marker_heading("Introduction"));
     }

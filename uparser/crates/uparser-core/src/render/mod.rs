@@ -63,14 +63,20 @@ pub fn to_content_list(result: &ParseResult) -> String {
         .iter()
         .flat_map(|page| {
             page.blocks.iter().map(move |block| {
-                serde_json::json!({
+                let mut item = serde_json::json!({
                     "page_num": page.page_num,
                     "category": block.category,
                     "text": block.text,
                     "html": block.html,
                     "latex": block.latex,
                     "asset_path": block.asset_path,
-                })
+                });
+                if let Some(caption) = &block.asset_caption {
+                    item.as_object_mut()
+                        .expect("content-list item is an object")
+                        .insert("asset_caption".to_owned(), serde_json::json!(caption));
+                }
+                item
             })
         })
         .collect();
@@ -114,6 +120,7 @@ mod tests {
                     error: None,
                     asset_bytes: None,
                     asset_path: None,
+                    asset_caption: None,
                 }],
             }],
             page_errors: vec![],
@@ -156,6 +163,22 @@ mod tests {
     }
 
     #[test]
+    fn content_list_includes_asset_caption_only_when_present() {
+        let mut result = sample_result();
+        result.pages[0].blocks[0].asset_caption = Some(AssetCaption {
+            text: "Figure 1: Overview".into(),
+            bbox_px: Some([0, 20, 100, 30]),
+            confidence: 0.92,
+        });
+        let list = to_content_list(&result);
+        assert!(list.contains("asset_caption"));
+        assert!(list.contains("Figure 1: Overview"));
+
+        result.pages[0].blocks[0].asset_caption = None;
+        assert!(!to_content_list(&result).contains("asset_caption"));
+    }
+
+    #[test]
     fn content_list_snapshot() {
         insta::assert_snapshot!(to_content_list(&sample_result()));
     }
@@ -193,6 +216,7 @@ mod tests {
                 error: None,
                 asset_bytes: None,
                 asset_path: None,
+                asset_caption: None,
             }
         }
 
@@ -238,6 +262,7 @@ mod tests {
                 error: None,
                 asset_bytes: None,
                 asset_path: None,
+                asset_caption: None,
             }
         }
         let mut r = sample_result();

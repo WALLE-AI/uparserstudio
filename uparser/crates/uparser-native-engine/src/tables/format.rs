@@ -558,6 +558,8 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
                     && row.len() >= 3
                     && prev_first_cell_empty
                     && alpha_word_count(first_non_empty_cell) >= 2));
+        let looks_like_rowspanned_scored_record =
+            is_rowspanned_scored_record(row, &cleaned);
         let looks_like_new_first_column_entry = !first_cell.is_empty()
             && (starts_with_numbered_label(first_cell) || starts_with_uppercase_alpha(first_cell))
             && filled_cells >= 2
@@ -575,6 +577,7 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
             && !looks_like_data_row
             && !looks_like_spanning_first_column_row
             && !looks_like_hierarchical_subrow
+            && !looks_like_rowspanned_scored_record
             && cleaned.len() > 1;
 
         // Wrapped-cell continuation: row has fewer filled cells than the header
@@ -604,6 +607,7 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
             && !looks_like_data_row
             && !looks_like_spanning_first_column_row
             && !looks_like_hierarchical_subrow
+            && !looks_like_rowspanned_scored_record
             && !looks_like_new_first_column_entry
             && !looks_like_section_label_row
             && !is_short_subheader;
@@ -631,6 +635,59 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
     }
 
     (cleaned, footnotes)
+}
+
+/// Keep a complete logical record when a vertically merged group/ordinal cell
+/// leaves column 0 blank.  Such rows still carry multiple semantic fields and
+/// a compact numeric value (score, quantity, amount, etc.); they are not merely
+/// wrapped text from the preceding row.
+fn is_rowspanned_scored_record(row: &[String], prior_rows: &[Vec<String>]) -> bool {
+    if row.len() < 4 || !row.first().is_some_and(|cell| cell.trim().is_empty()) {
+        return false;
+    }
+
+    let has_numbered_anchor = prior_rows.iter().skip(1).any(|prior| {
+        prior
+            .first()
+            .is_some_and(|cell| is_compact_unsigned_number(cell.trim()))
+    });
+    if !has_numbered_anchor {
+        return false;
+    }
+
+    let populated: Vec<&str> = row
+        .iter()
+        .skip(1)
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    if populated.len() < 3 {
+        return false;
+    }
+
+    let numeric_fields = populated
+        .iter()
+        .filter(|cell| is_compact_unsigned_number(cell))
+        .count();
+    let descriptive_fields = populated
+        .iter()
+        .filter(|cell| {
+            !is_compact_unsigned_number(cell)
+                && cell.chars().any(|character| character.is_alphabetic())
+        })
+        .count();
+
+    numeric_fields >= 1 && descriptive_fields >= 2
+}
+
+fn is_compact_unsigned_number(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().count() <= 8
+        && trimmed.chars().any(|character| character.is_ascii_digit())
+        && trimmed.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | ',' | '%' | '+' | '-')
+        })
 }
 
 /// Check if a cell value indicates a footnote row
@@ -750,6 +807,82 @@ mod tests {
         assert_eq!(cleaned.len(), 2);
         assert!(cleaned[1][1].contains("Short"));
         assert!(cleaned[1][1].contains("continued text here"));
+    }
+
+    #[test]
+    fn test_clean_table_cells_rowspanned_scored_records_stay_separate() {
+        let cells = vec![
+            vec![
+                "No.".into(),
+                "Group".into(),
+                "Inspection item".into(),
+                "Deduction rule".into(),
+                "Score".into(),
+            ],
+            vec![
+                "1".into(),
+                "Required".into(),
+                "Safety plan".into(),
+                "No approved plan: deduct 10".into(),
+                "10".into(),
+            ],
+            vec![
+                "".into(),
+                "2".into(),
+                "Foundation support".into(),
+                "Support is unstable: deduct 10".into(),
+                "10".into(),
+            ],
+            vec![
+                "".into(),
+                "3".into(),
+                "Drainage".into(),
+                "No drainage ditch: deduct 5".into(),
+                "10".into(),
+            ],
+        ];
+
+        let (cleaned, _) = clean_table_cells(&cells);
+
+        assert_eq!(cleaned.len(), 4);
+        assert_eq!(cleaned[2][1], "2");
+        assert_eq!(cleaned[2][2], "Foundation support");
+        assert_eq!(cleaned[3][1], "3");
+    }
+
+    #[test]
+    fn test_clean_table_cells_rowspanned_description_wrap_still_merges() {
+        let cells = vec![
+            vec![
+                "No.".into(),
+                "Group".into(),
+                "Inspection item".into(),
+                "Deduction rule".into(),
+                "Score".into(),
+            ],
+            vec![
+                "1".into(),
+                "Required".into(),
+                "Safety plan".into(),
+                "The deduction rule starts here".into(),
+                "10".into(),
+            ],
+            vec![
+                "".into(),
+                "".into(),
+                "".into(),
+                "and continues on the next physical line".into(),
+                "".into(),
+            ],
+        ];
+
+        let (cleaned, _) = clean_table_cells(&cells);
+
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(
+            cleaned[1][3],
+            "The deduction rule starts here and continues on the next physical line"
+        );
     }
 
     #[test]

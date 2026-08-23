@@ -51,6 +51,20 @@ fn help_exits_successfully_on_stdout() {
 }
 
 #[test]
+fn version_matches_the_package_and_exits_successfully() {
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(concat!(
+            "uparser ",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn nonexistent_file_exits_dependency_unavailable() {
     Command::cargo_bin("uparser")
         .unwrap()

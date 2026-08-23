@@ -323,6 +323,7 @@ impl ProtocolAdapter for PipelineAdapter {
                 error,
                 asset_bytes,
                 asset_path: None,
+                asset_caption: None,
             });
         }
 

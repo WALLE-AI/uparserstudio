@@ -185,6 +185,7 @@ impl ProtocolAdapter for PaddleOcrAdapter {
                 error: None,
                 asset_bytes: None,
                 asset_path: None,
+                asset_caption: None,
             })
             .collect();
 

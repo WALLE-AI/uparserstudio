@@ -61,6 +61,18 @@ pub enum BlockSource {
     StructuredService,
 }
 
+/// Caption metadata attached to an image or chart block.
+///
+/// The caption remains an ordinary text block in reading order. This
+/// lightweight relation makes the association explicit without duplicating
+/// or removing source content, and remains compatible with older cached JSON.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetCaption {
+    pub text: String,
+    pub bbox_px: Option<[i32; 4]>,
+    pub confidence: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub geom: Geometry,
@@ -92,6 +104,10 @@ pub struct Block {
     /// existed still deserializes cleanly.
     #[serde(default)]
     pub asset_path: Option<String>,
+    /// Figure/image caption selected from same-page semantic and geometric
+    /// evidence. Absent for non-assets and when no unambiguous match exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_caption: Option<AssetCaption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +152,7 @@ pub enum DocumentKind {
 #[serde(rename_all = "snake_case")]
 pub enum DocumentGenre {
     Book,
+    TechnicalStandard,
     Resume,
     Tender,
     Bid,
@@ -368,6 +385,7 @@ mod tests {
             error: None,
             asset_bytes: None,
             asset_path: None,
+            asset_caption: None,
         };
         let json = serde_json::to_string(&block).unwrap();
         let back: Block = serde_json::from_str(&json).unwrap();
@@ -394,6 +412,7 @@ mod tests {
             error: None,
             asset_bytes: Some(vec![1, 2, 3, 4]),
             asset_path: Some("doc_images/abc123.png".into()),
+            asset_caption: None,
         };
         let json = serde_json::to_string(&block).unwrap();
         assert!(
@@ -411,6 +430,18 @@ mod tests {
         let old_shape_json = json.replace(r#","asset_path":"doc_images/abc123.png""#, "");
         let back: Block = serde_json::from_str(&old_shape_json).unwrap();
         assert_eq!(back.asset_path, None);
+    }
+
+    #[test]
+    fn asset_caption_is_optional_and_round_trips() {
+        let caption = AssetCaption {
+            text: "Figure 1: Overview".into(),
+            bbox_px: Some([10, 90, 200, 105]),
+            confidence: 0.94,
+        };
+        let json = serde_json::to_string(&caption).unwrap();
+        let back: AssetCaption = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, caption);
     }
 
     #[test]

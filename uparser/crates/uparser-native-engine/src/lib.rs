@@ -40,6 +40,7 @@ pub mod process_mode;
 pub mod structure_tree;
 pub mod tables;
 mod text_quality;
+pub use text_quality::looks_like_gbk_utf8_mojibake;
 pub mod text_utils;
 pub mod tounicode;
 pub mod types;
@@ -158,6 +159,16 @@ pub struct PdfProcessResult {
     /// Positioned items produced by the same extraction pass. Consumers can
     /// derive page geometry without loading and extracting the PDF again.
     pub positioned_items: Vec<types::TextItem>,
+    /// Explicit semantic roles from a tagged PDF's structure tree, keyed by
+    /// 1-indexed page and marked-content ID.  This is preserved alongside the
+    /// positioned items so downstream IR adapters do not discard source-backed
+    /// Formula/Note/Reference/Caption semantics.
+    pub struct_roles: HashMap<u32, HashMap<i64, structure_tree::StructRole>>,
+    /// MediaBox dimensions in PDF points, keyed by 1-indexed page number.
+    pub page_sizes: HashMap<u32, [f32; 2]>,
+    /// Source-backed chart regions detected from vector rectangle geometry,
+    /// in bottom-left PDF coordinates and keyed by 1-indexed page number.
+    pub chart_regions: HashMap<u32, Vec<[f32; 4]>>,
 }
 
 // =========================================================================
@@ -3132,8 +3143,8 @@ pub fn extract_tables_with_structure_auto_mem(
     Ok(results)
 }
 
-/// Get page height in points from MediaBox.
-fn get_page_height(doc: &Document, page_id: lopdf::ObjectId) -> Option<f32> {
+/// Get page dimensions in points from MediaBox.
+fn get_page_size(doc: &Document, page_id: lopdf::ObjectId) -> Option<[f32; 2]> {
     let page_dict = doc.get_dictionary(page_id).ok()?;
     // Try MediaBox directly, then follow reference
     let media_box = page_dict.get(b"MediaBox").ok()?;
@@ -3149,12 +3160,18 @@ fn get_page_height(doc: &Document, page_id: lopdf::ObjectId) -> Option<f32> {
         _ => return None,
     };
     if arr.len() >= 4 {
+        let x1 = obj_to_f32(&arr[0])?;
         let y1 = obj_to_f32(&arr[1])?;
+        let x2 = obj_to_f32(&arr[2])?;
         let y2 = obj_to_f32(&arr[3])?;
-        Some((y2 - y1).abs())
+        Some([(x2 - x1).abs(), (y2 - y1).abs()])
     } else {
         None
     }
+}
+
+fn get_page_height(doc: &Document, page_id: lopdf::ObjectId) -> Option<f32> {
+    get_page_size(doc, page_id).map(|size| size[1])
 }
 
 fn obj_to_f32(obj: &lopdf::Object) -> Option<f32> {
@@ -3600,6 +3617,13 @@ fn process_document(
     options: PdfOptions,
     start: ProcessingTimer,
 ) -> Result<PdfProcessResult, PdfError> {
+    let page_sizes: HashMap<u32, [f32; 2]> = doc
+        .get_pages()
+        .into_iter()
+        .filter_map(|(page_num, page_id)| {
+            get_page_size(&doc, page_id).map(|size| (page_num, size))
+        })
+        .collect();
     // Step 1 — Detection (cheap: scans content streams for text operators)
     let detection = detector::detect_from_document(&doc, page_count, &options.detection)?;
     let pdf_type = detection.pdf_type;
@@ -3622,6 +3646,9 @@ fn process_document(
             layout: LayoutComplexity::default(),
             has_encoding_issues: false,
             positioned_items: Vec::new(),
+            struct_roles: HashMap::new(),
+            page_sizes,
+            chart_regions: HashMap::new(),
         });
     }
 
@@ -3639,6 +3666,9 @@ fn process_document(
             layout: LayoutComplexity::default(),
             has_encoding_issues: false,
             positioned_items: Vec::new(),
+            struct_roles: HashMap::new(),
+            page_sizes,
+            chart_regions: HashMap::new(),
         });
     }
 
@@ -3692,6 +3722,14 @@ fn process_document(
         }
     };
 
+    // Collect painted vector geometry independently from text extraction.
+    // This sees cubic curves and nested Form XObjects without coupling path
+    // state to the mature text/table extractor.
+    let painted_paths = extractor::painted_paths::extract_painted_paths(
+        &doc,
+        options.page_filter.as_ref(),
+    );
+
     // For Mixed PDFs, extraction failure is non-fatal
     let extracted = if pdf_type == PdfType::Mixed {
         extracted.ok()
@@ -3726,6 +3764,7 @@ fn process_document(
         gid_pages,
         text_quality_pages,
         text_quality_reasons_by_page,
+        chart_regions,
     ) = match extracted {
         Some(((items, rects, lines), page_thresholds, gid_encoded_pages)) => {
             let mut ocr_reasons_by_page = BTreeMap::new();
@@ -3825,6 +3864,37 @@ fn process_document(
             merge_ocr_reasons(&mut ocr_reasons_by_page, text_quality.reasons_by_page);
             let layout = compute_layout_complexity(&items, &layout_items, &rects, &lines);
             positioned_items = items.clone();
+            let chart_pages: std::collections::BTreeSet<u32> = rects
+                .iter()
+                .map(|rect| rect.page)
+                .chain(painted_paths.iter().map(|path| path.page))
+                .collect();
+            let chart_regions: HashMap<u32, Vec<[f32; 4]>> = chart_pages
+                .into_iter()
+                .filter_map(|page| {
+                    let mut regions: Vec<[f32; 4]> = tables::detect_chart_regions(
+                        &items,
+                        &rects,
+                        page,
+                    )
+                        .into_iter()
+                        .map(|(x0, y0, x1, y1)| [x0, y0, x1, y1])
+                        .collect();
+                    if let Some(page_size) = page_sizes.get(&page) {
+                        regions.extend(
+                            extractor::painted_paths::detect_vector_figure_regions(
+                                &painted_paths,
+                                &items,
+                                page,
+                                *page_size,
+                            ),
+                        );
+                    }
+                    let regions =
+                        extractor::painted_paths::merge_figure_regions(regions);
+                    (!regions.is_empty()).then_some((page, regions))
+                })
+                .collect();
 
             let md = if options.mode == ProcessMode::Analyze {
                 None
@@ -3855,6 +3925,7 @@ fn process_document(
                 gid_encoded_pages,
                 text_quality.pages_needing_ocr,
                 ocr_reasons_by_page,
+                chart_regions,
             )
         }
         None => (
@@ -3864,6 +3935,7 @@ fn process_document(
             std::collections::HashSet::new(),
             Vec::new(),
             BTreeMap::new(),
+            HashMap::new(),
         ),
     };
 
@@ -3968,6 +4040,9 @@ fn process_document(
         layout,
         has_encoding_issues,
         positioned_items,
+        struct_roles: struct_roles.unwrap_or_default(),
+        page_sizes,
+        chart_regions,
     })
 }
 

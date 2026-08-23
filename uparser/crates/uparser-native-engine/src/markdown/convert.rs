@@ -17,7 +17,7 @@ use super::classify::{
 use super::heading::classify_heading_sequences;
 use super::postprocess::clean_markdown;
 use super::preprocess::{merge_drop_caps, merge_heading_lines};
-use super::{CHART_SEPARATOR_PAD, MarkdownOptions, item_is_in_chart_region};
+use super::{item_is_in_chart_region, MarkdownOptions, CHART_SEPARATOR_PAD};
 
 /// Logical stream geometry for a page where one full-width chart separates
 /// two prose columns. Positioned non-text blocks use this same ordering so a
@@ -1095,7 +1095,9 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             .get(&line.page)
             .copied()
             .unwrap_or((line_idx, line_idx));
+        let long_list_item = is_list_item(plain_trimmed) && plain_trimmed.chars().count() > 40;
         let cover_heading = options.detect_headers
+            && !long_list_item
             && (is_numbered_uppercase_cover(plain_trimmed)
                 || is_offer_cover_heading(&lines, line_idx, page_first_idx));
         let heuristic_heading = if cover_heading {
@@ -1104,6 +1106,7 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             && !non_heading_role
             && !is_code_line
             && !looks_like_list_continuation
+            && !long_list_item
             && plain_trimmed.len() > 3
             && plain_trimmed.split_whitespace().count() <= 15
             && !starts_with_bullet_marker(plain_trimmed)
@@ -1473,6 +1476,10 @@ pub fn to_markdown_from_lines(lines: Vec<TextLine>, options: MarkdownOptions) ->
         if options.detect_headers
             && plain_trimmed.len() > 3
             && plain_trimmed.split_whitespace().count() <= 15
+            // Long enumerated prose is a list item even when its leading run
+            // is large/bold (common in resumes and policy documents). Keep
+            // short numbered section titles eligible for heading detection.
+            && !(is_list_item(plain_trimmed) && plain_trimmed.chars().count() > 40)
             && !is_toc_entry_line(plain_trimmed)
             && !is_heading_fragment(plain_trimmed)
             && toc_suppress_page != Some(line.page)
@@ -2420,6 +2427,37 @@ mod tests {
         assert!(
             md.contains("1. ") && md.contains("A model has CB-1"),
             "numbered list item should remain intact: {md}"
+        );
+    }
+
+    #[test]
+    fn long_numbered_resume_skill_is_list_not_heading() {
+        let text = "1. 担任人工智能研究中心负责人，带领团队完成大模型训练平台、评测体系、数据治理和多款智能体产品的技术架构设计与研发落地。";
+        assert!(is_list_item(text));
+        assert!(
+            text.chars().count() > 40,
+            "test fixture must exercise long-list arbitration"
+        );
+        let mut item = make_item(text, 1, None);
+        item.font_size = 16.0;
+        item.height = 16.0;
+        item.is_bold = true;
+        let md = to_markdown_from_lines_with_tables_and_images(
+            vec![make_line(vec![item])],
+            MarkdownOptions::default(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashMap::new(),
+            &std::collections::HashSet::new(),
+            None,
+        );
+        assert!(
+            md.starts_with("1. "),
+            "numbered skill should remain a list: {md}"
+        );
+        assert!(
+            !md.starts_with('#'),
+            "numbered skill must not be a heading: {md}"
         );
     }
 }

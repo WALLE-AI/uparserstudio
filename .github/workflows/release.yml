@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x86_64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: uparser
+      - name: Validate tag and crate version
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $manifest = Get-Content uparser/crates/uparser-core/Cargo.toml -Raw
+          $crateVersion = [regex]::Match($manifest, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ($version -ne $crateVersion) { throw "tag $version != crate $crateVersion" }
+      - name: Test
+        working-directory: uparser
+        run: cargo test --workspace
+      - name: Test native feature set
+        working-directory: uparser
+        run: cargo test -p uparser-core --features native
+      - name: Build release
+        working-directory: uparser
+        run: cargo build --release -p uparser-core --features native,pdfium
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          & .\scripts\package-windows.ps1 -Version $version
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body_path: RELEASE_NOTES_${{ github.ref_name }}.md
+          files: |
+            dist/uparser-${{ github.ref_name }}-windows-x86_64.exe
+            dist/uparser-${{ github.ref_name }}-windows-x86_64-pdfium.dll
+            dist/uparser-${{ github.ref_name }}-windows-x86_64.zip
+            dist/SHA256SUMS

@@ -83,6 +83,18 @@ pub struct PdfLine {
     pub page: u32,
 }
 
+/// Bounding geometry of a path that was actually painted by a PDF content
+/// stream. Control points are included in the bounds, which is conservative
+/// for cubic Bezier curves and avoids losing curved plots and diagrams.
+#[derive(Debug, Clone)]
+pub(crate) struct PdfPaintedPath {
+    pub bbox: [f32; 4],
+    pub page: u32,
+    pub segment_count: u32,
+    pub has_curve: bool,
+    pub has_diagonal: bool,
+}
+
 /// A rectangle from a PDF `re` operator (cell boundary, border, etc.)
 #[derive(Debug, Clone)]
 pub struct PdfRect {

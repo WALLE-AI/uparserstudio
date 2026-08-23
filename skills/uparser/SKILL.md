@@ -62,7 +62,8 @@ You only need to install this skill. The binary is fetched on first use:
 (Windows) resolves `uparser` in this order and prints its path:
 
 1. `uparser` already on PATH → use it;
-2. a previously downloaded copy in `~/.cache/uparser/bin/` → reuse it;
+2. a previously downloaded copy in the versioned
+   `~/.cache/uparser/versions/<version>/<platform>/` cache → reuse it;
 3. otherwise **download the version-pinned prebuilt from GitHub Releases**
    (`WALLE-AI/uparserstudio`, currently `v0.3.0` on Linux x86_64 and `v0.2.0`
    on Windows — the pins are per-platform, each tracking the newest release
@@ -76,7 +77,7 @@ The config-driven wrappers (`scripts/uparser-run.sh` / `.ps1`) call this
 automatically, so `uparser-run.sh parse ...` just works on a fresh machine.
 Env overrides: `UPARSER_VERSION`, `UPARSER_REPO`, `UPARSER_HOME` (cache root).
 
-The pinned `v0.3.0`/`v0.2.0` assets predate the V2 `--mode` and `plan` commands. In this repository, use `uparser/target/release/uparser` after building current source; use `UPARSER_BIN` or put that binary on `PATH` when exercising V2. Keep the pin until a release actually publishes matching assets.
+The pinned `v0.3.0`/`v0.2.0` assets predate the V2 `--mode` and `plan` commands. The current source identifies as `v0.4.0-rc.1`; use `uparser/target/release/uparser` after building it, or set `UPARSER_BIN`, until matching Release assets have actually been published. The Windows downloader also installs the versioned PDFium DLL asset beside the executable when the release provides one. Keep each default pin unchanged until its matching platform asset exists.
 
 **Build current V2 from source** (also adds `pdfium` for VLM/OCR protocols):
 ```bash

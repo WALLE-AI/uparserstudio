@@ -1139,10 +1139,7 @@ fn trim_trailing_empty_structure(raw: &mut TableBuilder) {
 }
 
 fn raw_cell_is_trailing_empty(cell: &RawCell) -> bool {
-    !cell.covered
-        && cell.blocks.is_empty()
-        && cell.row_span == 1
-        && cell.column_span == 1
+    !cell.covered && cell.blocks.is_empty() && cell.row_span == 1 && cell.column_span == 1
 }
 
 fn normalize_href(value: &str) -> String {
@@ -1165,7 +1162,9 @@ mod table_trimming_tests {
 
     fn cell(text: Option<&str>, repeat: usize) -> RawCell {
         RawCell {
-            blocks: text.map(|value| vec![Block::paragraph(value)]).unwrap_or_default(),
+            blocks: text
+                .map(|value| vec![Block::paragraph(value)])
+                .unwrap_or_default(),
             repeat,
             row_span: 1,
             column_span: 1,
@@ -1199,13 +1198,8 @@ mod table_trimming_tests {
         let mut expanded = 0;
         let mut warnings = Vec::new();
 
-        let table = build_table(
-            raw,
-            &ParseOptions::default(),
-            &mut expanded,
-            &mut warnings,
-        )
-        .unwrap();
+        let table =
+            build_table(raw, &ParseOptions::default(), &mut expanded, &mut warnings).unwrap();
 
         assert_eq!((table.rows, table.columns), (122, 1));
         let CellSlot::Origin(last) = &table.grid[121][0] else {
@@ -1218,7 +1212,12 @@ mod table_trimming_tests {
     fn trailing_cells_are_trimmed_but_internal_column_gap_is_preserved() {
         let raw = TableBuilder {
             rows: vec![RawRow {
-                cells: vec![cell(Some("left"), 1), cell(None, 1010), cell(Some("right"), 1), cell(None, 500)],
+                cells: vec![
+                    cell(Some("left"), 1),
+                    cell(None, 1010),
+                    cell(Some("right"), 1),
+                    cell(None, 500),
+                ],
                 repeat: 1,
             }],
             ..Default::default()
@@ -1226,13 +1225,8 @@ mod table_trimming_tests {
         let mut expanded = 0;
         let mut warnings = Vec::new();
 
-        let table = build_table(
-            raw,
-            &ParseOptions::default(),
-            &mut expanded,
-            &mut warnings,
-        )
-        .unwrap();
+        let table =
+            build_table(raw, &ParseOptions::default(), &mut expanded, &mut warnings).unwrap();
 
         assert_eq!((table.rows, table.columns), (1, 1012));
     }

@@ -346,7 +346,7 @@ fn is_cross_row_prose_continuation(previous: &str, current: &str) -> bool {
     let current_starts_as_continuation = current
         .chars()
         .find(|ch| ch.is_alphabetic())
-        .is_some_and(|ch| ch.is_lowercase());
+        .is_some_and(|ch| ch.is_lowercase() || (!ch.is_uppercase() && !ch.is_ascii()));
 
     previous_is_open && current_starts_as_continuation
 }
@@ -383,10 +383,22 @@ fn merged_retry_skips_body_font(detected_columns: bool, has_chart_regions: bool)
 /// detection for the whole page: numeric, compact, headed, and otherwise
 /// table-shaped candidates remain eligible on chart pages.
 fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
-    if table.kind != crate::tables::TableKind::Data
-        || !(2..=3).contains(&table.columns.len())
-        || table.rows.len() < 3
-    {
+    if table.kind != crate::tables::TableKind::Data || table.rows.len() < 3 {
+        return false;
+    }
+
+    // Detectors can retain empty edge bands as columns. Count only columns
+    // that contain text before deciding whether this is a small prose grid.
+    let occupied_columns: Vec<bool> = (0..table.columns.len())
+        .map(|column| {
+            table
+                .cells
+                .iter()
+                .any(|row| row.get(column).is_some_and(|cell| !cell.trim().is_empty()))
+        })
+        .collect();
+    let effective_columns = occupied_columns.iter().filter(|&&value| value).count();
+    if !(2..=3).contains(&effective_columns) {
         return false;
     }
 
@@ -407,7 +419,15 @@ fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
             let filled: Vec<&String> = row.iter().filter(|cell| !cell.trim().is_empty()).collect();
             filled.len() >= 2
                 && filled.iter().all(|cell| {
-                    cell.split_whitespace().count() <= 4 && cell.trim().chars().count() <= 28
+                    let char_limit = if cell.chars().any(|ch| {
+                        matches!(ch as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff)
+                    }) {
+                        12
+                    } else {
+                        28
+                    };
+                    cell.split_whitespace().count() <= 4
+                        && cell.trim().chars().count() <= char_limit
                 })
         });
 
@@ -424,7 +444,12 @@ fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
             let chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
             let alphabetic = text.chars().filter(|ch| ch.is_alphabetic()).count();
             let words = text.split_whitespace().count();
-            if chars >= 28 && words >= 5 && alphabetic * 5 >= chars * 3 {
+            let contains_cjk = text
+                .chars()
+                .any(|ch| matches!(ch as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff));
+            if ((chars >= 28 && words >= 5) || (chars >= 18 && contains_cjk))
+                && alphabetic * 5 >= chars * 3
+            {
                 long_prose += 1;
                 row_long_prose += 1;
             }
@@ -460,7 +485,7 @@ fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
         // Independent prose columns have asynchronous line/paragraph breaks;
         // a fully populated grid is positive evidence for a real descriptive
         // table even when every value is a lowercase sentence fragment.
-        && non_empty < table.cells.len() * table.columns.len()
+        && non_empty < table.cells.len() * effective_columns
         && long_prose >= 4
         && long_prose * 5 >= non_empty * 3
         // Row-spanning blanks are common in real headerless description
@@ -475,7 +500,7 @@ fn is_parallel_prose_table(table: &crate::tables::Table) -> bool {
     log::debug!(
         "chart table hypothesis: {}x{}, non_empty={}, long_prose={}, parallel_rows={}/{}, section_heading={}, continuation_fragments={}, continuation_columns={}, reject={}",
         table.rows.len(),
-        table.columns.len(),
+        effective_columns,
         non_empty,
         long_prose,
         rows_with_parallel_prose,
@@ -529,10 +554,7 @@ fn is_formula_fragment_table(table: &crate::tables::Table) -> bool {
 /// Reject only the extreme shape where one long paragraph dominates a small,
 /// high-column candidate with at most half of its cells populated.
 fn is_sparse_page_fragment_table(table: &crate::tables::Table) -> bool {
-    if table.columns.len() < 4
-        || table.rows.len() > 6
-        || table.rows.len() < 2
-    {
+    if table.columns.len() < 4 || table.rows.len() > 6 || table.rows.len() < 2 {
         return false;
     }
 
@@ -1598,8 +1620,7 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
             if !band_has_tables && !has_structural_elements {
                 if let Some(table) = crate::tables::try_build_table_from_columns(band_items, page)
                     .filter(|table| {
-                        !is_formula_fragment_table(table)
-                            && !is_sparse_page_fragment_table(table)
+                        !is_formula_fragment_table(table) && !is_sparse_page_fragment_table(table)
                     })
                 {
                     for &idx in &table.item_indices {
@@ -2482,6 +2503,33 @@ mod tests {
         assert!(!is_parallel_prose_table(
             &sparse_rowspanning_description_table
         ));
+
+        let traditional_chinese_prose = crate::tables::Table::new(
+            vec![90.0, 250.0, 410.0, 520.0],
+            vec![320.0, 300.0, 280.0],
+            vec![
+                vec![
+                    "道家經典中，都沒有對善惡的清晰劃分。".into(),
+                    "中國傳統強調禮，這段論述仍在下一行延續".into(),
+                    "".into(),
+                    "".into(),
+                ],
+                vec![
+                    "使得善惡間的區分完全模糊了，並形成一段連續正文".into(),
+                    "而對於佛教徒來說，儘管行善是重要實踐".into(),
+                    "".into(),
+                    "".into(),
+                ],
+                vec![
+                    "得善報的關鍵，但它並不被看作是一個終極目標".into(),
+                    "".into(),
+                    "".into(),
+                    "基督教強勢有".into(),
+                ],
+            ],
+            (0..6).collect(),
+        );
+        assert!(is_parallel_prose_table(&traditional_chinese_prose));
     }
 
     /// 4-row × 2-col ruled grid from x=100..300 (rows every 20pt from y=600).
@@ -2703,10 +2751,30 @@ mod tests {
             vec![60.0, 180.0, 320.0, 480.0],
             vec![700.0, 400.0, 70.0, 30.0],
             vec![
-                vec![String::new(), paragraph.repeat(2), "also regularly uploads commemorations".to_string(), String::new()],
-                vec![String::new(), String::new(), String::new(), "Figure 6 World Health Day Celebration".to_string()],
-                vec!["98".to_string(), "accessed on 5 December 2021".to_string(), "https://example.test/item".to_string(), String::new()],
-                vec![String::new(), String::new(), "23".to_string(), String::new()],
+                vec![
+                    String::new(),
+                    paragraph.repeat(2),
+                    "also regularly uploads commemorations".to_string(),
+                    String::new(),
+                ],
+                vec![
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    "Figure 6 World Health Day Celebration".to_string(),
+                ],
+                vec![
+                    "98".to_string(),
+                    "accessed on 5 December 2021".to_string(),
+                    "https://example.test/item".to_string(),
+                    String::new(),
+                ],
+                vec![
+                    String::new(),
+                    String::new(),
+                    "23".to_string(),
+                    String::new(),
+                ],
             ],
             vec![],
         );
@@ -2721,10 +2789,30 @@ mod tests {
             vec![60.0, 180.0, 320.0, 480.0],
             vec![700.0, 620.0, 540.0, 460.0],
             vec![
-                vec!["Pack".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
-                vec!["Application".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
-                vec!["Highlight".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
-                vec!["Team".to_string(), long_value.to_string(), long_value.to_string(), long_value.to_string()],
+                vec![
+                    "Pack".to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                ],
+                vec![
+                    "Application".to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                ],
+                vec![
+                    "Highlight".to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                ],
+                vec![
+                    "Team".to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                    long_value.to_string(),
+                ],
             ],
             vec![],
         );

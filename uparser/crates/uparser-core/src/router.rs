@@ -209,6 +209,7 @@ fn native_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidat
     if matches!(
         profile.genre.primary,
         DocumentGenre::Book
+            | DocumentGenre::TechnicalStandard
             | DocumentGenre::Regulation
             | DocumentGenre::LegalDocument
             | DocumentGenre::Contract
@@ -222,6 +223,13 @@ fn native_candidate(profile: &DocumentProfile, available: bool) -> RouteCandidat
     if profile.genre.primary == DocumentGenre::Resume && profile.structure.multi_column_ratio > 0.0
     {
         score -= 30;
+    }
+    if profile.genre.primary == DocumentGenre::Resume
+        && profile.source_quality == SourceQuality::NativeText
+    {
+        // A multi-column hint alone does not justify a remote visual model
+        // when the resume has a reliable embedded text layer.
+        score += 20;
     }
     RouteCandidate {
         protocol: "native".to_owned(),
@@ -403,6 +411,20 @@ mod tests {
         assert_eq!(
             route_with_environment(&p, all_available()).protocol,
             "mineru-vlm"
+        );
+    }
+
+    #[test]
+    fn native_text_resume_stays_native_despite_column_hint() {
+        let mut p = profile(
+            DocumentGenre::Resume,
+            SourceQuality::NativeText,
+            ContentMix::TextDominant,
+        );
+        p.structure.multi_column_ratio = 1.0;
+        assert_eq!(
+            route_with_environment(&p, all_available()).protocol,
+            "native"
         );
     }
 

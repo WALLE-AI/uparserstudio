@@ -253,6 +253,7 @@ impl ProtocolAdapter for DotsOcrAdapter {
                 merge_hint: None,
                 asset_bytes,
                 asset_path: None,
+                asset_caption: None,
                 confidence: None,
                 source: BlockSource::OneShotVlm,
                 error: None,

@@ -27,6 +27,7 @@ pub(crate) fn clean_markdown(mut text: String, options: &MarkdownOptions) -> Str
 
     // Format URLs as markdown links
     if options.format_urls {
+        text = repair_wrapped_arxiv_urls(&text);
         text = format_urls(&text);
     }
 
@@ -137,6 +138,10 @@ fn toc_part_number(line: &str) -> Option<usize> {
 fn refine_heading_blocks(text: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
 
+    for line in &mut lines {
+        *line = separate_numbered_heading_prefix(line);
+    }
+
     let mut in_contents = false;
     for line in &mut lines {
         let trimmed = line.trim();
@@ -161,7 +166,12 @@ fn refine_heading_blocks(text: &str) -> String {
         let uppercase_title = !letters.is_empty()
             && letters.iter().all(|c| !c.is_lowercase())
             && inner.split_whitespace().count() <= 8;
-        if !in_contents && (uppercase_title || has_multilevel_number(inner)) {
+        let long_enumerated_prose =
+            super::classify::is_list_item(inner) && inner.chars().count() > 40;
+        if !in_contents
+            && !long_enumerated_prose
+            && (uppercase_title || has_multilevel_number(inner))
+        {
             *line = format!("# {inner}");
         }
     }
@@ -191,11 +201,18 @@ fn refine_heading_blocks(text: &str) -> String {
         let numeric_callout = word_count <= 2
             && visible.chars().any(|c| c.is_ascii_digit())
             && visible.chars().any(|c| matches!(c, '%' | '↑' | '↓'));
+        let equation_fragment = super::analysis::is_heading_fragment(&visible)
+            || looks_like_numbered_display_equation(&visible);
         let adjacent_short_sentence = previous_nonempty_was_heading
             && heading.ends_with('.')
             && (4..=10).contains(&word_count)
             && !starts_with_roman_numeral(heading);
-        if starts_lowercase || sentence_like || numeric_callout || adjacent_short_sentence {
+        if starts_lowercase
+            || sentence_like
+            || numeric_callout
+            || equation_fragment
+            || adjacent_short_sentence
+        {
             *line = heading.to_owned();
             previous_nonempty_was_heading = false;
         } else {
@@ -203,7 +220,149 @@ fn refine_heading_blocks(text: &str) -> String {
         }
     }
 
-    lines.join("\n")
+    demote_visual_heading_runs(&mut lines);
+    deduplicate_adjacent_headings(&lines).join("\n")
+}
+
+fn deduplicate_adjacent_headings(lines: &[String]) -> Vec<String> {
+    let mut output = Vec::with_capacity(lines.len());
+    let mut previous_heading: Option<String> = None;
+    for line in lines {
+        if let Some((_, heading)) = markdown_heading(line) {
+            let normalized = strip_inline_markup(heading).trim().to_lowercase();
+            if previous_heading.as_deref() == Some(normalized.as_str()) {
+                while output
+                    .last()
+                    .is_some_and(|line: &String| line.trim().is_empty())
+                {
+                    output.pop();
+                }
+                continue;
+            }
+            previous_heading = Some(normalized);
+        } else if !line.trim().is_empty() {
+            previous_heading = None;
+        }
+        output.push(line.clone());
+    }
+    output
+}
+
+/// PDF text runs frequently split a section number and its title into
+/// separate positioned items without a visible gap. The line grouper then
+/// produces `### 3.2Decode`. Repair only existing Markdown headings and only
+/// when an ASCII uppercase title immediately follows a numeric section path;
+/// this keeps model names and ordinary numeric prose untouched.
+fn separate_numbered_heading_prefix(line: &str) -> String {
+    use once_cell::sync::Lazy;
+    static GLUED_SECTION: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(#{1,6}\s+)(\d+(?:\.\d+)*)([A-Z][A-Za-z])").unwrap());
+
+    GLUED_SECTION.replace(line, "$1$2 $3").to_string()
+}
+
+fn looks_like_numbered_display_equation(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    let Some(open) = trimmed.rfind('(') else {
+        return false;
+    };
+    let Some(number) = trimmed[open + 1..].strip_suffix(')') else {
+        return false;
+    };
+    !number.is_empty()
+        && number.len() <= 3
+        && number.chars().all(|ch| ch.is_ascii_digit())
+        && trimmed[..open].chars().any(|ch| {
+            matches!(
+                ch,
+                '=' | '<' | '>' | '≤' | '≥' | '≈' | '∑' | '∫' | '√' | '∪'
+            )
+        })
+}
+
+/// A PDF font tier can turn every wrapped line in a quotation or callout into
+/// a low-level heading. Demote only sustained runs of long, non-structural
+/// headings; chapter and contents sequences retain their hierarchy.
+fn demote_visual_heading_runs(lines: &mut [String]) {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((level, _)) = markdown_heading(&lines[index]) else {
+            index += 1;
+            continue;
+        };
+        if level < 4 {
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        let mut cursor = index;
+        let mut headings = Vec::new();
+        while cursor < lines.len() {
+            if lines[cursor].trim().is_empty() {
+                cursor += 1;
+                continue;
+            }
+            match markdown_heading(&lines[cursor]) {
+                Some((candidate_level, heading)) if candidate_level == level => {
+                    if !headings.is_empty() && looks_like_structural_heading(heading) {
+                        break;
+                    }
+                    headings.push((cursor, heading.to_owned()));
+                    cursor += 1;
+                }
+                _ => break,
+            }
+        }
+
+        let visible_chars: usize = headings
+            .iter()
+            .map(|(_, heading)| strip_inline_markup(heading).chars().count())
+            .sum();
+        let structural = headings
+            .first()
+            .is_some_and(|(_, heading)| looks_like_structural_heading(heading));
+        if headings.len() >= 4 && visible_chars >= 80 && !structural {
+            for (line_index, heading) in headings {
+                lines[line_index] = heading;
+            }
+        }
+        index = cursor.max(start + 1);
+    }
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim();
+    let (marker, heading) = trimmed.split_once(' ')?;
+    (!marker.is_empty()
+        && marker.len() <= 6
+        && marker.chars().all(|ch| ch == '#')
+        && !heading.trim().is_empty())
+    .then_some((marker.len(), heading))
+}
+
+fn looks_like_structural_heading(text: &str) -> bool {
+    let visible = strip_inline_markup(text);
+    let compact = visible.trim_start();
+    if compact.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        return true;
+    }
+    if compact.starts_with('第')
+        && compact
+            .chars()
+            .take(8)
+            .any(|ch| matches!(ch, '章' | '節' | '节' | '編' | '编' | '部' | '卷'))
+    {
+        return true;
+    }
+    let Some((prefix, _)) = compact.split_once(['、', '．', '.']) else {
+        return false;
+    };
+    !prefix.is_empty()
+        && prefix.chars().count() <= 4
+        && prefix
+            .chars()
+            .all(|ch| "一二三四五六七八九十百壹貳參肆伍陸柒捌玖拾".contains(ch))
 }
 
 fn has_multilevel_number(text: &str) -> bool {
@@ -247,6 +406,8 @@ fn strip_inline_markup(text: &str) -> String {
 }
 
 fn refine_table_lines(text: &str) -> String {
+    let text = demote_equation_markdown_tables(text);
+    let text = demote_parallel_cjk_markdown_tables(&text);
     let mut output = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -278,6 +439,236 @@ fn refine_table_lines(text: &str) -> String {
         }
     }
     output.join("\n")
+}
+
+/// Geometry-only table detection can mistake a two-dimensional display
+/// equation for a sparse table: aligned symbols become columns and a fraction
+/// bar becomes the Markdown separator. Preserve the extracted tokens as plain
+/// display text instead of asserting a false row/column schema. This is a
+/// deliberately narrow fallback; real tables containing an occasional formula
+/// remain tables.
+fn demote_equation_markdown_tables(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if !is_markdown_table_line(lines[index]) {
+            output.push(lines[index].to_owned());
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        while index < lines.len() && is_markdown_table_line(lines[index]) {
+            index += 1;
+        }
+        let group = &lines[start..index];
+        if !equation_like_markdown_table(group) {
+            output.extend(group.iter().map(|line| (*line).to_owned()));
+            continue;
+        }
+
+        for line in group {
+            let cells: Vec<&str> = line.trim().trim_matches('|').split('|').collect();
+            if is_markdown_separator_row(&cells) {
+                continue;
+            }
+            let reconstructed = cells
+                .iter()
+                .map(|cell| cell.trim())
+                .filter(|cell| !cell.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !reconstructed.is_empty() {
+                output.push(reconstructed);
+            }
+        }
+    }
+    output.join("\n")
+}
+
+fn equation_like_markdown_table(group: &[&str]) -> bool {
+    if !(3..=8).contains(&group.len()) {
+        return false;
+    }
+    let rows: Vec<Vec<&str>> = group
+        .iter()
+        .map(|line| line.trim().trim_matches('|').split('|').collect())
+        .collect();
+    if rows.len() < 2 || !is_markdown_separator_row(&rows[1]) {
+        return false;
+    }
+
+    let columns = rows[1].len();
+    if columns < 4 || rows.iter().any(|row| row.len() > columns + 2) {
+        return false;
+    }
+    let header_nonempty = rows[0]
+        .iter()
+        .filter(|cell| !cell.trim().is_empty())
+        .count();
+    if header_nonempty > 2 || header_nonempty * 3 > columns + 1 {
+        return false;
+    }
+
+    let visible = rows
+        .iter()
+        .enumerate()
+        .filter(|(row, _)| *row != 1)
+        .flat_map(|(_, cells)| cells.iter())
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let has_equation_number = (1..=99).any(|number| visible.contains(&format!("({number})")));
+    let math_evidence = ['=', '≈', '∪', '⋆', '−', '∑', '∫', '√']
+        .iter()
+        .filter(|operator| visible.contains(**operator))
+        .count();
+    let has_math_markup = visible.contains("<u>") || visible.contains("max(");
+    let short_symbol_cells = rows
+        .iter()
+        .enumerate()
+        .filter(|(row, _)| *row != 1)
+        .flat_map(|(_, cells)| cells.iter())
+        .filter(|cell| {
+            let width = cell.trim().chars().count();
+            width > 0 && width <= 3
+        })
+        .count();
+
+    has_equation_number
+        && (math_evidence >= 2 || (math_evidence >= 1 && has_math_markup))
+        && short_symbol_cells >= 3
+}
+
+fn demote_parallel_cjk_markdown_tables(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if !is_markdown_table_line(lines[index]) {
+            output.push(lines[index].to_owned());
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < lines.len() && is_markdown_table_line(lines[index]) {
+            index += 1;
+        }
+        let group = &lines[start..index];
+        let Some(columns) = parallel_cjk_prose_columns(group) else {
+            output.extend(group.iter().map(|line| (*line).to_owned()));
+            continue;
+        };
+        for column in columns {
+            output.push(column);
+            output.push(String::new());
+        }
+        if output.last().is_some_and(String::is_empty) {
+            output.pop();
+        }
+    }
+    output.join("\n")
+}
+
+fn is_markdown_table_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.ends_with('|')
+}
+
+fn parallel_cjk_prose_columns(group: &[&str]) -> Option<Vec<String>> {
+    if !(4..=7).contains(&group.len()) {
+        return None;
+    }
+    let rows: Vec<Vec<&str>> = group
+        .iter()
+        .map(|line| line.trim().trim_matches('|').split('|').collect())
+        .collect();
+    let column_count = rows.iter().map(Vec::len).max()?;
+    if !(2..=4).contains(&column_count) || !is_markdown_separator_row(&rows[1]) {
+        return None;
+    }
+    let data_rows = [&rows[..1], &rows[2..]].concat();
+    let nonempty = data_rows
+        .iter()
+        .flatten()
+        .filter(|cell| !cell.trim().is_empty())
+        .count();
+    if nonempty >= data_rows.len() * column_count {
+        return None;
+    }
+
+    let first_filled: Vec<&str> = data_rows[0]
+        .iter()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    if first_filled.len() < 2 || first_filled.iter().all(|cell| cell.chars().count() <= 12) {
+        return None;
+    }
+
+    let cjk_prose_cells: Vec<&str> = data_rows
+        .iter()
+        .flatten()
+        .map(|cell| cell.trim())
+        .filter(|cell| {
+            cell.chars().count() >= 10
+                && cell.chars().any(
+                    |ch| matches!(ch as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff),
+                )
+        })
+        .collect();
+    let cjk_chars: usize = cjk_prose_cells
+        .iter()
+        .map(|cell| cell.chars().filter(|ch| ch.is_alphabetic()).count())
+        .sum();
+    if cjk_prose_cells.len() < 4 || cjk_prose_cells.len() * 5 < nonempty * 3 || cjk_chars < 70 {
+        return None;
+    }
+
+    let mut continuation_count = 0;
+    let mut continuation_columns = HashSet::new();
+    for adjacent in data_rows.windows(2) {
+        for column in 0..column_count {
+            let previous = adjacent[0].get(column).copied().unwrap_or("");
+            let current = adjacent[1].get(column).copied().unwrap_or("");
+            if super::is_cross_row_prose_continuation(previous, current) {
+                continuation_count += 1;
+                continuation_columns.insert(column);
+            }
+        }
+    }
+    let compact_sparse_fragment = data_rows.len() == 3
+        && nonempty <= 6
+        && !data_rows
+            .iter()
+            .flatten()
+            .any(|cell| cell.chars().filter(|ch| ch.is_ascii_digit()).count() >= 2);
+    if (continuation_count < 3 || continuation_columns.len() < 2) && !compact_sparse_fragment {
+        return None;
+    }
+
+    let columns: Vec<String> = (0..column_count)
+        .filter_map(|column| {
+            let text = data_rows
+                .iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.trim())
+                .filter(|cell| !cell.is_empty())
+                .collect::<Vec<_>>()
+                .join("");
+            (!text.is_empty()).then_some(text)
+        })
+        .collect();
+    Some(columns)
+}
+
+fn is_markdown_separator_row(cells: &[&str]) -> bool {
+    cells.iter().all(|cell| {
+        let cell = cell.trim().trim_matches(':');
+        cell.len() >= 3 && cell.chars().all(|ch| ch == '-')
+    })
 }
 
 fn normalize_tracked_caps(cell: &str) -> String {
@@ -425,9 +816,18 @@ fn fix_hyphenation(text: &str) -> String {
 fn remove_page_numbers(text: &str) -> String {
     let mut result = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
+    let front_matter_headings: HashSet<String> = lines
+        .iter()
+        .take(16)
+        .filter_map(|line| markdown_heading(line).map(|(_, heading)| strip_inline_markup(heading)))
+        .collect();
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+
+        if is_front_matter_running_header(trimmed, &front_matter_headings) {
+            continue;
+        }
 
         // Check for page number patterns
         if is_page_number_line(trimmed) {
@@ -457,6 +857,26 @@ fn remove_page_numbers(text: &str) -> String {
     }
 
     result.join("\n")
+}
+
+fn is_front_matter_running_header(line: &str, headings: &HashSet<String>) -> bool {
+    let mut tokens = line.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return false;
+    };
+    if first.len() <= 4 && first.chars().all(|ch| ch.is_ascii_digit()) {
+        let remainder = tokens.collect::<Vec<_>>().join(" ");
+        if headings.contains(&remainder) {
+            return true;
+        }
+    }
+
+    let Some((prefix, page)) = line.rsplit_once(char::is_whitespace) else {
+        return false;
+    };
+    page.len() <= 4
+        && page.chars().all(|ch| ch.is_ascii_digit())
+        && headings.contains(prefix.trim())
 }
 
 /// Convert URLs to markdown links
@@ -565,6 +985,30 @@ fn format_urls(text: &str) -> String {
         result.push_str(&text[safe_last_end..]);
     }
     result
+}
+
+fn repair_wrapped_arxiv_urls(text: &str) -> String {
+    use once_cell::sync::Lazy;
+    static SCHEME_GAP: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)https:\s+//\s*").unwrap());
+    static DOMAIN_GAP: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)arxiv(?:\.\s+org|\.or\s+g)").unwrap());
+    static PATH_GAP: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)(https?://arxiv\.org/)\s+(abs/\d{4}\.\d{4,6})").unwrap());
+    static LINE_WRAP: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(https?://arxi[^\s]*)[ \t]*\n[ \t]*\n?[ \t]*([a-z0-9.][a-z0-9./-]{2,})")
+            .unwrap()
+    });
+
+    let mut repaired = SCHEME_GAP.replace_all(text, "https://").to_string();
+    repaired = DOMAIN_GAP.replace_all(&repaired, "arxiv.org").to_string();
+    repaired = PATH_GAP.replace_all(&repaired, "$1$2").to_string();
+    loop {
+        let next = LINE_WRAP.replace_all(&repaired, "$1$2").to_string();
+        if next == repaired {
+            return repaired;
+        }
+        repaired = next;
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +1179,16 @@ mod tests {
     }
 
     #[test]
+    fn remove_page_numbers_uses_front_matter_to_filter_academic_running_headers() {
+        let input = "## A Formulation of Recursive Self-Improvement\n\n#### Wenyi Wang\n\nBody\n\n2 Wenyi Wang\n\nMore body\n\nA Formulation of Recursive Self-Improvement 3";
+        let result = remove_page_numbers(input);
+        assert!(result.contains("## A Formulation"));
+        assert!(result.contains("#### Wenyi Wang"));
+        assert!(!result.contains("2 Wenyi Wang"));
+        assert!(!result.contains("Improvement 3"));
+    }
+
+    #[test]
     fn test_is_page_number_non_match() {
         assert!(!is_page_number_line("Hello World"));
         assert!(!is_page_number_line("Chapter 1"));
@@ -832,6 +1286,16 @@ mod tests {
     }
 
     #[test]
+    fn repairs_arxiv_urls_split_by_layout_lines_and_spacing() {
+        let input = "URL https://arxiv.org/abs/2604\n\n.23472.\nURL https: //arxiv.org/abs/2606.1\nURL https://arxiv.or g/abs/2605.2\nURL https://arxiv.org/ abs/2606.30774";
+        let repaired = repair_wrapped_arxiv_urls(input);
+        assert!(repaired.contains("https://arxiv.org/abs/2604.23472."));
+        assert!(repaired.contains("https://arxiv.org/abs/2606.1"));
+        assert!(repaired.contains("https://arxiv.org/abs/2605.2"));
+        assert!(repaired.contains("https://arxiv.org/abs/2606.30774"));
+    }
+
+    #[test]
     fn refine_heading_blocks_promotes_strong_bold_blocks() {
         let input = "**IMPLEMENTATION**\n\nBody\n\n**1.5. Migrant Workers at Risk**";
         let result = refine_heading_blocks(input);
@@ -905,6 +1369,41 @@ mod tests {
     }
 
     #[test]
+    fn refine_heading_blocks_demotes_wrapped_chinese_quote_run() {
+        let input = "# 第二章\n\n##### 禱告婆那種冗長的祈禱跟迷信一樣，它裡面不涉及任何屬靈\n\n##### 爭戰或聖經基礎，只是那些禱告婆自吹自擂罷了，和它比起\n\n##### 來，靈裡宣告要更根本些，靈裡宣告是去釋放原本就屬你的\n\n##### 財富，財富的轉換甚麼時候發生，是上帝來決定的\n\n##### 四、結語";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("# 第二章"));
+        assert!(!result.contains("##### 禱告婆"));
+        assert!(!result.contains("##### 爭戰"));
+        assert!(result.contains("##### 四、結語"));
+    }
+
+    #[test]
+    fn refine_heading_blocks_preserves_structural_heading_run() {
+        let input = "##### 一、全球化與中國化交織張力下的發展路徑\n\n##### 二、研究視角與方法論的歷史背景和主要脈絡\n\n##### 三、定義與本書梗概以及各章節的主要內容\n\n##### 四、結語與後續研究方向的總體概述";
+        assert_eq!(refine_heading_blocks(input), input);
+    }
+
+    #[test]
+    fn refine_heading_blocks_separates_glued_academic_section_numbers() {
+        let input = "### 1Introduction\n\n#### 3.2Decode Codesign\n\n#### Qwen3.6-35B-A3B\n\nBody 3.2Decode";
+        let result = refine_heading_blocks(input);
+        assert!(result.contains("### 1 Introduction"));
+        assert!(result.contains("#### 3.2 Decode Codesign"));
+        assert!(result.contains("#### Qwen3.6-35B-A3B"));
+        assert!(result.contains("Body 3.2Decode"));
+    }
+
+    #[test]
+    fn refine_heading_blocks_demotes_equations_and_deduplicates_references() {
+        let input = "#### M=F ∪C, q=|F|.(1)\n\n### References\n\n### References\n\n[1] Citation";
+        let result = refine_heading_blocks(input);
+        assert!(result.starts_with("M=F ∪C, q=|F|.(1)"));
+        assert_eq!(result.matches("### References").count(), 1);
+        assert!(result.contains("[1] Citation"));
+    }
+
+    #[test]
     fn refine_table_lines_repairs_tracked_caps_and_outcomes_row() {
         let input = "|Competence Area|#1 T HE 3 R S : R ECYCLE -R EUSE -R EDUCE|\n|---|---|\n|Competence Statement Learning Outcomes|Details|";
         let result = refine_table_lines(input);
@@ -916,6 +1415,32 @@ mod tests {
     #[test]
     fn refine_table_lines_leaves_ordinary_cells_unchanged() {
         let input = "| Initials | A B |\n|---|---|";
+        assert_eq!(refine_table_lines(input), input);
+    }
+
+    #[test]
+    fn refine_table_lines_restores_sparse_traditional_chinese_prose_columns() {
+        let input = "|道家經典中，都沒有對善惡的清晰劃分。|中國傳統強調禮，這段論述仍在下一行延續||\n|---|---|---|---|\n|使得善惡間的區分完全模糊了，並形成一段連續正文|而對於佛教徒來說，儘管行善是重要實踐||\n|得善報的關鍵，但它並不被看作是一個終極目標|||基督教強勢有|";
+        let result = refine_table_lines(input);
+        assert!(!result.contains("|---|"));
+        assert!(result.starts_with("道家經典中"));
+        assert!(result.contains("終極目標\n\n中國傳統"));
+        assert!(result.ends_with("基督教強勢有"));
+    }
+
+    #[test]
+    fn refine_table_lines_demotes_sparse_display_equation_not_real_table() {
+        let input = "||B = max(B||−B ,0)(2)|||\n|---|---|---|---|---|---|\n||R|H|P|||\n|fill ⋆|P H|cpu P P|⋆ H|H P P H|P ⋆|";
+        let result = refine_table_lines(input);
+        assert!(!result.contains("|---|"));
+        assert!(result.contains("B = max(B −B ,0)(2)"));
+        assert!(result.contains("R H P"));
+        assert!(result.contains("fill ⋆ P H cpu P P ⋆ H H P P H P ⋆"));
+    }
+
+    #[test]
+    fn refine_table_lines_keeps_real_table_with_formula_cells() {
+        let input = "|Method|Equation|Score|Notes|\n|---|---|---|---|\n|A|q=m×B/B|(2)|stable|";
         assert_eq!(refine_table_lines(input), input);
     }
 }

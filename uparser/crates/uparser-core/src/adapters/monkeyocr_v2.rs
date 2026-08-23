@@ -366,6 +366,7 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 error,
                 asset_bytes,
                 asset_path: None,
+                asset_caption: None,
             });
         }
 

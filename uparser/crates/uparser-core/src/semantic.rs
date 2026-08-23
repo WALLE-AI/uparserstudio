@@ -79,7 +79,7 @@ async fn classify(
             "role": "user",
             "content": format!(
                 "Classify the document excerpt. Return JSON only with primary, tags, confidence. \
-        Allowed genres: book, resume, tender, bid, legal_document, regulation, contract, academic_paper, \
+        Allowed genres: book, technical_standard, resume, tender, bid, legal_document, regulation, contract, academic_paper, \
         financial_report, manual, presentation, spreadsheet, general_report, other, unknown.\n\n{sample}"
             )
         })],
@@ -143,6 +143,7 @@ fn apply_prediction(report: &mut AnalysisReport, prediction: SemanticPrediction)
 fn legacy_kind(genre: DocumentGenre) -> DocumentKind {
     match genre {
         DocumentGenre::Book => DocumentKind::Book,
+        DocumentGenre::TechnicalStandard => DocumentKind::Report,
         DocumentGenre::Resume => DocumentKind::Resume,
         DocumentGenre::Presentation => DocumentKind::Slide,
         DocumentGenre::Spreadsheet => DocumentKind::Spreadsheet,
@@ -251,6 +252,10 @@ mod tests {
     #[test]
     fn legacy_kind_mapping_is_exhaustive_for_compatibility_categories() {
         assert_eq!(legacy_kind(DocumentGenre::Book), DocumentKind::Book);
+        assert_eq!(
+            legacy_kind(DocumentGenre::TechnicalStandard),
+            DocumentKind::Report
+        );
         assert_eq!(legacy_kind(DocumentGenre::Resume), DocumentKind::Resume);
         assert_eq!(
             legacy_kind(DocumentGenre::Presentation),

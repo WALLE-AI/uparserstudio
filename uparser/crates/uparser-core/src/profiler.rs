@@ -203,6 +203,66 @@ fn collect_block_stats(block: &uparser_document_engine::Block, stats: &mut Struc
 
 fn infer_genre(format: DocumentFormat, text: &str, fallback: DocumentGenre) -> GenrePrediction {
     let lower = text.to_lowercase();
+
+    // Strong, document-level structures take precedence over incidental
+    // vocabulary. Long books about company law contain "合同" and academic
+    // papers may discuss regulations; treating every keyword equally made
+    // those documents contracts/bids even when their front matter was clear.
+    let strong = [
+        (
+            DocumentGenre::TechnicalStandard,
+            [
+                "中华人民共和国国家标准",
+                "中华人民共和国行业标准",
+                "本标准用词说明",
+                "本规范用词说明",
+                "统一规范",
+                "检查标准",
+            ]
+            .iter()
+            .filter(|term| lower.contains(**term))
+            .count(),
+        ),
+        (
+            DocumentGenre::Resume,
+            ["工作经历", "教育经历", "求职意向", "项目经历"]
+                .iter()
+                .filter(|term| lower.contains(**term))
+                .count(),
+        ),
+        (
+            DocumentGenre::Book,
+            [
+                "isbn",
+                "出版社",
+                "出版：",
+                "參考書目",
+                "參考文獻",
+                "版权所有",
+                "版權",
+            ]
+            .iter()
+            .filter(|term| lower.contains(**term))
+            .count(),
+        ),
+        (
+            DocumentGenre::AcademicPaper,
+            ["abstract", "keywords", "references", "arxiv"]
+                .iter()
+                .filter(|term| lower.contains(**term))
+                .count(),
+        ),
+    ];
+    let strong_match = strong
+        .iter()
+        .filter(|(genre, count)| match genre {
+            DocumentGenre::TechnicalStandard => *count >= 2,
+            DocumentGenre::Resume => *count >= 2,
+            DocumentGenre::Book => *count >= 3,
+            DocumentGenre::AcademicPaper => *count >= 3,
+            _ => false,
+        })
+        .max_by_key(|(_, count)| *count);
     let rules: &[(DocumentGenre, &[&str])] = &[
         (
             DocumentGenre::Resume,
@@ -269,10 +329,17 @@ fn infer_genre(format: DocumentFormat, text: &str, fallback: DocumentGenre) -> G
         })
         .collect();
     matches.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    let primary = matches.first().map(|(genre, _)| *genre).unwrap_or(fallback);
-    let confidence = matches
-        .first()
-        .map(|(_, count)| (0.55 + *count as f32 * 0.12).min(0.9))
+    let primary = strong_match
+        .map(|(genre, _)| *genre)
+        .or_else(|| matches.first().map(|(genre, _)| *genre))
+        .unwrap_or(fallback);
+    let confidence = strong_match
+        .map(|(_, count)| (0.75 + *count as f32 * 0.04).min(0.95))
+        .or_else(|| {
+            matches
+                .first()
+                .map(|(_, count)| (0.55 + *count as f32 * 0.12).min(0.9))
+        })
         .unwrap_or_else(|| {
             if primary == DocumentGenre::Unknown {
                 0.2
@@ -282,7 +349,11 @@ fn infer_genre(format: DocumentFormat, text: &str, fallback: DocumentGenre) -> G
         });
     GenrePrediction {
         primary,
-        tags: matches.iter().skip(1).map(|(genre, _)| *genre).collect(),
+        tags: matches
+            .iter()
+            .map(|(genre, _)| *genre)
+            .filter(|genre| *genre != primary)
+            .collect(),
         confidence,
         evidence: vec![AnalysisEvidence {
             signal: if matches.is_empty() {
@@ -304,6 +375,7 @@ fn infer_genre(format: DocumentFormat, text: &str, fallback: DocumentGenre) -> G
 fn legacy_kind(genre: DocumentGenre) -> DocumentKind {
     match genre {
         DocumentGenre::Book => DocumentKind::Book,
+        DocumentGenre::TechnicalStandard => DocumentKind::Report,
         DocumentGenre::Resume => DocumentKind::Resume,
         DocumentGenre::Presentation => DocumentKind::Slide,
         DocumentGenre::Spreadsheet => DocumentKind::Spreadsheet,
@@ -314,17 +386,57 @@ fn legacy_kind(genre: DocumentGenre) -> DocumentKind {
 }
 
 fn detect_toc(text: &str, heading_count: usize) -> bool {
-    let marker = text.lines().any(|line| {
+    let lines: Vec<&str> = text.lines().collect();
+    let marker_index = lines.iter().position(|line| {
+        let normalized = line
+            .trim()
+            .trim_start_matches('#')
+            .trim()
+            .trim_matches('*')
+            .trim()
+            .to_lowercase();
+        let compact: String = normalized
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
         matches!(
-            line.trim().to_lowercase().as_str(),
-            "目录" | "目次" | "contents" | "table of contents"
+            normalized.as_str(),
+            "目录" | "目錄" | "目次" | "contents" | "table of contents"
+        ) || matches!(
+            compact.as_str(),
+            "目录" | "目錄" | "目次" | "contents" | "tableofcontents"
         )
     });
     let linked_or_numbered = text
         .lines()
         .filter(|line| line.contains("](#") || line.contains("......") || line.contains("……"))
         .count();
-    marker && (linked_or_numbered >= 3 || heading_count >= 3)
+    let printed_page_entries = marker_index
+        .map(|index| {
+            lines
+                .iter()
+                .skip(index + 1)
+                .take(120)
+                .filter(|line| {
+                    let tail = line
+                        .trim()
+                        .trim_matches('*')
+                        .split_whitespace()
+                        .next_back()
+                        .unwrap_or_default()
+                        .trim_matches(|ch: char| matches!(ch, '/' | '／' | '。'));
+                    !tail.is_empty()
+                        && (tail.chars().all(|ch| ch.is_ascii_digit())
+                            || (tail.len() <= 8
+                                && tail.chars().all(|ch| {
+                                    matches!(ch.to_ascii_lowercase(), 'i' | 'v' | 'x' | 'l')
+                                })))
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    marker_index.is_some()
+        && (linked_or_numbered >= 3 || printed_page_entries >= 3 || heading_count >= 3)
 }
 
 fn starts_with_numbered_clause(line: &str) -> bool {
@@ -397,6 +509,13 @@ mod l2 {
                 (count > 0 && line.chars().nth(count) == Some(' ')).then_some(count.min(6) as u8)
             })
             .max();
+        let heading_count = markdown
+            .lines()
+            .filter(|line| {
+                let count = line.chars().take_while(|ch| *ch == '#').count();
+                count > 0 && line.chars().nth(count) == Some(' ')
+            })
+            .count();
         let nonempty_lines = markdown
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -406,15 +525,119 @@ mod l2 {
             .lines()
             .filter(|line| starts_with_numbered_clause(line.trim()))
             .count();
+        let mut warnings: Vec<String> = result
+            .ocr_reasons_by_page
+            .iter()
+            .map(|reason| {
+                format!(
+                    "page {} requires OCR: {}",
+                    reason.page,
+                    reason.reasons.join(",")
+                )
+            })
+            .collect();
+        if result.has_encoding_issues {
+            warnings.push(
+                "native text layer has encoding issues; use page/region visual fallback".to_owned(),
+            );
+        }
+        let replacement_count = markdown.matches('\u{fffd}').count();
+        if replacement_count > 0 {
+            warnings.push(format!(
+                "native output contains {replacement_count} Unicode replacement characters"
+            ));
+        }
+        let collapsed_table_rows = markdown
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                trimmed.starts_with('|')
+                    && trimmed.ends_with('|')
+                    && trimmed.chars().count() > 1_000
+            })
+            .count();
+        if collapsed_table_rows > 0 {
+            warnings.push(format!(
+                "native output contains {collapsed_table_rows} table rows longer than 1000 characters; verify row and merged-cell reconstruction"
+            ));
+        }
+        if genre.primary == DocumentGenre::AcademicPaper {
+            let lower_markdown = markdown.to_ascii_lowercase();
+            let suspected_ligature_losses = [
+                " eciency",
+                " articial",
+                " denition",
+                " dierent",
+                " nite",
+                " rst ",
+                " nd ",
+            ]
+            .iter()
+            .map(|term| lower_markdown.matches(term).count())
+            .sum::<usize>();
+            if suspected_ligature_losses >= 5 {
+                warnings.push(format!(
+                    "native output contains {suspected_ligature_losses} probable TeX ligature losses; verify the source font mapping or use visual fallback"
+                ));
+            }
+            let unusually_long_lines = markdown
+                .lines()
+                .filter(|line| line.chars().count() > 1_000)
+                .count();
+            if unusually_long_lines > 0 {
+                warnings.push(format!(
+                    "academic output contains {unusually_long_lines} lines longer than 1000 characters; verify formula and reading-order reconstruction"
+                ));
+            }
+            let figure_captions = markdown
+                .lines()
+                .filter(|line| {
+                    let line = line.trim_start();
+                    line.starts_with("Fig. ") || line.starts_with("Figure ")
+                })
+                .count();
+            if figure_captions >= 2 && !markdown.contains("![") {
+                warnings.push(format!(
+                    "academic output contains {figure_captions} figure captions but no materialized figure assets"
+                ));
+            }
+        }
+        let corrupt_leader_count = markdown.matches('壳').count();
+        if corrupt_leader_count >= 8 {
+            warnings.push(format!(
+                "native output contains {corrupt_leader_count} repeated suspicious leader glyphs"
+            ));
+        }
+        if genre.primary == DocumentGenre::Resume {
+            let front_matter = markdown.lines().take(20).collect::<Vec<_>>().join(" ");
+            let suspicious_mixed_identifier = front_matter
+                .split(|ch: char| ch.is_whitespace() || matches!(ch, '|' | ':' | '：'))
+                .any(|token| {
+                    let token = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+                    let digits = token.chars().filter(|ch| ch.is_ascii_digit()).count();
+                    let letters = token.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+                    (10..=15).contains(&token.len()) && digits >= 7 && letters >= 1
+                });
+            if suspicious_mixed_identifier {
+                warnings.push(
+                    "resume contains a suspicious mixed-alphanumeric identity/contact field; compare the source region visually"
+                        .to_owned(),
+                );
+            }
+        }
 
         DocumentProfile {
             source_format: format,
             source_quality,
-            kind,
-            kind_confidence,
+            kind: if genre.primary == DocumentGenre::Unknown {
+                kind
+            } else {
+                legacy_kind(genre.primary)
+            },
+            kind_confidence: genre.confidence.max(kind_confidence),
             genre,
             structure: StructureProfile {
-                has_toc: Some(detect_toc(markdown, heading_depth.unwrap_or(0) as usize)),
+                has_toc: Some(detect_toc(markdown, heading_count)),
                 has_cover: None,
                 heading_depth,
                 numbered_clause_density: numbered as f32 / nonempty_lines as f32,
@@ -425,17 +648,7 @@ mod l2 {
             page_profiles,
             dominant_content,
             analysis_level: ProfileLevel::L2,
-            warnings: result
-                .ocr_reasons_by_page
-                .iter()
-                .map(|reason| {
-                    format!(
-                        "page {} requires OCR: {}",
-                        reason.page,
-                        reason.reasons.join(",")
-                    )
-                })
-                .collect(),
+            warnings,
         }
     }
 
@@ -571,11 +784,34 @@ mod tests {
         assert!(starts_with_numbered_clause("1. Scope"));
         assert!(starts_with_numbered_clause("2) Terms"));
         assert!(!starts_with_numbered_clause("Scope 1.0"));
+
+        let standard = infer_genre(
+            DocumentFormat::Pdf,
+            "中华人民共和国国家标准 建筑施工安全技术统一规范 本规范用词说明",
+            DocumentGenre::Unknown,
+        );
+        assert_eq!(standard.primary, DocumentGenre::TechnicalStandard);
+
+        let book = infer_genre(
+            DocumentFormat::Pdf,
+            "香港中文大學出版社 ISBN 978-1-2 版權所有 參考書目",
+            DocumentGenre::Unknown,
+        );
+        assert_eq!(book.primary, DocumentGenre::Book);
+
+        assert!(detect_toc(
+            "### 目錄\n##### 第一章 導言 3\n##### 第二章 方法 21\n##### 第三章 結論 49",
+            0
+        ));
     }
 
     #[test]
     fn legacy_kind_preserves_only_supported_compatibility_categories() {
         assert_eq!(legacy_kind(DocumentGenre::Book), DocumentKind::Book);
+        assert_eq!(
+            legacy_kind(DocumentGenre::TechnicalStandard),
+            DocumentKind::Report
+        );
         assert_eq!(legacy_kind(DocumentGenre::Resume), DocumentKind::Resume);
         assert_eq!(
             legacy_kind(DocumentGenre::Presentation),
@@ -666,6 +902,9 @@ mod tests {
                 },
                 has_encoding_issues: false,
                 positioned_items: Vec::new(),
+                struct_roles: Default::default(),
+                page_sizes: Default::default(),
+                chart_regions: Default::default(),
             }
         }
 

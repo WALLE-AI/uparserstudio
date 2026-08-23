@@ -442,8 +442,12 @@ pub(crate) fn strip_repeated_lines(lines: Vec<TextLine>, page_count: u32) -> Vec
         band_y_positions.entry(normalized).or_default().push(band_y);
     }
 
-    // Compute threshold
-    let threshold = 3u32.max(page_count * 30 / 100);
+    // Compute threshold. A global 30% threshold misses chapter-scoped running
+    // heads in books: a header can repeat on every page of a 20-page chapter
+    // while representing only 4% of a 500-page monograph. Geometry and stable
+    // Y-position checks already provide the stronger admission evidence, so
+    // cap the required repetition count for long documents.
+    let threshold = 3u32.max((page_count * 30 / 100).min(5));
 
     // Check Y-position consistency: headers/footers appear at the same position
     // on every page, table content varies. Require normalized stddev < 5% of

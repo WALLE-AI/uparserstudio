@@ -284,10 +284,74 @@ pub fn detect_chart_regions(
                     (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h))
                 },
             );
-            regions.push(bbox);
+            if !region_has_stable_numeric_columns(items, bbox, page) {
+                regions.push(bbox);
+            }
         }
     }
     regions
+}
+
+/// Financial statements and numeric schedules can contain many underlined
+/// values whose rule rectangles resemble horizontal bars. Real bar labels
+/// spread across many x positions; tables instead repeat values in a small
+/// number of stable, right-aligned numeric columns over many rows.
+fn region_has_stable_numeric_columns(
+    items: &[TextItem],
+    bbox: (f32, f32, f32, f32),
+    page: u32,
+) -> bool {
+    let numeric_value = |text: &str| {
+        let mut has_digit = false;
+        for character in text.trim().chars() {
+            if character.is_ascii_digit() {
+                has_digit = true;
+            } else if !matches!(
+                character,
+                ' ' | '\t' | ',' | '.' | '-' | '+' | '(' | ')' | '%' | '$' | '¥' | '￥' | '€' | '£'
+            ) {
+                return false;
+            }
+        }
+        has_digit
+    };
+    let (x0, y0, x1, y1) = bbox;
+    let numeric: Vec<&TextItem> = items
+        .iter()
+        .filter(|item| item.page == page && numeric_value(&item.text))
+        .filter(|item| {
+            let center_x = item.x + item.width / 2.0;
+            let center_y = item.y + item.height / 2.0;
+            center_x >= x0 && center_x <= x1 && center_y >= y0 && center_y <= y1
+        })
+        .collect();
+    if numeric.len() < 16 {
+        return false;
+    }
+    let cluster_count = |mut values: Vec<f32>, tolerance: f32, minimum_members: usize| {
+        values.sort_by(|left, right| left.total_cmp(right));
+        let mut clusters = Vec::<Vec<f32>>::new();
+        for value in values {
+            if let Some(cluster) = clusters.iter_mut().find(|cluster| {
+                (value - cluster.iter().sum::<f32>() / cluster.len() as f32).abs() <= tolerance
+            }) {
+                cluster.push(value);
+            } else {
+                clusters.push(vec![value]);
+            }
+        }
+        clusters
+            .iter()
+            .filter(|cluster| cluster.len() >= minimum_members)
+            .count()
+    };
+    let columns = cluster_count(
+        numeric.iter().map(|item| item.x + item.width).collect(),
+        8.0,
+        7,
+    );
+    let rows = cluster_count(numeric.iter().map(|item| item.y).collect(), 3.0, 2);
+    columns >= 2 && rows >= 8
 }
 
 fn detect_direct_rect_table(
@@ -3080,6 +3144,18 @@ mod tests {
             })
             .map(|(x, y)| make_item("42", x, y, 9.0))
             .collect();
+        assert!(detect_chart_regions(&items, &rects, 1).is_empty());
+    }
+
+    #[test]
+    fn stable_financial_value_columns_are_not_a_bar_chart() {
+        let rects = chart_rects();
+        let mut items = Vec::new();
+        for row in 0..10 {
+            let y = 570.0 + row as f32 * 18.0;
+            items.push(make_item("1,000.00", 250.0, y, 9.0));
+            items.push(make_item("9,500.00", 400.0, y, 9.0));
+        }
         assert!(detect_chart_regions(&items, &rects, 1).is_empty());
     }
 

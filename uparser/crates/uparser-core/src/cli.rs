@@ -6,7 +6,9 @@ use crate::adapters::{AdapterOverrides, PipelineConfig, Registry, StageBackendCh
 use crate::cache;
 use crate::render;
 use clap::{Parser, Subcommand, ValueEnum};
+use regex::Regex;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Minimum gap between progress lines printed to stderr for a
@@ -26,7 +28,7 @@ pub const EXIT_PARTIAL: i32 = 3;
 pub const EXIT_INTERNAL: i32 = 4;
 
 #[derive(Parser)]
-#[command(name = "uparser")]
+#[command(name = "uparser", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -57,7 +59,7 @@ pub enum Command {
         /// when selecting a concrete adapter through `--protocol`.
         #[arg(long, value_enum)]
         mode: Option<ParseMode>,
-        /// Protocol name (`native`, `mineru-vlm`, `dots-ocr`,
+        /// Protocol name (`native`, `tesseract`, `mineru-vlm`, `dots-ocr`,
         /// `generic-vlm`, `monkeyocr-v2`, `pipeline`, `paddleocr`,
         /// `paddlex-structure`, `mock`), or `auto`
         /// (the default) to run the Profiler+Router first and pick one
@@ -156,6 +158,11 @@ pub enum Command {
         /// introduces by default.
         #[arg(long)]
         no_assets: bool,
+        /// Redact common email, mainland-China phone, and resident-ID
+        /// values in emitted CLI output. Parsing and cached results remain
+        /// faithful to the source.
+        #[arg(long)]
+        redact_pii: bool,
         /// Drop footnotes, endnotes and speaker notes (`native` structured
         /// formats only). They are extracted by default.
         #[arg(long)]
@@ -267,6 +274,7 @@ pub fn run(cli: Cli) -> i32 {
             pages,
             assets_dir,
             no_assets,
+            redact_pii,
             no_notes,
             headers_footers,
             max_input_mib,
@@ -347,6 +355,7 @@ pub fn run(cli: Cli) -> i32 {
                 wanted_pages,
                 assets_dir,
                 no_assets,
+                redact_pii,
                 no_notes,
                 headers_footers,
                 max_input_mib,
@@ -427,6 +436,7 @@ fn run_parse(
     wanted_pages: Option<Vec<u32>>,
     assets_dir: Option<String>,
     no_assets: bool,
+    redact_pii: bool,
     no_notes: bool,
     headers_footers: bool,
     max_input_mib: Option<u64>,
@@ -493,7 +503,8 @@ fn run_parse(
     {
         match native_markdown_fast_path(&path, &file_bytes, &document_options) {
             Ok(Some(markdown)) => {
-                return match emit_parse_output(&markdown, output_path.as_deref()) {
+                let output = redact_output_if_requested(markdown, redact_pii);
+                return match emit_parse_output(&output, output_path.as_deref()) {
                     Ok(()) => EXIT_SUCCESS,
                     Err(error) => emit_error(
                         format,
@@ -646,16 +657,15 @@ fn run_parse(
 
     let hooks = if stream && effective_protocol != "native" {
         crate::runner::ExecutionHooks {
-            on_window: Some(std::sync::Arc::new(|pages, errors, warnings| {
+            on_window: Some(std::sync::Arc::new(move |pages, errors, warnings| {
                 let line = serde_json::json!({
                     "window_pages": pages,
                     "window_errors": errors,
                     "window_warnings": warnings,
                 });
-                emit_line(
-                    &serde_json::to_string(&line)
-                        .expect("runner window output is always serializable"),
-                );
+                let rendered = serde_json::to_string(&line)
+                    .expect("runner window output is always serializable");
+                emit_line(&redact_output_if_requested(rendered, redact_pii));
             })),
             on_progress: None,
         }
@@ -802,6 +812,7 @@ fn run_parse(
                 }
             }
         };
+        let output = redact_output_if_requested(output, redact_pii);
         if let Err(error) = emit_parse_output(&output, output_path.as_deref()) {
             return emit_error(
                 format,
@@ -821,6 +832,32 @@ fn run_parse(
     }
 }
 
+fn redact_output_if_requested(text: String, redact: bool) -> String {
+    if !redact {
+        return text;
+    }
+    static EMAIL: OnceLock<Regex> = OnceLock::new();
+    static RESIDENT_ID: OnceLock<Regex> = OnceLock::new();
+    static PHONE: OnceLock<Regex> = OnceLock::new();
+
+    let email = EMAIL.get_or_init(|| {
+        Regex::new(r"(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}")
+            .expect("PII email regex is valid")
+    });
+    let resident_id = RESIDENT_ID.get_or_init(|| {
+        Regex::new(r"(^|[^0-9])[0-9]{17}[0-9Xx]([^0-9]|$)").expect("PII resident-ID regex is valid")
+    });
+    let phone = PHONE.get_or_init(|| {
+        Regex::new(r"(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)").expect("PII phone regex is valid")
+    });
+
+    let text = email.replace_all(&text, "[REDACTED_EMAIL]");
+    let text = resident_id.replace_all(&text, "$1[REDACTED_ID]$2");
+    phone
+        .replace_all(&text, "$1[REDACTED_PHONE]$2")
+        .into_owned()
+}
+
 fn native_markdown_fast_path(
     path: &str,
     bytes: &[u8],
@@ -832,6 +869,22 @@ fn native_markdown_fast_path(
         {
             let artifact =
                 uparser_native_engine::process_pdf_mem(bytes).map_err(|error| error.to_string())?;
+            #[cfg(feature = "pdfium")]
+            if !artifact.positioned_items.is_empty()
+                && (artifact.ocr_reasons_by_page.iter().any(|entry| {
+                    entry.reasons.iter().any(|reason| {
+                        matches!(
+                            reason.as_str(),
+                            uparser_native_engine::OCR_REASON_SUSPECTED_GARBLED_TEXT
+                                | uparser_native_engine::OCR_REASON_SCANNED
+                        )
+                    })
+                }) || artifact.positioned_items.iter().any(|item| {
+                    uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)
+                }))
+            {
+                return Ok(None);
+            }
             if let Some(markdown) = artifact
                 .markdown
                 .as_deref()
@@ -1121,11 +1174,24 @@ fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
         return EXIT_SUCCESS;
     }
 
-    if protocol == "mock" || protocol == "native" {
+    if protocol == "mock" || protocol == "native" || protocol == "tesseract" {
+        let (reachable, note) = if protocol == "tesseract" {
+            let available = crate::adapters::local_tesseract::available();
+            (
+                Some(available),
+                if available {
+                    "local Tesseract executable is available"
+                } else {
+                    "local Tesseract executable was not found"
+                },
+            )
+        } else {
+            (None, "this protocol has no network endpoint to probe")
+        };
         let report = serde_json::json!({
             "protocol": protocol,
-            "reachable": null,
-            "note": "this protocol has no network endpoint to probe",
+            "reachable": reachable,
+            "note": note,
         });
         println!(
             "{}",
@@ -1238,4 +1304,25 @@ fn run_protocols() -> i32 {
         serde_json::to_string_pretty(&list).expect("protocol list is serializable")
     );
     EXIT_SUCCESS
+}
+
+#[cfg(test)]
+mod pii_tests {
+    use super::redact_output_if_requested;
+
+    #[test]
+    fn output_redaction_covers_common_resume_identifiers() {
+        let source = "邮箱 person.name@example.com 电话13812345678 身份证11010119900307123X";
+        let redacted = redact_output_if_requested(source.to_owned(), true);
+        assert_eq!(
+            redacted,
+            "邮箱 [REDACTED_EMAIL] 电话[REDACTED_PHONE] 身份证[REDACTED_ID]"
+        );
+    }
+
+    #[test]
+    fn output_redaction_is_opt_in() {
+        let source = "person.name@example.com";
+        assert_eq!(redact_output_if_requested(source.to_owned(), false), source);
+    }
 }

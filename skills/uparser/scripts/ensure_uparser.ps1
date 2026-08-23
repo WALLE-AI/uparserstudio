@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 $version = if ($env:UPARSER_VERSION) { $env:UPARSER_VERSION } else { '0.2.0' }
 $repo    = if ($env:UPARSER_REPO)    { $env:UPARSER_REPO }    else { 'WALLE-AI/uparserstudio' }
 $cacheRoot = if ($env:UPARSER_HOME) { $env:UPARSER_HOME } else { Join-Path $HOME '.cache/uparser' }
-$cache   = Join-Path $cacheRoot 'bin'
+$cache   = Join-Path $cacheRoot "versions\v$version\windows-x86_64"
 $here    = $PSScriptRoot
 
 # 0) explicit binary (use this for an unreleased workspace build)
@@ -47,6 +47,8 @@ if ([Environment]::Is64BitOperatingSystem) {
 $base = "https://github.com/$repo/releases/download/v$version"
 New-Item -ItemType Directory -Force -Path $cache | Out-Null
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+$dllAsset = "uparser-v$version-windows-x86_64-pdfium.dll"
+$dllTmp = "$tmp.pdfium.dll"
 
 function Fetch($url, $dest) {
   try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $dest -TimeoutSec 30; return $true }
@@ -70,6 +72,18 @@ if (Fetch "$base/SHA256SUMS" $sums) {
     $want = ($line -split '\s+')[0].ToLower()
     $got  = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
     if ($want -ne $got) { Remove-Item $tmp,$sums -Force; throw "checksum mismatch for $asset" }
+  }
+  if (Fetch "$base/$dllAsset" $dllTmp) {
+    $dllLine = Get-Content $sums | Where-Object { $_ -match ([regex]::Escape($dllAsset) + '\s*$') } | Select-Object -First 1
+    if ($dllLine) {
+      $dllWant = ($dllLine -split '\s+')[0].ToLower()
+      $dllGot = (Get-FileHash -Algorithm SHA256 $dllTmp).Hash.ToLower()
+      if ($dllWant -ne $dllGot) {
+        Remove-Item $tmp,$dllTmp,$sums -Force -ErrorAction SilentlyContinue
+        throw "checksum mismatch for $dllAsset"
+      }
+    }
+    Move-Item -Force $dllTmp (Join-Path $cache 'pdfium.dll')
   }
   Remove-Item $sums -Force -ErrorAction SilentlyContinue
 }

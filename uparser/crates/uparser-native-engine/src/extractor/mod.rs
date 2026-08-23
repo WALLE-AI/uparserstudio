@@ -6,6 +6,7 @@ pub(crate) mod content_stream;
 mod fonts;
 mod layout;
 mod links;
+pub(crate) mod painted_paths;
 mod reading_order;
 pub(crate) mod underline;
 mod xobjects;

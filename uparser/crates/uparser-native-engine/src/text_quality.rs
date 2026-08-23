@@ -48,6 +48,13 @@ pub(crate) fn detect_encoding_issues(markdown: &str) -> bool {
         return true;
     }
 
+    // UTF-8 Chinese decoded once as GBK stays printable and CJK-looking, so
+    // replacement-character and symbol-density checks cannot see it. Validate
+    // the inverse transform instead of relying on a brittle marker list.
+    if looks_like_gbk_utf8_mojibake(markdown) {
+        return true;
+    }
+
     // Heuristic 3: substitution-cipher letter statistics (broken ToUnicode)
     let mut stats = CipherGarbleStats::default();
     stats.add_text(markdown);
@@ -318,6 +325,7 @@ fn text_span_decoding_issue_kind(text: &str) -> Option<TextSpanIssueKind> {
     }
 
     if has_dollar_as_space_pattern(text)
+        || looks_like_gbk_utf8_mojibake(text)
         || has_private_use_text_run(text)
         || is_cid_garbage(text)
         || has_cid_control_token(text)
@@ -330,6 +338,33 @@ fn text_span_decoding_issue_kind(text: &str) -> Option<TextSpanIssueKind> {
     }
 
     None
+}
+
+/// Returns true when `text` can be losslessly reversed from GBK-looking
+/// mojibake into UTF-8 CJK text.
+pub fn looks_like_gbk_utf8_mojibake(text: &str) -> bool {
+    let text = text.trim();
+    if text.chars().count() < 4 || !text.chars().any(is_cjk) {
+        return false;
+    }
+    let (bytes, _, had_errors) = encoding_rs::GBK.encode(text);
+    if had_errors {
+        return false;
+    }
+    let Ok(repaired) = std::str::from_utf8(bytes.as_ref()) else {
+        return false;
+    };
+    repaired != text
+        && repaired
+            .chars()
+            .filter(|character| is_cjk(*character))
+            .count()
+            >= 2
+        && repaired.chars().any(|character| !text.contains(character))
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(character, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}')
 }
 
 fn replacement_text_stats(text: &str) -> (usize, usize) {
@@ -517,4 +552,18 @@ pub(crate) fn is_cid_garbage(text: &str) -> bool {
     // page to OCR.
     let ascii_letters = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
     total >= 20 && high_latin * 5 >= total * 2 && ascii_letters * 3 < total
+}
+
+#[cfg(test)]
+mod mojibake_tests {
+    use super::*;
+
+    #[test]
+    fn detects_reversible_gbk_utf8_chinese_mojibake() {
+        assert!(looks_like_gbk_utf8_mojibake("涓崕浜烘皯"));
+        assert!(looks_like_gbk_utf8_mojibake("寮曠敤鏍囧噯鐩綍"));
+        assert!(detect_encoding_issues("涓崕浜烘皯"));
+        assert!(!looks_like_gbk_utf8_mojibake("中华人民共和国"));
+        assert!(!looks_like_gbk_utf8_mojibake("ordinary English text"));
+    }
 }

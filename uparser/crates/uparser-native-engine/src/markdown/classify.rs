@@ -125,6 +125,28 @@ pub(crate) fn is_list_item(text: &str) -> bool {
 pub(crate) fn format_list_item(text: &str) -> String {
     let trimmed = text.trim_start();
 
+    // A fully-bold numbered item is extracted as `**1. text**`. Markdown
+    // does not recognize a list marker inside emphasis, so move only the
+    // numeric marker outside while keeping the item body styled.
+    for wrapper in ["**", "*"] {
+        if let Some(inner) = trimmed
+            .strip_prefix(wrapper)
+            .and_then(|value| value.strip_suffix(wrapper))
+        {
+            if let Some((marker, body)) = inner.split_once(' ') {
+                let numeric = marker
+                    .strip_suffix('.')
+                    .or_else(|| marker.strip_suffix(')'))
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+                    });
+                if numeric {
+                    return format!("{marker} {wrapper}{body}{wrapper}");
+                }
+            }
+        }
+    }
+
     // Convert various bullet styles to markdown
     // Note: bullet characters like • are multi-byte in UTF-8, use char indices
     for bullet in &['•', '○', '●', '◦'] {
@@ -262,6 +284,14 @@ mod tests {
     #[test]
     fn format_list_item_already_dash() {
         assert_eq!(format_list_item("- existing"), "- existing");
+    }
+
+    #[test]
+    fn format_list_item_moves_number_outside_bold() {
+        assert_eq!(
+            format_list_item("**1. Long responsibility**"),
+            "1. **Long responsibility**"
+        );
     }
 
     #[test]
