@@ -19,15 +19,11 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
 if (-not $BinaryPath) {
     $BinaryPath = Join-Path $workspace 'target\release\uparser.exe'
 }
-if (-not $PdfiumPath) {
-    $PdfiumPath = Join-Path $workspace 'target\release\pdfium.dll'
-}
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repoRoot 'dist'
 }
 
 $BinaryPath = (Resolve-Path -LiteralPath $BinaryPath).Path
-$PdfiumPath = (Resolve-Path -LiteralPath $PdfiumPath).Path
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
 $repoPrefix = $repoRoot.TrimEnd('\') + '\'
 if (-not $outputRoot.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -41,19 +37,44 @@ if ($declaredVersion -ne $Version) {
 }
 
 if (-not $PdfiumDistributionPath) {
-    $pdfiumCache = Join-Path $env:LOCALAPPDATA 'pdfium-rs'
-    $PdfiumDistributionPath = Get-ChildItem -LiteralPath $pdfiumCache -Directory -Recurse -ErrorAction SilentlyContinue |
-        Where-Object {
-            (Test-Path -LiteralPath (Join-Path $_.FullName 'LICENSE') -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $_.FullName 'licenses') -PathType Container) -and
-            (Test-Path -LiteralPath (Join-Path $_.FullName 'bin\pdfium.dll') -PathType Leaf)
-        } |
-        Select-Object -ExpandProperty FullName -First 1
+    $pdfiumCacheRoots = @()
+    if ($env:LOCALAPPDATA) {
+        $pdfiumCacheRoots += Join-Path $env:LOCALAPPDATA 'pdfium-rs'
+    }
+    if ($env:USERPROFILE) {
+        $pdfiumCacheRoots += Join-Path $env:USERPROFILE '.cache\pdfium-rs'
+    }
+    foreach ($pdfiumCache in ($pdfiumCacheRoots | Select-Object -Unique)) {
+        $PdfiumDistributionPath = Get-ChildItem -LiteralPath $pdfiumCache -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object {
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'LICENSE') -PathType Leaf) -and
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'licenses') -PathType Container) -and
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'bin\pdfium.dll') -PathType Leaf)
+            } |
+            Select-Object -ExpandProperty FullName -First 1
+        if ($PdfiumDistributionPath) {
+            break
+        }
+    }
 }
 if (-not $PdfiumDistributionPath) {
     throw 'Cannot locate the PDFium distribution licenses. Pass -PdfiumDistributionPath.'
 }
 $PdfiumDistributionPath = (Resolve-Path -LiteralPath $PdfiumDistributionPath).Path
+
+if (-not $PdfiumPath) {
+    $pdfiumCandidates = @(
+        (Join-Path $PdfiumDistributionPath 'bin\pdfium.dll'),
+        (Join-Path $workspace 'target\release\pdfium.dll')
+    )
+    $PdfiumPath = $pdfiumCandidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+    if (-not $PdfiumPath) {
+        throw "Cannot locate pdfium.dll. Searched: $($pdfiumCandidates -join ', ')"
+    }
+}
+$PdfiumPath = (Resolve-Path -LiteralPath $PdfiumPath).Path
 
 if (-not $SkipSmokeTest) {
     $versionOutput = & $BinaryPath --version
