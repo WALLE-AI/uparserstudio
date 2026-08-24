@@ -9,7 +9,8 @@
 #       - a VLM endpoint is resolvable (‑‑endpoint / $UPARSER_ENDPOINT / config)
 #         → `--protocol auto` (Profiler routes born‑digital→native, scans→VLM),
 #         with the endpoint/model injected for the VLM branch;
-#       - otherwise → `--protocol native` (pure‑Rust, offline, no GPU).
+#       - otherwise → `--protocol native` (pure‑Rust, offline, no GPU;
+#         flagged pages can use bounded OCR when PDFium+Tesseract are present).
 #   * defaults --format to markdown (override with --format json).
 #
 # Anything you pass through (‑‑pages, ‑‑max-concurrency, ‑‑no-cache, an explicit
@@ -64,7 +65,7 @@ if [ "$has_mode" -eq 0 ] && [ "$has_protocol" -eq 0 ]; then
     echo "uparser-parse: no --protocol given; using 'auto' with endpoint ${ep:-<from cli>}" >&2
   else
     inject+=(--protocol native)
-    echo "uparser-parse: no --protocol and no endpoint; using 'native' (offline, no OCR)" >&2
+    echo "uparser-parse: no --protocol and no endpoint; using 'native' (offline; bounded page OCR may apply)" >&2
   fi
 fi
 

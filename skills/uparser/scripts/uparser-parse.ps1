@@ -52,7 +52,7 @@ if (-not $hasMode -and -not $hasProto) {
   }
   else {
     $inject += @('--protocol', 'native')
-    [Console]::Error.WriteLine("uparser-parse: no --protocol and no endpoint; using 'native' (offline, no OCR)")
+    [Console]::Error.WriteLine("uparser-parse: no --protocol and no endpoint; using 'native' (offline; bounded page OCR may apply)")
   }
 }
 

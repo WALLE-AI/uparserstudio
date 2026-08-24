@@ -27,6 +27,7 @@ benchmark/*
 !benchmark/evaluate_architecture_v2.py
 !benchmark/run_format_matrix.py
 !benchmark/compare_competitors.py
+!benchmark/run_native_ocr_distribution.py
 !benchmark/tests/
 !benchmark/tests/**
 !benchmark/baselines/
@@ -42,6 +43,8 @@ benchmark/results/*
 !benchmark/results/architecture_v2_omnidoc_summary_20260821.json
 !benchmark/results/gate_GC.json
 !benchmark/results/coverage_v2_current.json
+!benchmark/results/native_ocr_distribution_20260824.json
+!benchmark/results/native_ocr_distribution_20260824.md
 output
 data
 tools
