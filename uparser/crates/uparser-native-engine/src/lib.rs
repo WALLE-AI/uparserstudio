@@ -1368,6 +1368,7 @@ mod vector_grid_tests {
     /// text X-clustering in the cell-rect fallback previously split wide
     /// columns into ten spurious columns.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn forecast_table_chart_six_cols() {
         use crate::extractor::content_stream::extract_page_text_items;
         use crate::tables::detect_tables_from_rects;
@@ -1454,6 +1455,7 @@ mod vector_grid_tests {
     /// table (TYPE / SIZE / SETBACKS) should survive. See pdf-evals PR #30
     /// for the original score regression that surfaced this.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn accessory_building_rejects_prose_in_frame() {
         let tables = detect_rect_tables_in_fixture(
             "accessory_building_permit_prose_frame.pdf",
@@ -1481,6 +1483,7 @@ mod vector_grid_tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn td9264_insurance_prose_not_rect_table() {
         let tables = detect_rect_tables_in_fixture_page("td9264.pdf", 4);
         assert!(
@@ -1497,6 +1500,7 @@ mod vector_grid_tests {
     /// bands, but without a real rect-derived column scaffold they must not be
     /// accepted as a vector grid.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn wireless_two_col_rejects_rect_grid() {
         let tables = detect_rect_tables_in_fixture("wireless_two_col_no_rects.pdf");
         assert!(
@@ -1510,6 +1514,7 @@ mod vector_grid_tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn wireless_two_col_region_rejects_vector_grid() {
         let buf = std::fs::read(fixture_path("wireless_two_col_no_rects.pdf")).unwrap();
         let crops = [
@@ -1530,6 +1535,7 @@ mod vector_grid_tests {
     /// Wireless dense table regression: text-position columns alone are not
     /// enough evidence for a rect-derived grid.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn wireless_dense_rejects_rect_grid() {
         let tables = detect_rect_tables_in_fixture("wireless_dense_no_rects.pdf");
         assert!(
@@ -1543,6 +1549,7 @@ mod vector_grid_tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn wireless_dense_region_rejects_vector_grid() {
         let buf = std::fs::read(fixture_path("wireless_dense_no_rects.pdf")).unwrap();
         let crops = [
@@ -1560,6 +1567,7 @@ mod vector_grid_tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn multiline_indent_cell_rect_grid_fixture_detects_table() {
         let tables = detect_rect_tables_in_fixture_page(
             "multiline_indent_cell_rect_grid.pdf",
@@ -1586,6 +1594,7 @@ mod vector_grid_tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn multiline_indent_cell_rect_grid_region_detects_vector_grid() {
         let buf = std::fs::read(fixture_path("multiline_indent_cell_rect_grid.pdf")).unwrap();
         let detected =
@@ -1614,6 +1623,7 @@ mod vector_grid_tests {
     /// removed from clustering before chart/table evidence is evaluated, or
     /// they swamp the real cell rectangles and make this table look chart-like.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn greencomp_competence_two_cols() {
         let tables = detect_rect_tables_in_fixture("greencomp_competence.pdf");
         assert!(
@@ -1645,6 +1655,7 @@ mod vector_grid_tests {
     /// schema with shaded header). Currently `pdf2md` returns zero markdown
     /// table rows.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn upstage_key_functions_four_cols() {
         let tables = detect_rect_tables_in_fixture("upstage_key_functions.pdf");
         assert!(
@@ -1679,6 +1690,7 @@ mod vector_grid_tests {
     /// the actual text items. This test asserts the detector keeps all 4
     /// columns and every column ends up populated.
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn wired_header_data_misalign_keeps_all_columns() {
         let tables = detect_rect_tables_in_fixture("wired_header_data_misalign.pdf");
         let table = tables
@@ -6382,6 +6394,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn fish_species_borderless_table_remains_structured() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../benchmark/opendataloader-bench/pdfs/01030000000132.pdf");
@@ -6395,6 +6408,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn sift_prose_is_not_rendered_as_a_borderless_table() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../benchmark/opendataloader-bench/pdfs/01030000000157.pdf");

@@ -1867,6 +1867,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn public_detection_entrypoints_cover_file_memory_and_validation() {
         let path = fixture_path("bare_name_struct.pdf");
         let bytes = std::fs::read(&path).expect("fixture");
@@ -1881,6 +1882,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local external PDF fixtures"]
     fn configured_detection_strategies_filter_and_sample_pages() {
         let bytes = std::fs::read(fixture_path("bare_name_struct.pdf")).expect("fixture");
         for strategy in [
