@@ -122,22 +122,22 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 > 评测器:OmniDocBench 官方 `run_eval.py`(`quick_match`)
 > 评测设置:Qwen3.8-27B 经 `127.0.0.1:8094` 直连 chat-completions,用 OmniDocBench 官方通用 VLM 参考 prompt,`enable_thinking=false`,无 CDM 环境故不计算官方 Overall。空预测 17/1651(1.0%,均为 180s 读超时,该端点无并发优化)。**这是纯净结果**——首轮测试用的 `127.0.0.1:8087` 被发现同时挂了两个独立 vLLM 进程(Qwen3.5-4B 与 Qwen3.8-27B 通过 `SO_REUSEPORT` 共享同一端口,内核在两者间随机分发请求),导致结果混入了 Qwen3.5-4B;服务已迁移到专用端口 8094 并验证port-clean,本表为重测后的纯 Qwen3.8-27B 结果。混合结果与排查过程见 `BENCHMARK_DEV_LOG.md` §2.4。
 
-### 1.1 当前 V2 全量复测（2026-08-21）
+### 1.1 当前 V2 全量复测（2026-08-21 生成，2026-08-24 evaluator 复核）
 
 当前 release 使用 `mineru-vlm` 协议、`MinerU2.5-Pro-2605-1.2B`、4 个生成 worker 和 `--no-cache`。
-1,651/1,651 页均生成成功，非零返回码 0；其中 1 页 Markdown 仅含换行。官方 page match 无 timeout
-fallback，665 个 TEDS 样本无 timeout/error/exception。
+1,651/1,651 页均生成成功，非零返回码 0；其中 1 页 Markdown 仅含换行。2026-08-24 evaluator
+复核中 page match 有 1 页使用 timeout fallback，665 个 TEDS 样本无 timeout/error/exception。
 
 | 指标(quick_match) | **当前 uparser V2** | 历史 mineru-vlm-2605-surpass-e1-full | **Qwen3.8-27B(纯净实测)** | Qwen3-VL-235B(官方参考) |
 |---|---:|---:|---:|---:|
-| Text Edit↓ | 0.0697 | **0.0367** | 0.0481 | 0.0630 |
+| Text Edit↓ | 0.0700 | **0.0367** | 0.0481 | 0.0630 |
 | Formula Edit↓(非 CDM,不可直接对比官方列) | 0.1026 | **0.0948** | 0.1614 | — |
 | Table TEDS↑ | **0.9061** | **0.9065** | 0.7920 | 0.8307 |
 | Table TEDS-S↑ | **0.9375** | **0.9388** | 0.8259 | 0.8675 |
-| Reading Order Edit↓ | 0.1357 | **0.1285** | 0.1522 | 0.1660 |
+| Reading Order Edit↓ | 0.1361 | **0.1285** | 0.1522 | 0.1660 |
 
-当前 V2 相对历史 surpass：Text Edit 退化 `+0.0329`、Formula Edit 退化 `+0.0077`、Table TEDS
-下降 `0.0004`、TEDS-S 下降 `0.0014`、Reading Order Edit 退化 `+0.0073`。表格基本持平，但文本
+当前 V2 相对历史 surpass：Text Edit 退化 `+0.0332`、Formula Edit 退化 `+0.0077`、Table TEDS
+下降 `0.0004`、TEDS-S 下降 `0.0014`、Reading Order Edit 退化 `+0.0077`。表格基本持平，但文本
 和阅读顺序回退明确，因此当前 V2 的结论是**运行完整性与稳定性通过，质量未超过历史最佳基线**。
 
 相对 Qwen3.8-27B，当前 V2 的 Formula Edit 改善 `0.0588`、Table TEDS 提升 `0.1141`、TEDS-S

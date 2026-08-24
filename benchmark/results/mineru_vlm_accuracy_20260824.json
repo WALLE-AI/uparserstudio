@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-08-24",
+  "model": "MinerU2.5-Pro-2605-1.2B",
+  "endpoint": "http://127.0.0.1:19122/v1/chat/completions",
+  "uparser_version": "0.4.0-rc.1",
+  "uparser_sha256": "b5daaa07f2c04eb7210f38809a99dee2fbdd3fd46456a7296e84eb65d0764b35",
+  "current_smoke": {
+    "samples": 2,
+    "successes": 2,
+    "nonempty_outputs": 2
+  },
+  "omnidocbench": {
+    "prediction_run": "architecture-v2-20260821",
+    "prediction_pages": 1651,
+    "prediction_note": "Full V2 predictions generated on 2026-08-21 and re-evaluated with the current official evaluator on 2026-08-24.",
+    "metrics": {
+      "text_edit_distance": 0.06995988889004076,
+      "formula_edit_distance": 0.1025847052424768,
+      "table_teds": 0.9060678709579757,
+      "table_teds_structure_only": 0.937462945702463,
+      "table_edit_distance": 0.06803519201317196,
+      "reading_order_edit_distance": 0.13613147301990428
+    },
+    "text_edit_by_data_source": {
+      "PPT2PDF": 0.029548408460130755,
+      "academic_literature": 0.07266615065025223,
+      "book": 0.04431154929070262,
+      "colorful_textbook": 0.07358097990496909,
+      "exam_paper": 0.07121180420976794,
+      "historical_document": 0.06548280487433544,
+      "magazine": 0.06884927021793315,
+      "newspaper": 0.19404705726681357,
+      "note": 0.0974060931221691,
+      "research_report": 0.00816836728513722
+    },
+    "text_edit_by_layout": {
+      "1andmore_column": 0.06563227538687474,
+      "double_column": 0.049122614518191714,
+      "other_layout": 0.13169621804876605,
+      "single_column": 0.04382975576461987,
+      "three_column": 0.12450825702350587
+    },
+    "evaluation": {
+      "page_match_workers": 24,
+      "page_timeout_fallbacks": 1,
+      "quick_match_timeout_fallbacks": 0,
+      "table_samples": 665,
+      "table_timeouts": 0,
+      "table_errors": 0
+    }
+  },
+  "opendataloader_bench": {
+    "prediction_run": "uparser-mineru-vlm-v2",
+    "documents": 200,
+    "metrics": {
+      "overall_mean": 0.9239777374183431,
+      "nid_mean": 0.9433099491384414,
+      "nid_s_mean": 0.9442791644092523,
+      "teds_mean": 0.9682281233189359,
+      "teds_s_mean": 0.9739579712174097,
+      "mhs_mean": 0.8672139565731531,
+      "mhs_s_mean": 0.923655186972944
+    },
+    "delta_vs_native_no_ocr": {
+      "overall_mean": 0.04815994020381764,
+      "nid_mean": 0.024753076250355388,
+      "teds_mean": 0.12934495354055142,
+      "mhs_mean": 0.08450439331830972
+    }
+  },
+  "v2_vs_previous": {
+    "conclusion": "Architecture completeness and stability improved, but overall MinerU-VLM accuracy did not.",
+    "opendataloader_vs_uparser_mineru_vlm": {
+      "overall_mean": -0.0043898747038665364,
+      "nid_mean": -0.0037001253700044145,
+      "teds_mean": 0.024333859604306673,
+      "mhs_mean": -0.010514173803562565
+    },
+    "omnidocbench_vs_mineru_vlm_2605_surpass_e1_full": {
+      "text_edit_distance": 0.03322928991965339,
+      "formula_edit_distance": 0.0077451525866670395,
+      "table_teds": -0.00043415639984623056,
+      "table_teds_structure_only": -0.0013673378737178998,
+      "reading_order_edit_distance": 0.007677074261642575
+    }
+  }
+}
