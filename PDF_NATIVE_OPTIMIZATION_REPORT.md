@@ -433,7 +433,7 @@ Global release guards remain:
 8. **PARTIAL P1:** equation-shaped false tables and formula headings degrade to readable plain text; source-backed tagged-PDF roles remain preserved. Untagged high-confidence display lines now emit `Formula`/`equation` blocks with token geometry, confidence, and no fabricated LaTeX; cross-line regions, fraction/matrix grouping, normalized structure, untagged notes/references, clause hierarchy/style provenance, and resume-field IR remain.
 9. **DONE P1:** embedded/scanned image regions plus rectangle/bar and general painted-path vector regions materialize through the existing asset pipeline with exact page geometry; no-PDFium builds emit `asset_unavailable`, and image/chart blocks carry backward-compatible caption relations when the same-page semantic and geometric evidence is unambiguous.
 10. **PARTIAL P2:** resume PII-redacted CLI output is implemented; typed chronology normalization/validation remains.
-11. **PARTIAL GATES:** 891 Native tests, 398 Core feature tests, 47 CLI tests, 2 contract tests, 10 native-document tests, and the mandatory real parses pass; `1805` repeat output hashes are identical; stratified 200-document quality, coverage, repeated performance, and competitor G-C gates remain.
+11. **PARTIAL GATES:** 873 self-contained Native tests plus 18 explicitly marked local external-fixture tests, 398 Core feature tests, 47 CLI tests, 2 contract tests, 10 native-document tests, and the mandatory real parses pass; `1805` repeat output hashes are identical; stratified 200-document quality, coverage, repeated performance, and competitor G-C gates remain.
 
 ## 12. Current Conclusion
 

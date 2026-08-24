@@ -33,7 +33,9 @@ PDFium.
 
 ## Verification status
 
-- Native engine: 891 tests passed.
+- Native engine: 873 self-contained tests pass in CI; 18 external-fixture
+  tests are explicitly ignored by default and all 18 passed in the local
+  release audit.
 - Core with native features: 398 tests passed.
 - CLI: 47 tests passed.
 - Contract tests: 2 tests passed.
