@@ -14,6 +14,7 @@ pub mod paddleocr;
 pub mod paddlex_structure;
 pub mod pipeline;
 pub mod pipeline_serving;
+pub mod pipeline_v2;
 
 use crate::ingest::RenderedPage;
 use crate::testing::MockDispatch;

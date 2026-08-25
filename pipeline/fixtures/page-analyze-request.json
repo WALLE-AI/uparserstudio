@@ -1,0 +1,23 @@
+{
+  "schema_version": "uparser.pipeline.v2",
+  "request_id": "fixture-request-1",
+  "items": [
+    {
+      "page": {
+        "page_id": "fixture/page-1",
+        "image": {
+          "media_type": "image/png",
+          "base64_data": "cG5n"
+        },
+        "dimensions": {
+          "width": 1200,
+          "height": 1600
+        },
+        "rotation_degrees": 0
+      },
+      "language": "ch",
+      "formula_enabled": true,
+      "table_enabled": true
+    }
+  ]
+}

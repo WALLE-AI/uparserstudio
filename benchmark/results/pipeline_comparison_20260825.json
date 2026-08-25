@@ -1,0 +1,165 @@
+{
+  "date": "2026-08-25",
+  "scope": {
+    "strict_same_model_ab": "magic-pdf 1.3.5 original pipeline vs uparser Pipeline V2",
+    "latest_system_comparison": "MinerU 3.4.5 pipeline with PP-DocLayoutV2 and current table models",
+    "method": "ocr",
+    "language": "ch"
+  },
+  "provenance": {
+    "original_mineru_version": "magic-pdf 1.3.5",
+    "latest_mineru_version": "3.4.5",
+    "latest_mineru_commit": "4fe4bde114a23ee5dd637eae99b767f4669bf58c",
+    "same_model_config_sha256": "56f1ed29b3b1970b38a9e23e5adabd1657b640caa068136a6a1f318b6c12819b",
+    "uparser_model_manifest_sha256": "f5dbab87c8155f044b9a1ce4393b79305573b8c9093fe4b68cd210a337069722",
+    "latest_mineru_config_sha256": "4e4ff69e23cd3159ffc7404c3529391a6901e565b99d1b5aab67aba5c7a28071"
+  },
+  "opendataloader_bench": {
+    "documents": 200,
+    "original_same_models": {
+      "overall": 0.8529807612593884,
+      "nid": 0.8806073257382843,
+      "nid_s": 0.8580836937105712,
+      "teds": 0.8563876367925154,
+      "teds_s": 0.9164527893904806,
+      "mhs": 0.7862266278392044,
+      "mhs_s": 0.8727016363698606,
+      "seconds_per_document": 1.2269843255355954,
+      "failures": 0
+    },
+    "uparser_pipeline_v2": {
+      "overall": 0.8001216306267581,
+      "nid": 0.8327936450330239,
+      "nid_s": 0.8148412220212277,
+      "teds": 0.8363680660457365,
+      "teds_s": 0.916391134270151,
+      "mhs": 0.7000047960309064,
+      "mhs_s": 0.8742061837614529,
+      "seconds_per_document": 0.970611773468554,
+      "failures": 0
+    },
+    "uparser_minus_original_same_models": {
+      "overall": -0.05285913063263026,
+      "nid": -0.047813680705260375,
+      "nid_s": -0.04324247168934359,
+      "teds": -0.020019570746778848,
+      "teds_s": -0.00006165512032962894,
+      "mhs": -0.08622183180829801,
+      "mhs_s": 0.0015045473915922258
+    },
+    "mineru_3_4_5": {
+      "overall": 0.8568213288925233,
+      "nid": 0.8745399144595369,
+      "nid_s": 0.8687475504691742,
+      "teds": 0.910738277330932,
+      "teds_s": 0.9367580478498777,
+      "mhs": 0.7917725896862313,
+      "mhs_s": 0.86489760773708,
+      "seconds_per_document": 0.7156314692646265,
+      "failures": 0
+    },
+    "official_mineru_2_7_reference": {
+      "overall": 0.8311354224973181,
+      "nid": 0.8573619799638795,
+      "nid_s": 0.8527225280954283,
+      "teds": 0.8729915402457293,
+      "teds_s": 0.9036969993695168,
+      "mhs": 0.7429826268920451,
+      "mhs_s": 0.8536245495082768
+    },
+    "mineru_3_4_5_minus_official_2_7_reference": {
+      "overall": 0.0256859063952052,
+      "nid": 0.0171779344956574,
+      "nid_s": 0.0160250223737459,
+      "teds": 0.0377467370852027,
+      "teds_s": 0.0330610484803609,
+      "mhs": 0.0487899627941862,
+      "mhs_s": 0.0112730582288032
+    }
+  },
+  "omnidocbench": {
+    "pages": 1651,
+    "evaluator_version": "1.7",
+    "original_same_models": {
+      "overall": 76.12496332478118,
+      "text_edit": 0.1537160934762332,
+      "formula_cdm": 68.62173185907807,
+      "table_teds": 75.1247674628888,
+      "table_teds_s": 82.55404861233735,
+      "reading_order_edit": 0.2661857906638127,
+      "blank_predictions": 2,
+      "generation_seconds_per_page": 1.8373804799919053,
+      "failures": 0
+    },
+    "uparser_pipeline_v2": {
+      "overall": 75.7789386306146,
+      "text_edit": 0.19080374595461308,
+      "formula_cdm": 73.3099235262825,
+      "table_teds": 73.1072669610226,
+      "table_teds_s": 84.74751659972208,
+      "reading_order_edit": 0.29476961772578947,
+      "blank_predictions": 60,
+      "generation_seconds_per_page": 2.3424699951805916,
+      "failures": 0
+    },
+    "uparser_minus_original_same_models": {
+      "overall_points": -0.346024694166573,
+      "text_edit": 0.03708765247837989,
+      "formula_cdm_points": 4.6881916672044355,
+      "table_teds_points": -2.017500501866195,
+      "table_teds_s_points": 2.1934679873847216,
+      "reading_order_edit": 0.028583827061976763,
+      "blank_predictions": 58
+    },
+    "mineru_3_4_5": {
+      "overall": 85.3391081091777,
+      "text_edit": 0.056176047104815066,
+      "formula_cdm": 79.58260580757485,
+      "table_teds": 82.05232323043975,
+      "table_teds_s": 88.84412394177059,
+      "reading_order_edit": 0.15353355702179902,
+      "blank_predictions": 1,
+      "generation_seconds_per_page": 1.003171245341298,
+      "failures": 0,
+      "page_match_fallbacks": 0,
+      "formula_timeouts": 0,
+      "formula_errors": 0,
+      "table_timeouts": 0,
+      "table_errors": 0
+    },
+    "official_mineru_pipeline_reference": {
+      "overall": 86.47,
+      "text_edit": 0.055,
+      "formula_cdm": 83.07,
+      "table_teds": 81.88,
+      "table_teds_s": 88.68,
+      "reading_order_edit": 0.153
+    },
+    "mineru_3_4_5_minus_official_reference": {
+      "overall_points": -1.1308918908223,
+      "text_edit": 0.001176047104815063,
+      "formula_cdm_points": -3.48739419242515,
+      "table_teds_points": 0.17232323043975,
+      "table_teds_s_points": 0.16412394177059,
+      "reading_order_edit": 0.00053355702179902
+    }
+  },
+  "output_diagnostics": {
+    "original_same_models": {
+      "characters": 4301424,
+      "nonempty_lines": 30322,
+      "duplicate_line_excess_ratio": 0.07647912406833322
+    },
+    "uparser_pipeline_v2": {
+      "characters": 4964981,
+      "nonempty_lines": 141361,
+      "duplicate_line_excess_ratio": 0.12444733695998189
+    },
+    "mineru_3_4_5": {
+      "characters": 5019677,
+      "nonempty_lines": 34464,
+      "duplicate_line_excess_ratio": 0.09221216341689879
+    }
+  },
+  "verdict": "Pipeline V2 has a measurable same-model regression concentrated in text, reading order, headings, table content assembly, and blank outputs. MinerU 3.4.5 recovers most of the public pipeline baseline but remains 1.1309 Overall points below it, primarily because Formula CDM is 3.4874 points lower."
+}

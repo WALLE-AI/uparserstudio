@@ -18,6 +18,8 @@ uparser-bundle/
 
 # Editor / OS cruft
 .DS_Store
+__pycache__/
+*.py[cod]
 
 # Release artifacts (upload to GitHub Releases, not git)
 dist/
@@ -28,6 +30,10 @@ benchmark/*
 !benchmark/run_format_matrix.py
 !benchmark/compare_competitors.py
 !benchmark/run_native_ocr_distribution.py
+!benchmark/run_pipeline_v2_benchmarks.py
+!benchmark/run_original_mineru_pipeline.py
+!benchmark/run_mineru_345_pipeline.py
+!benchmark/tests/test_pipeline_v2_benchmarks.py
 !benchmark/tests/
 !benchmark/tests/**
 !benchmark/baselines/
@@ -47,6 +53,16 @@ benchmark/results/*
 !benchmark/results/native_ocr_distribution_20260824.md
 !benchmark/results/mineru_vlm_accuracy_20260824.json
 !benchmark/results/mineru_vlm_accuracy_20260824.md
+!benchmark/results/mineru_vlm_accuracy_20260825.json
+!benchmark/results/mineru_vlm_accuracy_20260825.md
+!benchmark/results/pipeline_v2_accuracy_20260825.json
+!benchmark/results/pipeline_v2_accuracy_20260825.md
+!benchmark/results/pipeline_comparison_20260825.json
+!benchmark/results/pipeline_comparison_20260825.md
 output
 data
 tools
+
+# Keep generated Python bytecode out of explicitly re-included benchmark trees.
+**/__pycache__/
+**/*.py[cod]

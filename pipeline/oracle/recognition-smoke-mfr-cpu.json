@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "image": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBenchData/images/page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+  "device": "cpu",
+  "reference_pipeline": {
+    "git_commit": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+    "legacy_magic_pdf_role": "model_weight_compatibility_only",
+    "role": "architecture_and_end_to_end_behavior_reference",
+    "root": "/home/dataset1/gaojing/llm/uparserstudio/opensource/MinerU",
+    "version": "3.4.4"
+  },
+  "layout": {
+    "regions": 15,
+    "seconds": 5.263
+  },
+  "mfd": {
+    "regions": 1,
+    "seconds": 3.837
+  },
+  "mfr": {
+    "spans": 1,
+    "seconds": 2.224,
+    "sample": [
+      "\\boldsymbol { , }"
+    ],
+    "model": {
+      "name": "unimernet_small",
+      "revision": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+      "weight_sha256": "9244e2565585c0f89bc3a6eeeea080ef3c588375fc0d536074fe88e80b917cda",
+      "runtime": "mineru-3.4.4-source"
+    }
+  }
+}

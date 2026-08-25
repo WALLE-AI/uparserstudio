@@ -1,0 +1,193 @@
+{
+  "assets": [
+    {
+      "exists": true,
+      "logical_model": "layout",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt",
+      "role": "weight_or_config",
+      "sha256": "1b152460888dc30be6db7f5dfab28bde3dcc999e5202f46187a764a1699c80be",
+      "size_bytes": 39772550
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_detection",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFD/YOLO/yolo_v8_ft.pt",
+      "role": "weight_or_config",
+      "sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc",
+      "size_bytes": 349867002
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_recognition",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFR/unimernet_hf_small_2503/config.json",
+      "role": "weight_or_config",
+      "sha256": "64c02e9897410658f7668c6a334a8b306276e4697656cbe06f86d8c4f01fc040",
+      "size_bytes": 5094
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_recognition",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFR/unimernet_hf_small_2503/generation_config.json",
+      "role": "weight_or_config",
+      "sha256": "d56ca9d5c5efa4283a2565ae42771bafd02910b56ef9c53e9b441c9c4c896d09",
+      "size_bytes": 191
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_recognition",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFR/unimernet_hf_small_2503/model.safetensors",
+      "role": "weight_or_config",
+      "sha256": "9244e2565585c0f89bc3a6eeeea080ef3c588375fc0d536074fe88e80b917cda",
+      "size_bytes": 810036696
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_recognition",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFR/unimernet_hf_small_2503/tokenizer.json",
+      "role": "weight_or_config",
+      "sha256": "f8e29e3c3a8017f067b62a3d2d9211bb4cebc08a25afe58d3a6069981e3684d6",
+      "size_bytes": 3581950
+    },
+    {
+      "exists": true,
+      "logical_model": "formula_recognition",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/MFR/unimernet_hf_small_2503/tokenizer_config.json",
+      "role": "weight_or_config",
+      "sha256": "28b99e33895e06389c26c139b1333b82b7f5d8ed5f4fd14998acfd7c20989338",
+      "size_bytes": 4522
+    },
+    {
+      "exists": true,
+      "logical_model": "ocr",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/OCR/paddleocr_torch/ch_PP-OCRv3_det_infer.pth",
+      "role": "detector_weight",
+      "sha256": "5e364ffd412f39417db2b4430098cfec7d0f8ed36c859224e3fc036186b91359",
+      "size_bytes": 2540826
+    },
+    {
+      "exists": true,
+      "logical_model": "ocr",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models/OCR/paddleocr_torch/ch_PP-OCRv4_rec_server_infer.pth",
+      "role": "recognizer_weight",
+      "sha256": "2c0c9f5180ae3e4d8ea9d3830116ac49900abbb2af3985db02c2bbf484bb0bf9",
+      "size_bytes": 96808553
+    },
+    {
+      "exists": true,
+      "logical_model": "ocr",
+      "path": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/lib/python3.12/site-packages/magic_pdf/model/sub_modules/ocr/paddleocr2pytorch/pytorchocr/utils/resources/dict/ppocr_keys_v1.txt",
+      "role": "character_dictionary",
+      "sha256": "28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7",
+      "size_bytes": 26249
+    },
+    {
+      "exists": true,
+      "logical_model": "ocr",
+      "path": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/lib/python3.12/site-packages/magic_pdf/model/sub_modules/ocr/paddleocr2pytorch/pytorchocr/utils/resources/models_config.yml",
+      "role": "model_mapping",
+      "sha256": "334bf200437128868f692751043847f2293957bd6f718d524e4668abede2a83f",
+      "size_bytes": 1504
+    },
+    {
+      "exists": true,
+      "logical_model": "table",
+      "path": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/lib/python3.12/site-packages/magic_pdf/resources/slanet_plus/slanet-plus.onnx",
+      "role": "structure_weight",
+      "sha256": "d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b",
+      "size_bytes": 7758305
+    },
+    {
+      "exists": true,
+      "logical_model": "reading_order",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/layoutreader/config.json",
+      "role": "config",
+      "sha256": "b77e78d8333ee47d5c618eb08ca2070c22347cab5d753b1461e366cda9f42698",
+      "size_bytes": 24118
+    },
+    {
+      "exists": true,
+      "logical_model": "reading_order",
+      "path": "/home/dataset1/gaojing/llm/uRAG/mineru-models/layoutreader/model.safetensors",
+      "role": "weight",
+      "sha256": "9df7c046b212c1892a649cbf98f2a521bbb32741e8cbc06f10ffd4247b53c451",
+      "size_bytes": 713217212
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "ocr_language_defaulted",
+      "level": "warning",
+      "message": "ocr-config.lang is absent; legacy magic-pdf defaults to ch",
+      "path": null
+    },
+    {
+      "code": "table_weight_from_runtime",
+      "level": "warning",
+      "message": "SLANet-plus is supplied by the magic_pdf runtime, not models-dir",
+      "path": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/lib/python3.12/site-packages/magic_pdf/resources/slanet_plus/slanet-plus.onnx"
+    },
+    {
+      "code": "cuda_unavailable",
+      "level": "error",
+      "message": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.",
+      "path": null
+    }
+  ],
+  "generated_at": "2026-08-25T09:36:34.157032+00:00",
+  "inventory": [],
+  "license_review": {
+    "formula_detection": "AGPL-3.0 model; BYOM/internal profile only until legal review",
+    "formula_recognition": "review model card and weight terms before redistribution",
+    "layout": "AGPL-3.0 model; BYOM/internal profile only until legal review",
+    "ocr": "review PaddleOCR model and bundled conversion terms before redistribution",
+    "reading_order": "CC-BY-NC-SA-4.0 model; non-commercial/BYOM restriction",
+    "table": "review RapidTable/SLANet model terms before redistribution"
+  },
+  "logical_models": {
+    "formula_detection": "yolo_v8_mfd",
+    "formula_recognition": "unimernet_small",
+    "layout": "doclayout_yolo",
+    "ocr": "ch",
+    "reading_order": "layoutreader",
+    "table": "slanet_plus"
+  },
+  "reference_pipeline": {
+    "git_commit": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+    "legacy_magic_pdf_role": "model_weight_compatibility_only",
+    "role": "architecture_and_end_to_end_behavior_reference",
+    "root": "/home/dataset1/gaojing/llm/uparserstudio/opensource/MinerU",
+    "version": "3.4.4"
+  },
+  "runtime": {
+    "device": "cuda",
+    "executable": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/bin/python",
+    "packages": {
+      "magic-pdf": "1.3.5",
+      "mineru": "3.4.4",
+      "onnxruntime": "1.21.1",
+      "opencv-python-headless": "4.11.0.86",
+      "pypdfium2": "4.30.0",
+      "rapid-table": "1.0.5",
+      "torch": "2.6.0",
+      "torchvision": "0.21.0",
+      "transformers": "4.51.3",
+      "ultralytics": "8.3.112"
+    },
+    "platform": "Linux-5.15.0-119-generic-x86_64-with-glibc2.35",
+    "python": "3.12.9"
+  },
+  "schema_version": 1,
+  "source": {
+    "config_path": "/home/dataset1/gaojing/magic-pdf.json",
+    "config_sha256": "cdce326627f0bed337824316300d412d6301618d37662a7923eb737dd42ad9ad",
+    "config_version": "1.2.0",
+    "layoutreader_model_dir": "/home/dataset1/gaojing/llm/uRAG/mineru-models/layoutreader",
+    "magic_pdf_root": "/home/dataset1/gaojing/anaconda3/envs/minerUEnv/lib/python3.12/site-packages/magic_pdf",
+    "models_dir": "/home/dataset1/gaojing/llm/uRAG/mineru-models/PDF-Extract-Kit-1.0/models"
+  },
+  "status": "blocked",
+  "summary": {
+    "errors": 1,
+    "warnings": 2
+  }
+}

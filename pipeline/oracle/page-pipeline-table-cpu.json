@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "image": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBenchData/images/yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13.jpg",
+  "device": "cpu",
+  "elapsed_seconds": 95.645,
+  "reference_pipeline": {
+    "git_commit": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+    "legacy_magic_pdf_role": "model_weight_compatibility_only",
+    "role": "architecture_and_end_to_end_behavior_reference",
+    "root": "/home/dataset1/gaojing/llm/uparserstudio/opensource/MinerU",
+    "version": "3.4.4"
+  },
+  "counts": {
+    "regions": 20,
+    "ocr_spans": 40,
+    "formula_spans": 6,
+    "tables": 1,
+    "reading_order": 15
+  },
+  "table_summaries": [
+    {
+      "region_id": "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-8",
+      "classifier_label": "wireless",
+      "cells": 60,
+      "html_length": 759,
+      "html": "<html><body><table><tr><td></td><td>碳远期</td><td>碳期货</td><td>碳期权 碳掉期</td><td>碳置换</td><td>碳借贷（借碳）</td></tr><tr><td>全国碳市场</td><td></td><td></td><td>暂未纳入碳金融衍生品</td><td></td><td></td></tr><tr><td>北京</td><td></td><td></td><td></td><td>√</td><td></td></tr><tr><td>上海</td><td>√</td><td></td><td></td><td></td><td>√</td></tr><tr><td>天津</td><td></td><td></td><td>暂未纳入碳金融衍生品</td><td></td><td></td></tr><tr><td>深圳</td><td></td><td></td><td>√</td><td></td><td></td></tr><tr><td>广东</td><td></td><td></td><td>√</td><td></td><td></td></tr><tr><td>重庆</td><td></td><td></td><td>暂未纳入碳金融衍生品</td><td></td><td></td></tr><tr><td>湖北</td><td>√</td><td></td><td></td><td></td><td></td></tr><tr><td>EU-ETS</td><td></td><td>√</td><td></td><td>√ √</td><td></td></tr></table></body></html>"
+    }
+  ],
+  "formula_sample": [
+    "\\circledcirc",
+    "\\%",
+    "5 9 . 7 4 \\%",
+    "6 3 . 6 4 \\%",
+    "6 7 . 5 3 \\%",
+    "1 9 . 4 8 \\%"
+  ],
+  "ocr_sample": [
+    "中国碳衍生品创新实践分布在各地方试点交易所。北京、上海、深圳、广东和湖北碳市",
+    "场已经分别推出了不同类型的碳金融衍生品，涵盖了碳远期、碳期权、碳掉期（置换）",
+    "等衍生品模式，有助于发挥碳市场的价格发现作用。全国碳市场尚未开展碳衍生品交",
+    "易活动，广期所已明确发展全国碳期货交易的定位，但相关服务尚未开展。相较而言，",
+    "EU-ETS自前已纳入除了碳借贷之外的所有种类碳金融衍生品，衍生品的对冲风险功能",
+    "暂未能在我国全国碳市场充分发挥10",
+    "特征六：地方试点有尝试不同程度的碳金融创新实践，全国碳市场碳金融仍在理论",
+    "探索阶段。",
+    "中国全国与地方碳市场及欧洲EU-ETS碳金融衍生品纳入情况比较",
+    "受访碳金融从业者认为目前我国碳金融发展面临的主要挑战"
+  ],
+  "reading_order": [
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-5",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-0",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-7",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-13",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-8",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-11",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-9",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-10",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-1",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-4",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-3",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-2",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-5",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/layout-3",
+    "yanbaor2_3e1be78252e2fdfe1adf12bba38ec2a7b30699e152d61269aa6e5827f5adcc35.pdf_13/mfd-0"
+  ],
+  "models": {
+    "layout": {
+      "name": "doclayout_yolo",
+      "revision": "legacy-compatible-current-mineru-labels-v1",
+      "weight_sha256": "1b152460888dc30be6db7f5dfab28bde3dcc999e5202f46187a764a1699c80be",
+      "runtime": "magic_pdf"
+    },
+    "formula_detect": {
+      "name": "yolo_v8_mfd",
+      "revision": "legacy-compatible-current-mineru-labels-v1",
+      "weight_sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc",
+      "runtime": "magic_pdf"
+    },
+    "ocr": {
+      "name": "paddleocr_torch",
+      "revision": "mineru-3.4.4-crop-mask-semantics-v1",
+      "weight_sha256": "5e364ffd412f39417db2b4430098cfec7d0f8ed36c859224e3fc036186b91359",
+      "runtime": "magic_pdf-weights/current-mineru-semantics"
+    },
+    "formula_recognize": {
+      "name": "unimernet_small",
+      "revision": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+      "weight_sha256": "9244e2565585c0f89bc3a6eeeea080ef3c588375fc0d536074fe88e80b917cda",
+      "runtime": "mineru-3.4.4-source"
+    },
+    "table": {
+      "name": "slanet_plus",
+      "revision": "mineru-3.4.4-wireless-only-v1",
+      "weight_sha256": "d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b",
+      "runtime": "mineru-3.4.4-source/onnxruntime"
+    },
+    "pages_analyze": {
+      "name": "uparser_pipeline_v2",
+      "revision": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+      "weight_sha256": null,
+      "runtime": "mineru-3.4.4-compatible-stage-graph"
+    }
+  }
+}

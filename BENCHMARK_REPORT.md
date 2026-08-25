@@ -7,9 +7,9 @@
 | 语料位置 | `opensource/opendataloader-bench/pdfs` | `benchmark/OmniDocBenchData` |
 | 语料规模 | 200 篇单页真实 PDF | 1651 页(全量)/ 290 页分层子集(prompt 实验) |
 | 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) |
-| 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Formula/Reading Order=Edit_dist(越低越好)、Table=TEDS(越高越好);无 CDM 环境故不计算官方 Overall |
-| 评测对象 | uparser V2 的 mineru-vlm/native/auto、历史冻结结果与该榜单已公布的其他引擎(hybrid/docling/mineru/liteparse/edgeparse) | 当前 uparser V2 mineru-vlm、历史 mineru-vlm、通用对话 VLM Qwen3.8-27B 与 OmniDocBench 官方榜单参考值 |
-| 结论一句话 | 当前 V2 mineru-vlm 仍超过外部榜首参照，native 保真，auto 给出质量/速度折中 | 当前 V2 全量运行稳定，但相对历史 surpass/official 质量有回退，不能宣称超过现有最佳基线 |
+| 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 |
+| 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 |
+| 结论一句话 | 严格同模下 Pipeline V2 Overall 比原始 MinerU 低 0.05286；MinerU 3.4.5 为 0.85682 | 严格同模回退 0.3460 分；MinerU 3.4.5 为 85.3391，距官方参考 1.1309 分 |
 
 两个 Part 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
 
@@ -17,7 +17,7 @@
 
 # Part A:opendataloader-bench 榜单
 
-> 原始榜单日期:2026-08-04；V2 复测日期:2026-08-21 · 语料:opendataloader-bench,200 篇单页真实 PDF · 评测器:同一 harness/evaluator
+> 原始榜单日期:2026-08-04；V2 复测日期:2026-08-21；Pipeline/官方对比补充:2026-08-25 · 语料:opendataloader-bench,200 篇单页真实 PDF · 评测器:同一 harness/evaluator
 > 指标:Reading Order = NID、Table = TEDS、Heading = MHS,**Overall = 三者等权均值**;Speed = s/篇(越低越好)
 
 ---
@@ -33,15 +33,25 @@
 | docling(参照) | 0.882 | 0.898 | 0.887 | 0.824 | 0.762 | 模型 |
 | **uparser V2 · native** | 0.8754 | 0.9150 | 0.8141 | 0.7875 | **0.051** | **零模型/纯 Rust** |
 | pdf-inspector(baseline) | 0.8754 | 0.9150 | 0.8141 | 0.7875 | 0.032 | 纯 Rust |
-| mineru(榜单参照) | 0.831 | 0.857 | 0.873 | 0.743 | 5.962 | 模型 |
 | edgeparse(参照) | 0.837 | 0.894 | 0.717 | 0.706 | 0.036 | 纯 Rust |
+| **官方 MinerU 2.7** | 0.8311 | 0.8574 | 0.8730 | 0.7430 | 5.962(Apple M4) | 官方 pipeline |
+| **原始 MinerU 1.3.5 Pipeline(严格同模)** | **0.8530** | **0.8806** | **0.8564** | **0.7862** | 1.227(A100) | 与 uparser 相同旧权重 |
+| **MinerU 3.4.5 Pipeline** | **0.8568** | **0.8745** | **0.9107** | **0.7918** | 0.716(A100) | PP-DocLayoutV2 新模型链 |
+| **uparser Pipeline V2(旧权重)** | 0.8001 | 0.8328 | 0.8364 | 0.7000 | 0.971(A100) | 六阶段 pipeline |
 | **liteparse(榜单)** | 0.576 | 0.866 | 0.000 | 0.000 | 1.061 | PDFium+OCR |
 
-**三条主结论:**
+**五条主结论:**
 1. **当前 V2 mineru-vlm 仍超过外部榜首 hybrid**(Overall 0.924 vs 0.907)，并以 Table TEDS `0.9682` 超过历史冻结结果 `0.9439`；但 Overall、Reading Order 和 Heading 分别回退 `0.0044`、`0.0037`、`0.0105`。回退均小于 V2 发布闸门 `0.02`，但不能把历史 `0.9284` 写成当前 V2 分数。
 2. **V2 native 与冻结输出和质量逐文件一致**，统一 runner 的无缓存开销从 `0.0473` 增至 `0.0508 s/篇`，约 `+7.33%`；仍在精度与速度两个维度超过 liteparse。
 3. **V2 auto 是折中档**：156 篇走 native、44 篇走 mineru-vlm，Overall `0.8920`，比纯 native 高 `0.0166`，速度约为全量 VLM 的 `4.53x`。
 4. 历史 mineru-vlm 分数含一次渲染层 bug 修复(Overall 0.708→0.928);发现与修复过程见 `BENCHMARK_DEV_LOG.md` §1。当前 V2 使用不同 checkpoint，历史与当前比较是发布回归门槛，不是纯框架微基准。
+5. **严格同模 A/B 证明 Pipeline V2 有重构损失**：同一 200 PDF、同一旧权重下，相对原始 MinerU
+   Pipeline，Overall/NID/TEDS/MHS 分别回退 `0.052859`/`0.047814`/`0.020020`/`0.086222`。
+   因模型输入保持不变，这部分不能归因于 PP-DocLayoutV2 等新旧模型差异。
+6. **官方对比方向不同**：uparser MinerU-VLM 相对官方 MinerU 2.7，Overall/NID/TEDS/MHS 分别
+   `+0.0928`/`+0.0859`/`+0.0952`/`+0.1242`；Pipeline V2 则分别
+   `-0.0310`/`-0.0246`/`-0.0366`/`-0.0430`。前者模型路径、后者权重以及官方运行硬件均不同，
+   这些是产物精度对照，不是框架或速度消融。
 
 ---
 
@@ -62,6 +72,45 @@
 ### 2.4 速度
 - 当前 V2 native 无缓存运行 **0.0508 s/篇**(纯 Rust、零模型、无 GPU)，与最快的纯 Rust 引擎同档。
 - 当前 V2 mineru-vlm 无缓存运行 **0.6208 s/篇**；V2 auto 为 **0.1370 s/篇**。历史 `1.81 s/篇` 和缓存命中 `0.005 s/篇` 不再作为当前性能结论。
+- Pipeline V2 为 **0.9706 s/篇**(A100)，官方 MinerU 2.7 为 **5.9615 s/篇**(Apple M4)；硬件和模型链不同，不能用该墙钟差值宣称加速。
+
+### 2.5 MinerU-VLM / Pipeline 完整对比
+
+全部指标越高越好；三条路径均覆盖 200/200 文档且无预测失败。
+
+| 路径 | Overall | NID | NID-S | TEDS | TEDS-S | MHS | MHS-S |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **uparser MinerU-VLM V2** | **0.923978** | **0.943310** | **0.944279** | **0.968228** | **0.973958** | **0.867214** | **0.923655** |
+| 官方 MinerU 2.7 | 0.831135 | 0.857362 | 0.852723 | 0.872992 | 0.903697 | 0.742983 | 0.853625 |
+| MinerU-VLM 差值 | +0.092842 | +0.085948 | +0.091557 | +0.095237 | +0.070261 | +0.124231 | +0.070031 |
+| **uparser Pipeline V2** | **0.800122** | **0.832794** | **0.814841** | **0.836368** | **0.916391** | **0.700005** | **0.874206** |
+| Pipeline 差值 vs 官方 | -0.031014 | -0.024568 | -0.037881 | -0.036623 | +0.012694 | -0.042978 | +0.020582 |
+| **原始 MinerU 1.3.5 Pipeline(同模)** | **0.852981** | **0.880607** | **0.858084** | **0.856388** | **0.916453** | **0.786227** | **0.872702** |
+| uparser - 原始同模 | **-0.052859** | **-0.047814** | **-0.043242** | **-0.020020** | **-0.000062** | **-0.086222** | **+0.001505** |
+| **MinerU 3.4.5 Pipeline** | **0.856821** | **0.874540** | **0.868748** | **0.910738** | **0.936758** | **0.791773** | **0.864898** |
+| 3.4.5 - 原始同模 | +0.003841 | -0.006067 | +0.010664 | +0.054351 | +0.020305 | +0.005546 | -0.007804 |
+
+严格消融使用 `magic-pdf 1.3.5` 作为原始实现，因为它能原样加载 `magic-pdf.json` 中与 uparser
+Pipeline V2 完全相同的 DocLayout-YOLO、YOLO MFD、UniMERNet-small、PaddleOCR、SLANet-plus 和
+LayoutReader 权重。MinerU 3.4.5 强制使用 PP-DocLayoutV2 等新资产，因此单列为“新模型 + 新
+Pipeline”系统比较，不能用它归因 uparser 重构本身。
+
+MinerU 3.4.5 相对公开 MinerU 2.7 ODL 参考的 Overall/NID/TEDS/MHS 分别为 `+0.025686`/
+`+0.017178`/`+0.037747`/`+0.048790`；两者版本与硬件不同，该差值只表示同一评测器下的产物精度。
+
+### 2.6 Pipeline V2 精度偏低的原因
+
+本次同模 A/B 排除了“只是模型旧”的解释，剩余差距集中在模型输出之后：
+
+- uparser benchmark renderer 直接按区域把 OCR span 用换行连接，仅处理两级标题；原始 MinerU 还会做
+  低置信度/高 IoU 检测去重、重叠 span 清理、block 修复、标题合并、LayoutReader 行排序和段落切分。
+- 原始 Markdown builder 具有语言感知空格、英文行末断词合并、Markdown 转义和标题层级恢复；uparser
+  当前没有等价的 middle-json/paragraph reconstruction 层。这与 NID、MHS 的最大回退一致。
+- uparser 表格链按 bbox 中心选择整页 OCR span，没有稳定的唯一父区域/消费关系。重叠 table region
+  可重复使用同一批 span；实测 `page-07d333cf-4ebf-427c-b146-e419962b81fa.md` 中同一表格被多次输出，
+  uparser 为 9,630 字符，原始 MinerU 为 1,664 字符。
+- 全量 Omni 输出中，uparser 总字符数比原始同模多 `15.43%`，空白页 `60` 对 `2`，重复非空行
+  excess 占比约 `12.44%` 对 `7.65%`。这些产物级异常与上述实现缺口一致。
 
 ---
 
@@ -93,6 +142,7 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 | 追求当前 V2 最高质量、有 GPU | **mineru-vlm** | Bench A Overall 0.924、Table TEDS 0.968；OmniDocBench 尚未超过历史最佳 |
 | 扫描件 | **mineru-vlm** | native 无 OCR(扫描件会空);VLM 直接识别 |
 | `--protocol auto` | 由 profiler 路由 | 电子版长文本→native,表格密集/扫描→VLM |
+| 六阶段可解释模型链 | **pipeline(实验档)** | 链路完整，但两套基准均未达到官方精度，暂不作为高精度默认项 |
 
 ---
 
@@ -103,11 +153,18 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 - 运行:`python src/run.py --engine <name> --force` → `prediction/<name>/evaluation.json`。
 - 二进制:`cargo build --release --features native,pdfium`(native 走 lopdf 引擎;mineru-vlm 走 pdfium 光栅化 + `http://127.0.0.1:19122` 的 MinerU2.5 vLLM endpoint)。
 - pdf-inspector baseline:其自带 `cargo build --release --bin pdf2md`。
+- Pipeline V2：`python3 benchmark/run_pipeline_v2_benchmarks.py`；结构化结果见
+  `benchmark/results/pipeline_v2_accuracy_20260825.json`。
+- 原始同模复跑：`benchmark/run_original_mineru_pipeline.py`；MinerU 3.4.5 复跑：
+  `benchmark/run_mineru_345_pipeline.py`；三方结构化结果见
+  `benchmark/results/pipeline_comparison_20260825.json`。
 
 ### 局限
 - native 无 OCR:扫描件(如 doc `01030000000141`,image_dense)输出为空——这是设计取舍(扫描件交由 VLM 路由),pdf-inspector 同引擎同样为空。
 - 当前 V2 mineru-vlm 分数依赖 `MinerU2.5-Pro-2605-1.2B`；历史冻结结果使用更早 checkpoint/configuration，不能当作纯框架 A/B。
 - 榜单参照值(hybrid/docling/mineru/liteparse)取自 bench README；V2 native/mineru-vlm/auto 与历史冻结结果均为本地实测，但运行日期和模型配置不同。
+- Pipeline V2 使用 `magic-pdf.json` 指向的旧权重；原始同模消融与 MinerU 3.4.5 新模型链已经分开
+  实测。OpenDataLoader 官方速度来自 Apple M4，本地 VLM/Pipeline 来自 A100。
 - 防过拟合:未针对本语料调参;渲染器修复是通用正确性修复(所有 VLM 协议受益),非针对 GT 的 tuning。
 
 ---
@@ -120,13 +177,14 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 
 > 语料:`benchmark/OmniDocBenchData/OmniDocBench.json`,**全量 1651 页**(与 Part A 的 opendataloader-bench 200 篇是**不同语料**,不可跨表比较)
 > 评测器:OmniDocBench 官方 `run_eval.py`(`quick_match`)
-> 评测设置:Qwen3.8-27B 经 `127.0.0.1:8094` 直连 chat-completions,用 OmniDocBench 官方通用 VLM 参考 prompt,`enable_thinking=false`,无 CDM 环境故不计算官方 Overall。空预测 17/1651(1.0%,均为 180s 读超时,该端点无并发优化)。**这是纯净结果**——首轮测试用的 `127.0.0.1:8087` 被发现同时挂了两个独立 vLLM 进程(Qwen3.5-4B 与 Qwen3.8-27B 通过 `SO_REUSEPORT` 共享同一端口,内核在两者间随机分发请求),导致结果混入了 Qwen3.5-4B;服务已迁移到专用端口 8094 并验证port-clean,本表为重测后的纯 Qwen3.8-27B 结果。混合结果与排查过程见 `BENCHMARK_DEV_LOG.md` §2.4。
+> 当前 MinerU-VLM/Pipeline 使用 OmniDocBench v1.7 evaluator、quick-match 24 workers、CDM 8 workers、TEDS 24 workers，可计算官方 Overall。Qwen3.8-27B 历史实验仍只有 Edit/TEDS 指标，不与 Overall/CDM 表混算。Qwen 经 `127.0.0.1:8094` 纯净端点生成；旧 `:8087` 端口混用问题见 `BENCHMARK_DEV_LOG.md` §2.4。
 
-### 1.1 当前 V2 全量复测（2026-08-21 生成，2026-08-24 evaluator 复核）
+### 1.1 当前 V2 全量复测（2026-08-21 生成，2026-08-25 evaluator/CDM 复核）
 
 当前 release 使用 `mineru-vlm` 协议、`MinerU2.5-Pro-2605-1.2B`、4 个生成 worker 和 `--no-cache`。
-1,651/1,651 页均生成成功，非零返回码 0；其中 1 页 Markdown 仅含换行。2026-08-24 evaluator
-复核中 page match 有 1 页使用 timeout fallback，665 个 TEDS 样本无 timeout/error/exception。
+1,651/1,651 页均生成成功，非零返回码 0；其中 1 页 Markdown 仅含换行。2026-08-25 evaluator
+复核中 page match 有 1 页使用 timeout fallback；2,352 个 CDM 和 665 个 TEDS 样本均为
+0 timeout、0 error、0 exception。
 
 | 指标(quick_match) | **当前 uparser V2** | 历史 mineru-vlm-2605-surpass-e1-full | **Qwen3.8-27B(纯净实测)** | Qwen3-VL-235B(官方参考) |
 |---|---:|---:|---:|---:|
@@ -144,7 +202,63 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 提升 `0.1116`、Reading Order Edit 改善 `0.0165`，但 Text Edit 较差 `0.0216`。这说明文档专用模型
 在公式、表格和顺序上优势明显，纯文本识别并非当前链路的强项。
 
-### 1.2 Qwen3.8-27B 历史实验解读
+### 1.2 MinerU-VLM 与 Pipeline 官方对比
+
+Edit 越低越好，其他指标越高越好。下表使用 leaderboard 的 page-average TEDS 口径；因此
+MinerU-VLM 的 `92.4279` 与上表 665 个表格 sample aggregate `0.9061` 数值尺度和聚合方式不同。
+
+| 路径 | Overall↑ | Text Edit↓ | Formula CDM↑ | Table TEDS↑ | TEDS-S↑ | Order Edit↓ |
+|---|---:|---:|---:|---:|---:|---:|
+| **uparser MinerU-VLM V2** | **91.4251** | **0.069960** | **88.8433** | **92.4279** | **95.2449** | **0.136131** |
+| 官方 MinerU2.5-Pro | 95.75 | 0.036 | 97.45 | 93.42 | 95.92 | 0.120 |
+| MinerU-VLM 差值 | -4.3249 | +0.033960 | -8.6067 | -0.9921 | -0.6751 | +0.016131 |
+| **uparser Pipeline V2(旧权重)** | **75.7789** | **0.190804** | **73.3099** | **73.1073** | **84.7475** | **0.294770** |
+| 官方 MinerU-Pipeline | 86.47 | 0.055 | 83.07 | 81.88 | 88.68 | 0.153 |
+| Pipeline 差值 | -10.6911 | +0.135804 | -9.7601 | -8.7727 | -3.9325 | +0.141770 |
+| **本地 MinerU 3.4.5 Pipeline** | **85.3391** | **0.056176** | **79.5826** | **82.0523** | **88.8441** | **0.153534** |
+| 3.4.5 差值 vs 官方 | -1.1309 | +0.001176 | -3.4874 | +0.1723 | +0.1641 | +0.000534 |
+
+MinerU-VLM 的最大差距是 Formula CDM `-8.6067`，表格 TEDS 仅低 `0.9921`；结论是完整性通过，
+官方 VLM 精度对齐不通过。Pipeline V2 1,651/1,651 预测成功，但有 60 页仅为空白 Markdown；
+page match 有 2 个 fallback，2,352 个 CDM 和 665 个 TEDS 样本均无 timeout/error/exception。
+Pipeline 生成墙钟为 `3,866.42s`、`2.34247s/page`；六项指标均未达到官方 MinerU-Pipeline，
+当前旧权重实现只能作为可运行基线。
+
+本地 MinerU 3.4.5 使用 PP-DocLayoutV2、表格方向分类、有线 UnetStructure 和无线 SLANet-plus
+完整新模型链；1,651/1,651 生成成功，仅 1 个空白页，生成 `1.00317s/page`。正式评测的 page
+fallback、CDM/TEDS timeout/error/exception 均为 0。其 Overall 比 uparser Pipeline V2 高
+`9.5602` 分，距官方参考仍有 `1.1309` 分；表格 TEDS/TEDS-S 已分别高 `0.1723`/`0.1641` 分，
+主要剩余差距是公式 CDM `-3.4874` 分。
+
+### 1.3 原始 MinerU 与 uparser Pipeline V2 严格同模 A/B
+
+两条路径对同一 1,651 页使用相同旧权重、`ocr` 方法、同一 v1.7 evaluator；因此下表的差值可用于
+判断 uparser 重构本身。Edit 越低越好，其他指标越高越好。
+
+| 路径 | Overall↑ | Text Edit↓ | Formula CDM↑ | Table TEDS↑ | TEDS-S↑ | Order Edit↓ | 空白页 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 原始 MinerU 1.3.5 Pipeline | **76.1250** | **0.153716** | 68.6217 | **75.1248** | 82.5540 | **0.266186** | **2** |
+| uparser Pipeline V2 | 75.7789 | 0.190804 | **73.3099** | 73.1073 | **84.7475** | 0.294770 | 60 |
+| uparser - 原始 | **-0.3460** | **+0.037088** | **+4.6882** | **-2.0175** | **+2.1935** | **+0.028584** | **+58** |
+
+这不是单向全面回退：uparser 的公式 CDM 和表格结构 TEDS-S 更高；但文本、阅读顺序、表格内容
+TEDS 和空白页明显更差，最终 Overall 回退 `0.3460` 分。结合 ODL 的 `-0.052859`，可确认重构
+损失主要在文本/标题/顺序和表格内容装配，而不是所有模型阶段都退化。
+
+CDM 使用官方 v1.7 算法，但本机通过 TeX Live 2022 + `pdftocairo` 兼容路径栅格化，并出现 Euler
+位图字体缺失警告。公开榜单标记为 `v1.6_full`，本地数据使用记录 commit 的 v1.7 evaluator；以上
+属于公开基线对比，不是官方 Docker 环境的逐字节复现。
+
+结构化结果与原始哈希：
+
+- `benchmark/results/mineru_vlm_accuracy_20260825.json` / `.md`
+- `benchmark/results/pipeline_v2_accuracy_20260825.json` / `.md`
+- `benchmark/results/pipeline_comparison_20260825.json` / `.md`
+- `benchmark/OmniDocBench/result/architecture-v2-20260821_quick_match_run_summary.json`
+- `benchmark/OmniDocBench/result/pipeline-v2-20260825_quick_match_run_summary.json`
+- `benchmark/OmniDocBench/result/mineru-3.4.5-pipeline-20260825_quick_match_run_summary.json`
+
+### 1.4 Qwen3.8-27B 历史实验解读
 
 **解读**:
 - Text Edit、Reading Order Edit 均优于官方 235B 通用 VLM 参考——对一个约 27B、未经文档解析任务微调的通用对话模型而言相当亮眼。

@@ -1,0 +1,1731 @@
+{
+  "components": {
+    "schemas": {
+      "BatchItemResult_FormulaDetectionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormulaDetectionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[FormulaDetectionResult]",
+        "type": "object"
+      },
+      "BatchItemResult_FormulaRecognitionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormulaRecognitionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[FormulaRecognitionResult]",
+        "type": "object"
+      },
+      "BatchItemResult_LayoutResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayoutResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[LayoutResult]",
+        "type": "object"
+      },
+      "BatchItemResult_OcrResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcrResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[OcrResult]",
+        "type": "object"
+      },
+      "BatchItemResult_PageAnalyzeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PageAnalyzeResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[PageAnalyzeResult]",
+        "type": "object"
+      },
+      "BatchItemResult_TableRecognitionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableRecognitionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[TableRecognitionResult]",
+        "type": "object"
+      },
+      "BatchRequest_FormulaRecognitionInput_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FormulaRecognitionInput"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[FormulaRecognitionInput]",
+        "type": "object"
+      },
+      "BatchRequest_OcrPageInput_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OcrPageInput"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[OcrPageInput]",
+        "type": "object"
+      },
+      "BatchRequest_PageAnalyzeInput_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PageAnalyzeInput"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[PageAnalyzeInput]",
+        "type": "object"
+      },
+      "BatchRequest_PageImage_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PageImage"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[PageImage]",
+        "type": "object"
+      },
+      "BatchRequest_TableRecognitionInput_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TableRecognitionInput"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[TableRecognitionInput]",
+        "type": "object"
+      },
+      "BatchResponse_FormulaDetectionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_FormulaDetectionResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[FormulaDetectionResult]",
+        "type": "object"
+      },
+      "BatchResponse_FormulaRecognitionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_FormulaRecognitionResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[FormulaRecognitionResult]",
+        "type": "object"
+      },
+      "BatchResponse_LayoutResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_LayoutResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[LayoutResult]",
+        "type": "object"
+      },
+      "BatchResponse_OcrResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_OcrResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[OcrResult]",
+        "type": "object"
+      },
+      "BatchResponse_PageAnalyzeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_PageAnalyzeResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[PageAnalyzeResult]",
+        "type": "object"
+      },
+      "BatchResponse_TableRecognitionResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_TableRecognitionResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[TableRecognitionResult]",
+        "type": "object"
+      },
+      "EncodedImage": {
+        "additionalProperties": false,
+        "properties": {
+          "base64_data": {
+            "minLength": 1,
+            "title": "Base64 Data",
+            "type": "string"
+          },
+          "media_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "title": "Media Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "media_type",
+          "base64_data"
+        ],
+        "title": "EncodedImage",
+        "type": "object"
+      },
+      "FormulaDetectionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "regions"
+        ],
+        "title": "FormulaDetectionResult",
+        "type": "object"
+      },
+      "FormulaRecognitionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Formula Regions",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageImage"
+          }
+        },
+        "required": [
+          "page",
+          "formula_regions"
+        ],
+        "title": "FormulaRecognitionInput",
+        "type": "object"
+      },
+      "FormulaRecognitionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/FormulaSpan"
+            },
+            "title": "Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "spans"
+        ],
+        "title": "FormulaRecognitionResult",
+        "type": "object"
+      },
+      "FormulaSpan": {
+        "additionalProperties": false,
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "latex": {
+            "title": "Latex",
+            "type": "string"
+          },
+          "region_id": {
+            "title": "Region Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region_id",
+          "latex"
+        ],
+        "title": "FormulaSpan",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImageDimensions": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "ImageDimensions",
+        "type": "object"
+      },
+      "LayoutResult": {
+        "additionalProperties": false,
+        "properties": {
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "regions"
+        ],
+        "title": "LayoutResult",
+        "type": "object"
+      },
+      "ModelMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "runtime": {
+            "title": "Runtime",
+            "type": "string"
+          },
+          "weight_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight Sha256"
+          }
+        },
+        "required": [
+          "name",
+          "revision",
+          "runtime"
+        ],
+        "title": "ModelMetadata",
+        "type": "object"
+      },
+      "OcrPageInput": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Formula Regions",
+            "type": "array"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "layout_regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Layout Regions",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageImage"
+          }
+        },
+        "required": [
+          "page",
+          "layout_regions",
+          "language"
+        ],
+        "title": "OcrPageInput",
+        "type": "object"
+      },
+      "OcrResult": {
+        "additionalProperties": false,
+        "properties": {
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/OcrSpan"
+            },
+            "title": "Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "spans"
+        ],
+        "title": "OcrResult",
+        "type": "object"
+      },
+      "OcrSpan": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "coordinate_space": {
+            "enum": [
+              "render_pixels",
+              "page_points"
+            ],
+            "title": "Coordinate Space",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "parent_region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Region Id"
+          },
+          "polygon": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "span_id": {
+            "title": "Span Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "span_id",
+          "polygon",
+          "text",
+          "coordinate_space"
+        ],
+        "title": "OcrSpan",
+        "type": "object"
+      },
+      "PageAnalyzeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_enabled": {
+            "title": "Formula Enabled",
+            "type": "boolean"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageImage"
+          },
+          "table_enabled": {
+            "title": "Table Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "page",
+          "language",
+          "formula_enabled",
+          "table_enabled"
+        ],
+        "title": "PageAnalyzeInput",
+        "type": "object"
+      },
+      "PageAnalyzeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_spans": {
+            "items": {
+              "$ref": "#/components/schemas/FormulaSpan"
+            },
+            "title": "Formula Spans",
+            "type": "array"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "ocr_spans": {
+            "items": {
+              "$ref": "#/components/schemas/OcrSpan"
+            },
+            "title": "Ocr Spans",
+            "type": "array"
+          },
+          "reading_order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reading Order",
+            "type": "array"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/RecognizedTable"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "regions",
+          "ocr_spans",
+          "formula_spans",
+          "tables",
+          "reading_order"
+        ],
+        "title": "PageAnalyzeResult",
+        "type": "object"
+      },
+      "PageImage": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "$ref": "#/components/schemas/ImageDimensions"
+          },
+          "image": {
+            "$ref": "#/components/schemas/EncodedImage"
+          },
+          "page_id": {
+            "minLength": 1,
+            "title": "Page Id",
+            "type": "string"
+          },
+          "rotation_degrees": {
+            "default": 0,
+            "enum": [
+              0,
+              90,
+              180,
+              270
+            ],
+            "title": "Rotation Degrees",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "page_id",
+          "image",
+          "dimensions"
+        ],
+        "title": "PageImage",
+        "type": "object"
+      },
+      "Polygon": {
+        "additionalProperties": false,
+        "properties": {
+          "points": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "minItems": 3,
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "required": [
+          "points"
+        ],
+        "title": "Polygon",
+        "type": "object"
+      },
+      "RecognizedTable": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/TableCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "classifier_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classifier Label"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "html": {
+            "title": "Html",
+            "type": "string"
+          },
+          "region_id": {
+            "title": "Region Id",
+            "type": "string"
+          },
+          "rotation_degrees": {
+            "default": 0,
+            "enum": [
+              0,
+              90,
+              180,
+              270
+            ],
+            "title": "Rotation Degrees",
+            "type": "integer"
+          },
+          "structure_tokens": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Structure Tokens",
+            "type": "array"
+          }
+        },
+        "required": [
+          "region_id",
+          "html",
+          "structure_tokens",
+          "cells"
+        ],
+        "title": "RecognizedTable",
+        "type": "object"
+      },
+      "Region": {
+        "additionalProperties": false,
+        "properties": {
+          "bbox": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Bbox",
+            "type": "array"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "coordinate_space": {
+            "enum": [
+              "render_pixels",
+              "page_points"
+            ],
+            "title": "Coordinate Space",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "polygon": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "region_id": {
+            "minLength": 1,
+            "title": "Region Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region_id",
+          "label",
+          "bbox",
+          "coordinate_space"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "StageError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Id"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "title": "StageError",
+        "type": "object"
+      },
+      "StageWarning": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Id"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "StageWarning",
+        "type": "object"
+      },
+      "TableCell": {
+        "additionalProperties": false,
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "cell_id": {
+            "title": "Cell Id",
+            "type": "string"
+          },
+          "column": {
+            "minimum": 0.0,
+            "title": "Column",
+            "type": "integer"
+          },
+          "column_span": {
+            "exclusiveMinimum": 0.0,
+            "title": "Column Span",
+            "type": "integer"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "row": {
+            "minimum": 0.0,
+            "title": "Row",
+            "type": "integer"
+          },
+          "row_span": {
+            "exclusiveMinimum": 0.0,
+            "title": "Row Span",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cell_id",
+          "row",
+          "column",
+          "row_span",
+          "column_span",
+          "text"
+        ],
+        "title": "TableCell",
+        "type": "object"
+      },
+      "TableRecognitionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_spans": {
+            "items": {
+              "$ref": "#/components/schemas/FormulaSpan"
+            },
+            "title": "Formula Spans",
+            "type": "array"
+          },
+          "ocr_spans": {
+            "items": {
+              "$ref": "#/components/schemas/OcrSpan"
+            },
+            "title": "Ocr Spans",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageImage"
+          },
+          "table_regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Table Regions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page",
+          "table_regions",
+          "ocr_spans"
+        ],
+        "title": "TableRecognitionInput",
+        "type": "object"
+      },
+      "TableRecognitionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/RecognizedTable"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tables"
+        ],
+        "title": "TableRecognitionResult",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "MinerU-current compatible pipeline V2 inference service",
+    "title": "uparser Pipeline Model Server",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/v2/models": {
+      "get": {
+        "operationId": "models_v2_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Models"
+      }
+    },
+    "/v2/pipeline/layout:batch": {
+      "post": {
+        "operationId": "layout_v2_pipeline_layout_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_PageImage_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_LayoutResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Layout"
+      }
+    },
+    "/v2/pipeline/mfd:batch": {
+      "post": {
+        "operationId": "formula_detect_v2_pipeline_mfd_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_PageImage_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_FormulaDetectionResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Formula Detect"
+      }
+    },
+    "/v2/pipeline/mfr:batch": {
+      "post": {
+        "operationId": "formula_recognize_v2_pipeline_mfr_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_FormulaRecognitionInput_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_FormulaRecognitionResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Formula Recognize"
+      }
+    },
+    "/v2/pipeline/ocr:batch": {
+      "post": {
+        "operationId": "ocr_v2_pipeline_ocr_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_OcrPageInput_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_OcrResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ocr"
+      }
+    },
+    "/v2/pipeline/pages:analyze": {
+      "post": {
+        "operationId": "pages_analyze_v2_pipeline_pages_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_PageAnalyzeInput_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_PageAnalyzeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pages Analyze"
+      }
+    },
+    "/v2/pipeline/table:batch": {
+      "post": {
+        "operationId": "table_v2_pipeline_table_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_TableRecognitionInput_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_TableRecognitionResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Table"
+      }
+    }
+  }
+}

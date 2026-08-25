@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "image": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBenchData/images/page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+  "device": "cpu",
+  "reference_pipeline": {
+    "git_commit": "79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7",
+    "legacy_magic_pdf_role": "model_weight_compatibility_only",
+    "role": "architecture_and_end_to_end_behavior_reference",
+    "root": "/home/dataset1/gaojing/llm/uparserstudio/opensource/MinerU",
+    "version": "3.4.4"
+  },
+  "layout": {
+    "regions": 15,
+    "seconds": 5.047
+  },
+  "mfd": {
+    "regions": 1,
+    "seconds": 3.704
+  },
+  "ocr": {
+    "spans": 25,
+    "seconds": 102.188,
+    "sample": [
+      "郭下七'圍梁敷旬则梁可拔Λ’拔梁则魏可睾'睾魏荆`趟之意絶='荆`趟之意",
+      "七一奇鱿案：史記丑齊世家云：「齊王欲以并周室'為天子'泗上诸侯娜之君皆臣'诸侯恐°一可見闵王座",
+      "【六]王先慎日：策無土字°",
+      "【五］奇献案：文：使'令也°中令、魏也°史記齊王二十六年舆、魏共攻秦'是令、魏也°",
+      "宣王二十九年伐燕，取之°按王破燕，史表在十年，氏據孟子以破燕為宣王事，不可徙°",
+      "（四】津田鳳卿日：鲍注：（猷案：即國策鲍彪注'下同°）阙王十五年°注：（猷案：即國策吴師道注，下同°）",
+      "[三］奇献案：史記王二十六年齊舆`魏共攻秦，至函谷軍焉°二十八年，秦舆韩河外以和'兵°」",
+      "[六］王先慎日：策無土字°",
+      "【五］奇案：说文∶使'令也°中令、魏也°史記齊王二十六年舆、魏共攻秦'是令、魏也°",
+      "宣王二十九年伐燕，取之°按閃王破，史表在十年，氏據孟子以破燕為宣王事，不可徙°"
+    ],
+    "model": {
+      "name": "paddleocr_torch",
+      "revision": "mineru-3.4.4-crop-mask-semantics-v1",
+      "weight_sha256": "5e364ffd412f39417db2b4430098cfec7d0f8ed36c859224e3fc036186b91359",
+      "runtime": "magic_pdf-weights/current-mineru-semantics"
+    }
+  }
+}
