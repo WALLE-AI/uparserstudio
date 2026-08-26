@@ -291,20 +291,22 @@ pub enum StageBackendChoice {
     Remote,
 }
 
-/// Per-stage backend/endpoint overrides for the `pipeline` protocol
-/// (T-5.1). `None` fields fall back to `PipelineAdapter::default()`'s
-/// per-stage default (ARCHITECTURE.md §11.2: `table` defaults `Local`,
-/// the other three default `Remote`).
+/// Per-stage endpoint overrides for the `pipeline` protocol. Pipeline V2
+/// keeps every model stage in the service process; backend/path fields remain
+/// only for CLI/config compatibility and local model selection is rejected.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PipelineConfig {
     pub layout_backend: Option<StageBackendChoice>,
     pub layout_endpoint: Option<String>,
+    pub formula_detection_endpoint: Option<String>,
     pub ocr_backend: Option<StageBackendChoice>,
     pub ocr_endpoint: Option<String>,
     pub formula_backend: Option<StageBackendChoice>,
     pub formula_endpoint: Option<String>,
     pub table_backend: Option<StageBackendChoice>,
+    pub table_endpoint: Option<String>,
     pub table_model_path: Option<String>,
+    pub language: Option<String>,
 }
 
 /// Endpoint/model overrides applied on top of an adapter's
@@ -431,7 +433,10 @@ impl Registry {
         });
 
         registry.register("pipeline", |overrides| {
-            let mut adapter = pipeline::PipelineAdapter::default();
+            let mut adapter = pipeline_v2::PipelineV2Adapter::default();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.set_endpoint_base(endpoint.clone());
+            }
             if let Some(cfg) = &overrides.pipeline {
                 adapter.apply_config(cfg);
             }

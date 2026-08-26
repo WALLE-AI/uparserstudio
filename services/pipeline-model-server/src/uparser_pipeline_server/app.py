@@ -9,9 +9,12 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 
 from .registry import BackendRegistry
-from .runtime import run_isolated_batch
+from .runtime import run_backend_batch
 from .schemas import (
     BatchResponse,
+    DocumentAnalyzeBatchRequest,
+    DocumentAnalyzeBatchResponse,
+    DocumentAnalyzeResult,
     FormulaDetectionBatchRequest,
     FormulaDetectionBatchResponse,
     FormulaDetectionResult,
@@ -71,7 +74,7 @@ def create_app(registry: BackendRegistry | None = None) -> FastAPI:
         backend = registry.get(stage)
         if backend is None:
             raise HTTPException(status_code=503, detail=f"backend not registered: {stage}")
-        items = run_isolated_batch(request.items, backend.infer)
+        items = run_backend_batch(request.items, backend)
         response = BatchResponse[result_type](
             request_id=request.request_id,
             model=backend.metadata,
@@ -109,6 +112,15 @@ def create_app(registry: BackendRegistry | None = None) -> FastAPI:
     @app.post("/v2/pipeline/pages:analyze", response_model=PageAnalyzeBatchResponse)
     async def pages_analyze(request: PageAnalyzeBatchRequest):
         return await execute("pages_analyze", request, PageAnalyzeBatchResponse, PageAnalyzeResult)
+
+    @app.post("/v2/pipeline/documents:analyze", response_model=DocumentAnalyzeBatchResponse)
+    async def documents_analyze(request: DocumentAnalyzeBatchRequest):
+        return await execute(
+            "documents_analyze",
+            request,
+            DocumentAnalyzeBatchResponse,
+            DocumentAnalyzeResult,
+        )
 
     return app
 

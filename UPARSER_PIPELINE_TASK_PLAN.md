@@ -2,16 +2,19 @@
 
 ## 1. 计划范围
 
-本计划是 `UPARSER_PIPELINE_IMPLEMENTATION_PLAN.md` 的任务级拆分，共包含 10 个迭代、99 个研发任务。模型资产来自 `/home/dataset1/gaojing/magic-pdf.json`，架构与端到端行为固定参考 MinerU 3.4.4、commit `79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7`；legacy `magic_pdf` 仅用于权重兼容和阶段级校验。
+本计划是 `UPARSER_PIPELINE_IMPLEMENTATION_PLAN.md` 的任务级拆分。默认生产 profile 已更新为
+MinerU 3.4.5、commit `4fe4bde114a23ee5dd637eae99b767f4669bf58c` 和
+PP-DocLayoutV2 完整模型链；`/home/dataset1/gaojing/magic-pdf.json` 的 legacy profile 仅用于严格
+同模 A/B、权重兼容和阶段级校验。
 
 目标模型链路：
 
 ```text
-DocLayout-YOLO + YOLOv8-MFD
-        -> PaddleOCR + UniMERNet-small
-        -> RapidTable/SLANet-plus
-        -> LayoutReader/para_split
-        -> uparser Document IR
+PP-DocLayoutV2
+        -> PP-OCRv6 + PP-FormulaNet-plus-M（UniMERNet-small 对照）
+        -> table cls/orientation + UnetStructure/SLANet-plus
+        -> MinerU 3.4.5 finalize/para_split/cross-page merge
+        -> authoritative Markdown + uparser Document IR
 ```
 
 任务规模约束：
@@ -30,18 +33,20 @@ DocLayout-YOLO + YOLOv8-MFD
 
 状态约定：`TODO`、`DOING`、`BLOCKED`、`DONE`。
 
-### 2026-08-25 执行快照
+### 2026-08-26 执行快照
 
 | 范围 | 状态 | 已落地产物 / 剩余门禁 |
 |---|---|---|
-| I0 | DOING | manifest、许可证矩阵、40 页 golden corpus、CPU detection/OCR/MFR/page oracle 已生成；CUDA 当前不可用，新版 MinerU 新权重未落地 |
+| I0 | DONE | legacy 与 3.4.5 双 manifest、许可证矩阵、golden corpus 和 GPU 真实模型 smoke 已完成；关键 3.4.5 权重 hash 已冻结 |
 | I1 | DONE | Rust/Python V2 schema、StageGraph、OpenAPI、跨语言 fixture 均通过 |
-| I2 | DOING | FastAPI、线程安全 registry、保序错误隔离 batch、配置化启动与 health 已完成；超时、取消、日志、显存指标待补 |
+| I2 | DOING | FastAPI、线程安全 registry、原生 batch、失败逐项降级、配置化启动与 health 已完成；超时、取消、日志、显存指标待补 |
 | I3 | DOING | DocLayout-YOLO、YOLOv8-MFD 真实后端与 CPU smoke 完成；40 页精度 oracle 待跑 |
-| I4 | DOING | 公式遮罩、50px crop、PaddleOCR、当前 MinerU UniMERNet 接口及真实 smoke 完成；批量分桶和精度报告待补 |
-| I5 | DOING | SLANet-plus、外部 table OCR、公式定位、HTML/cell 输出及真实表格页 smoke 完成；有线/无线分类、方向模型因权重缺失待补 |
-| I6 | DOING | LayoutReader 与单页 stage orchestration 完成；新版 post-OCR、公式编号、para_split、跨页表格合并和标题层级待补 |
-| I7-I9 | TODO | CLI、长文档窗口、稳定性、全量评测与发布门禁尚未开始 |
+| I4 | DOING | PP-OCRv6、PP-FormulaNet-plus-M、公式遮罩/回填和真实 smoke 完成；更细粒度尺寸分桶待补 |
+| I5 | DONE | latest profile 已接入表格分类/方向、UnetStructure wired 与 SLANet-plus wireless 官方链路 |
+| I6 | DONE | latest profile 直接复用 3.4.5 post-OCR、公式编号、para_split、跨页表格合并、标题层级和官方 Markdown |
+| I7 | DONE | Rust `pipeline` registry 已切到 V2；layout/MFD、OCR/MFR、table、assemble、reading-order 全流程由 `pipeline_v2.rs` 编排，模型仅通过服务调用 |
+| I8 | DOING | MinerU processing-window 原生 batch 已完成；metrics、OOM 降 batch 和并发压测待补 |
+| I9 | DOING | 服务内官方 finalize 路径评测已通过；新 Rust 分阶段工作流需重跑 ODL/Omni，许可证签核、持续回归和发布评审待完成 |
 
 当前真实表格页 CPU oracle：20 regions、40 OCR spans、6 formula spans、1 table/60 cells，整页 95.645 秒；输出见 `pipeline/oracle/page-pipeline-table-cpu.json`。
 
@@ -284,10 +289,13 @@ T0.4 ------------>I5 ----->I6
 
 最高优先级阻塞项：
 
-1. `T0.6`：当前节点 NVIDIA 驱动不可用，CUDA 基线、显存和吞吐门禁无法执行。
-2. `T0.7`：新版 MinerU 3.4.4 架构/commit 已冻结，但 PPDocLayoutV2、UnetStructure、表格分类/方向等新版权重未在本地资产中，无法建立完整新版端到端 oracle。
-3. `T0.5`：受限模型的发布方式未确认，会影响最终制品形态。
-4. `T5.9`：现有 SLANet-plus 无有线/无线分类与方向模型，只能声明 wireless-only 能力档位。
+1. `T9.2`：已通过；latest 服务路径 Omni 1,651/1,651 页 Overall `88.4489`，0 evaluator fallback，
+   高于官方 Pipeline `86.47`，相对同配置直接候选 `88.5123` 为 `-0.0634`。
+2. `T9.3`：已通过；latest document API 在同一 ODL 200 PDF 上为 `0.857889`，高于 `0.856821`。
+3. `T9.10`：Pipeline 目标与 VLM 全局上限必须分开声明；固定 Pipeline 模型尚未超过
+   MinerU-VLM `0.923978/95.75`，若要求该门槛必须引入质量路由或 VLM fallback。
+4. `I7/T9.9`：Rust runner 的 document API 生产接线及持续回归 job 尚未完成。
+5. `T0.5/T9.7`：受限模型的发布方式和许可证签核未确认，会影响最终制品形态。
 
 ## 14. 并行执行建议
 

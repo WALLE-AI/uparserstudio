@@ -3,7 +3,22 @@
 //! V1 remains available in `pipeline_serving`; V2 preserves geometry and model
 //! provenance and supports page batches and per-item failure isolation.
 
+use super::{
+    ModelStage, ParseCtx, PipelineConfig, PostprocessSignals, ProtocolAdapter, RawOutputFormat,
+    RemoteEndpointSpec, ResourceHint, StageBackend,
+};
+use crate::category_map::{self, PIPELINE_LAYOUT_CATEGORIES};
+use crate::imaging;
+use crate::ingest::RenderedPage;
+use crate::types::{
+    Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, PageError,
+};
+use async_trait::async_trait;
+use base64::Engine as _;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 pub const PIPELINE_V2_SCHEMA_VERSION: &str = "uparser.pipeline.v2";
 
@@ -226,9 +241,44 @@ pub struct PageAnalyzeResult {
     pub reading_order: Vec<String>,
     #[serde(default)]
     pub markdown: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<GeneratedAsset>,
 }
 
 pub type PageAnalyzeBatchResponse = BatchResponse<PageAnalyzeResult>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratedAsset {
+    pub path: String,
+    pub media_type: String,
+    pub base64_data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EncodedDocument {
+    pub document_id: String,
+    pub media_type: String,
+    pub base64_data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentAnalyzeInput {
+    pub document: EncodedDocument,
+    pub language: String,
+    pub formula_enabled: bool,
+    pub table_enabled: bool,
+}
+
+pub type DocumentAnalyzeBatchRequest = BatchRequest<DocumentAnalyzeInput>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentAnalyzeResult {
+    pub markdown: String,
+    #[serde(default)]
+    pub assets: Vec<GeneratedAsset>,
+}
+
+pub type DocumentAnalyzeBatchResponse = BatchResponse<DocumentAnalyzeResult>;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ContractValidationError {
@@ -254,6 +304,18 @@ pub enum ContractValidationError {
     InvalidConfidence,
     #[error("region polygon must contain at least three finite points")]
     InvalidPolygon,
+    #[error("document_id must not be empty")]
+    EmptyDocumentId,
+    #[error("document media_type must be application/pdf")]
+    UnsupportedDocumentMediaType,
+    #[error("base64 document data must not be empty")]
+    EmptyDocument,
+    #[error("batch response must contain exactly one item")]
+    InvalidResponseCardinality,
+    #[error("batch item must contain exactly one of result or error")]
+    InvalidBatchOutcome,
+    #[error("response identifier does not match the request")]
+    ResponseIdentifierMismatch,
 }
 
 impl<T> BatchRequest<T> {
@@ -318,9 +380,523 @@ impl Region {
     }
 }
 
+impl EncodedDocument {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if self.document_id.trim().is_empty() {
+            return Err(ContractValidationError::EmptyDocumentId);
+        }
+        if self.media_type != "application/pdf" {
+            return Err(ContractValidationError::UnsupportedDocumentMediaType);
+        }
+        if self.base64_data.is_empty() {
+            return Err(ContractValidationError::EmptyDocument);
+        }
+        Ok(())
+    }
+}
+
+impl<T> BatchItemResult<T> {
+    pub fn validate_outcome(&self) -> Result<(), ContractValidationError> {
+        if (self.result.is_some()) == (self.error.is_some()) {
+            return Err(ContractValidationError::InvalidBatchOutcome);
+        }
+        Ok(())
+    }
+}
+
+impl<T> BatchResponse<T> {
+    fn into_single(
+        mut self,
+        request_id: &str,
+        page_id: &str,
+    ) -> Result<(T, Vec<StageWarning>), String> {
+        if self.schema_version != PIPELINE_V2_SCHEMA_VERSION || self.request_id != request_id {
+            return Err(ContractValidationError::ResponseIdentifierMismatch.to_string());
+        }
+        if self.items.len() != 1 {
+            return Err(ContractValidationError::InvalidResponseCardinality.to_string());
+        }
+        let item = self.items.remove(0);
+        if item.page_id != page_id {
+            return Err(ContractValidationError::ResponseIdentifierMismatch.to_string());
+        }
+        item.validate_outcome().map_err(|error| error.to_string())?;
+        if let Some(error) = item.error {
+            return Err(format!("{}: {}", error.code, error.message));
+        }
+        Ok((
+            item.result
+                .expect("validated batch outcome contains a result"),
+            item.warnings,
+        ))
+    }
+}
+
+/// Rust-owned Pipeline V2 workflow. Model execution remains remote, while
+/// stage ordering, failure handling, region ownership and IR construction are
+/// implemented here without a MinerU/PaddleOCR client-side runtime.
+pub struct PipelineV2Adapter {
+    pub endpoint_base: String,
+    pub layout_endpoint: String,
+    pub formula_detection_endpoint: String,
+    pub ocr_endpoint: String,
+    pub formula_recognition_endpoint: String,
+    pub table_endpoint: String,
+    pub language: String,
+    pub timeout: Duration,
+    pub max_retries: u32,
+}
+
+impl Default for PipelineV2Adapter {
+    fn default() -> Self {
+        let endpoint_base = "http://localhost:9001".to_owned();
+        Self::from_endpoint_base(endpoint_base)
+    }
+}
+
+impl PipelineV2Adapter {
+    pub fn from_endpoint_base(endpoint_base: String) -> Self {
+        let base = endpoint_base.trim_end_matches('/').to_owned();
+        Self {
+            endpoint_base: base.clone(),
+            layout_endpoint: format!("{base}/v2/pipeline/layout:batch"),
+            formula_detection_endpoint: format!("{base}/v2/pipeline/mfd:batch"),
+            ocr_endpoint: format!("{base}/v2/pipeline/ocr:batch"),
+            formula_recognition_endpoint: format!("{base}/v2/pipeline/mfr:batch"),
+            table_endpoint: format!("{base}/v2/pipeline/table:batch"),
+            language: "ch".to_owned(),
+            timeout: Duration::from_secs(180),
+            max_retries: 2,
+        }
+    }
+
+    pub fn set_endpoint_base(&mut self, endpoint_base: String) {
+        let replacement = Self::from_endpoint_base(endpoint_base);
+        self.endpoint_base = replacement.endpoint_base;
+        self.layout_endpoint = replacement.layout_endpoint;
+        self.formula_detection_endpoint = replacement.formula_detection_endpoint;
+        self.ocr_endpoint = replacement.ocr_endpoint;
+        self.formula_recognition_endpoint = replacement.formula_recognition_endpoint;
+        self.table_endpoint = replacement.table_endpoint;
+    }
+
+    pub fn apply_config(&mut self, config: &PipelineConfig) {
+        if let Some(endpoint) = &config.layout_endpoint {
+            self.layout_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.formula_detection_endpoint {
+            self.formula_detection_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.ocr_endpoint {
+            self.ocr_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.formula_endpoint {
+            self.formula_recognition_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.table_endpoint {
+            self.table_endpoint = endpoint.clone();
+        }
+        if let Some(language) = &config.language {
+            self.language = language.clone();
+        }
+    }
+
+    fn encoded_page(page: &RenderedPage) -> PageImage {
+        PageImage {
+            page_id: format!("page-{}", page.page_num),
+            image: EncodedImage {
+                media_type: "image/png".to_owned(),
+                base64_data: base64::engine::general_purpose::STANDARD.encode(&page.png_bytes),
+            },
+            dimensions: ImageDimensions {
+                width: page.width,
+                height: page.height,
+            },
+            rotation_degrees: 0,
+        }
+    }
+
+    async fn dispatch_stage<I, O>(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint: &str,
+        stage: &str,
+        item: I,
+    ) -> Result<O, PageError>
+    where
+        I: Serialize,
+        O: DeserializeOwned,
+    {
+        let request_id = format!("pipeline-v2-{}-{stage}", page.page_num);
+        let page_id = format!("page-{}", page.page_num);
+        let request = BatchRequest {
+            schema_version: PIPELINE_V2_SCHEMA_VERSION.to_owned(),
+            request_id: request_id.clone(),
+            items: vec![item],
+        };
+        let body = serde_json::to_value(request).expect("Pipeline V2 request is serializable");
+        let _permit = ctx.acquire_permit().await;
+        let value = ctx
+            .dispatch_rest(endpoint, body, self.timeout, self.max_retries)
+            .await
+            .map_err(|error| page_error(page, stage, error.to_string()))?;
+        let response: BatchResponse<O> = serde_json::from_value(value)
+            .map_err(|error| page_error(page, stage, format!("malformed response: {error}")))?;
+        let (result, warnings) = response
+            .into_single(&request_id, &page_id)
+            .map_err(|error| page_error(page, stage, error))?;
+        for warning in warnings {
+            ctx.warn(format!(
+                "pipeline-v2 page {} stage {stage}: {}: {}",
+                page.page_num, warning.code, warning.message
+            ));
+        }
+        Ok(result)
+    }
+
+    async fn run_workflow(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+    ) -> Result<PageAnalyzeResult, PageError> {
+        crate::stage_graph::PIPELINE_V2_STAGE_GRAPH
+            .validate()
+            .map_err(|error| page_error(page, "stage_graph", error.to_string()))?;
+        let encoded = Self::encoded_page(page);
+        encoded
+            .validate()
+            .map_err(|error| page_error(page, "input", error.to_string()))?;
+
+        let layout = self.dispatch_stage::<_, LayoutResult>(
+            page,
+            ctx,
+            &self.layout_endpoint,
+            "layout",
+            encoded.clone(),
+        );
+        let formulas = self.dispatch_stage::<_, FormulaDetectionResult>(
+            page,
+            ctx,
+            &self.formula_detection_endpoint,
+            "formula_detect",
+            encoded.clone(),
+        );
+        let (layout, formulas) = tokio::join!(layout, formulas);
+        let layout = layout?;
+        let formulas = formulas?;
+        validate_regions(page, "layout", &layout.regions)?;
+        validate_regions(page, "formula_detect", &formulas.regions)?;
+
+        let ocr = self.dispatch_stage::<_, OcrResult>(
+            page,
+            ctx,
+            &self.ocr_endpoint,
+            "ocr",
+            OcrPageInput {
+                page: encoded.clone(),
+                layout_regions: layout.regions.clone(),
+                formula_regions: formulas.regions.clone(),
+                language: self.language.clone(),
+            },
+        );
+        let recognized_formulas = self.dispatch_stage::<_, FormulaRecognitionResult>(
+            page,
+            ctx,
+            &self.formula_recognition_endpoint,
+            "formula_recognize",
+            FormulaRecognitionInput {
+                page: encoded.clone(),
+                formula_regions: formulas.regions.clone(),
+            },
+        );
+        let (ocr, recognized_formulas) = tokio::join!(ocr, recognized_formulas);
+        let ocr = ocr?;
+        let recognized_formulas = recognized_formulas?;
+
+        let table_regions = layout
+            .regions
+            .iter()
+            .filter(|region| category_map::map_pipeline_category(&region.label).0 == "table")
+            .cloned()
+            .collect::<Vec<_>>();
+        let tables = if table_regions.is_empty() {
+            TableRecognitionResult { tables: vec![] }
+        } else {
+            self.dispatch_stage::<_, TableRecognitionResult>(
+                page,
+                ctx,
+                &self.table_endpoint,
+                "table",
+                TableRecognitionInput {
+                    page: encoded,
+                    table_regions: table_regions.clone(),
+                    ocr_spans: ocr.spans.clone(),
+                    formula_spans: recognized_formulas.spans.clone(),
+                },
+            )
+            .await?
+        };
+
+        let mut regions = layout.regions;
+        let mut known_ids = regions
+            .iter()
+            .map(|region| region.region_id.clone())
+            .collect::<HashSet<_>>();
+        for region in formulas.regions {
+            let belongs_to_table = table_regions
+                .iter()
+                .any(|table| bbox_contains_center(table.bbox, region.bbox));
+            if !belongs_to_table && known_ids.insert(region.region_id.clone()) {
+                regions.push(region);
+            }
+        }
+        let order = region_reading_order(page, &regions)?;
+        Ok(PageAnalyzeResult {
+            regions,
+            ocr_spans: ocr.spans,
+            formula_spans: recognized_formulas.spans,
+            tables: tables.tables,
+            reading_order: order,
+            markdown: None,
+            assets: vec![],
+        })
+    }
+}
+
+#[async_trait]
+impl ProtocolAdapter for PipelineV2Adapter {
+    fn name(&self) -> &'static str {
+        "pipeline"
+    }
+
+    fn coordinate_system(&self) -> CoordinateSystem {
+        CoordinateSystem::PixelAbs
+    }
+
+    fn provides_reading_order(&self) -> bool {
+        true
+    }
+
+    fn category_vocab(&self) -> &[&'static str] {
+        PIPELINE_LAYOUT_CATEGORIES
+    }
+
+    fn raw_output_format(&self) -> RawOutputFormat {
+        RawOutputFormat::OcrBoxes
+    }
+
+    fn emitted_signals(&self) -> PostprocessSignals {
+        PostprocessSignals::default()
+    }
+
+    fn model_stages(&self) -> Vec<ModelStage> {
+        [
+            "layout",
+            "formula_detect",
+            "ocr",
+            "formula_recognize",
+            "table",
+        ]
+        .into_iter()
+        .map(|stage_name| ModelStage {
+            stage_name,
+            default_backend: StageBackend::Remote(RemoteEndpointSpec {
+                endpoint_env_var: "UPARSER_PIPELINE_ENDPOINT",
+            }),
+            allows_local: false,
+            resource_hint: ResourceHint::Heavy,
+        })
+        .collect()
+    }
+
+    async fn parse_page(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+    ) -> Result<Vec<Block>, PageError> {
+        let result = self.run_workflow(page, ctx).await?;
+        build_blocks(page, ctx, result)
+    }
+}
+
+fn page_error(page: &RenderedPage, stage: &str, message: String) -> PageError {
+    PageError {
+        page_num: page.page_num,
+        message,
+        stage: Some(stage.to_owned()),
+    }
+}
+
+fn validate_regions(page: &RenderedPage, stage: &str, regions: &[Region]) -> Result<(), PageError> {
+    for region in regions {
+        region
+            .validate()
+            .map_err(|error| page_error(page, stage, error.to_string()))?;
+        if region.coordinate_space != CoordinateSpace::RenderPixels {
+            return Err(page_error(
+                page,
+                stage,
+                "page adapter requires render_pixels coordinates".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn bbox_px(page: &RenderedPage, bbox: [f32; 4]) -> Result<[i32; 4], PageError> {
+    let x0 = bbox[0].floor().max(0.0).min(page.width as f32) as i32;
+    let y0 = bbox[1].floor().max(0.0).min(page.height as f32) as i32;
+    let x1 = bbox[2].ceil().max(0.0).min(page.width as f32) as i32;
+    let y1 = bbox[3].ceil().max(0.0).min(page.height as f32) as i32;
+    if x1 <= x0 || y1 <= y0 {
+        return Err(page_error(
+            page,
+            "geometry",
+            format!("region bbox is empty after clamping: {bbox:?}"),
+        ));
+    }
+    Ok([x0, y0, x1, y1])
+}
+
+fn region_reading_order(page: &RenderedPage, regions: &[Region]) -> Result<Vec<String>, PageError> {
+    let boxes = regions
+        .iter()
+        .map(|region| bbox_px(page, region.bbox))
+        .collect::<Result<Vec<_>, _>>()?;
+    let ranks = crate::reading_order::assign_reading_order(&boxes);
+    let mut indices = (0..regions.len()).collect::<Vec<_>>();
+    indices.sort_by_key(|index| ranks[*index]);
+    Ok(indices
+        .into_iter()
+        .map(|index| regions[index].region_id.clone())
+        .collect())
+}
+
+fn span_sort_key(span: &OcrSpan) -> (i32, i32) {
+    let min_y = span
+        .polygon
+        .points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::INFINITY, f32::min);
+    let min_x = span
+        .polygon
+        .points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::INFINITY, f32::min);
+    (min_y.round() as i32, min_x.round() as i32)
+}
+
+fn bbox_contains_center(outer: [f32; 4], inner: [f32; 4]) -> bool {
+    let center_x = (inner[0] + inner[2]) / 2.0;
+    let center_y = (inner[1] + inner[3]) / 2.0;
+    outer[0] <= center_x && center_x <= outer[2] && outer[1] <= center_y && center_y <= outer[3]
+}
+
+fn build_blocks(
+    page: &RenderedPage,
+    ctx: &ParseCtx,
+    result: PageAnalyzeResult,
+) -> Result<Vec<Block>, PageError> {
+    let mut spans_by_region: HashMap<String, Vec<OcrSpan>> = HashMap::new();
+    for span in result.ocr_spans {
+        if let Some(parent) = &span.parent_region_id {
+            spans_by_region
+                .entry(parent.clone())
+                .or_default()
+                .push(span);
+        }
+    }
+    let formulas = result
+        .formula_spans
+        .into_iter()
+        .map(|span| (span.region_id.clone(), span))
+        .collect::<HashMap<_, _>>();
+    let tables = result
+        .tables
+        .into_iter()
+        .map(|table| (table.region_id.clone(), table))
+        .collect::<HashMap<_, _>>();
+    let order = result
+        .reading_order
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| (id.clone(), rank as u32))
+        .collect::<HashMap<_, _>>();
+
+    let mut blocks = Vec::with_capacity(result.regions.len());
+    for region in result.regions {
+        let (category, warning) = category_map::map_pipeline_category(&region.label);
+        if let Some(warning) = warning {
+            ctx.warn(format!("pipeline-v2 page {}: {warning}", page.page_num));
+        }
+        let bbox = bbox_px(page, region.bbox)?;
+        let mut spans = spans_by_region
+            .remove(&region.region_id)
+            .unwrap_or_default();
+        spans.sort_by_key(span_sort_key);
+        let mut text = (!spans.is_empty()).then(|| {
+            spans
+                .iter()
+                .map(|span| span.text.trim())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        let latex = formulas
+            .get(&region.region_id)
+            .map(|formula| formula.latex.clone());
+        let html = tables
+            .get(&region.region_id)
+            .map(|table| table.html.clone());
+        if latex.is_some() || html.is_some() {
+            text = None;
+        }
+        let merge_hint = match region.label.as_str() {
+            "doc_title" => Some(MergeHint::TitleLevel(1)),
+            "paragraph_title" => Some(MergeHint::TitleLevel(2)),
+            _ => None,
+        };
+        let asset_bytes = if matches!(category.as_str(), "image" | "chart") {
+            ctx.crop(page, bbox)
+                .ok()
+                .and_then(|image| imaging::to_png_bytes(&image).ok())
+        } else {
+            None
+        };
+        blocks.push(Block {
+            geom: Geometry::Rect(region.bbox),
+            geom_frame: CoordFrame::Page,
+            bbox_px: Some(bbox),
+            category_raw: region.label,
+            category: Some(category),
+            reading_order: order.get(&region.region_id).copied(),
+            text: text.filter(|text| !text.is_empty()),
+            html,
+            latex,
+            spans: vec![],
+            merge_hint,
+            confidence: region.confidence,
+            source: BlockSource::OcrPipeline,
+            error: None,
+            asset_bytes,
+            asset_path: None,
+            asset_caption: None,
+        });
+    }
+    blocks.sort_by_key(|block| block.reading_order.unwrap_or(u32::MAX));
+    Ok(blocks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::MockDispatch;
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
 
     fn page() -> PageImage {
         PageImage {
@@ -347,6 +923,35 @@ mod tests {
             }),
             confidence: Some(0.9),
             coordinate_space: CoordinateSpace::RenderPixels,
+        }
+    }
+
+    fn stage_response(request_id: &str, result: Value) -> Value {
+        json!({
+            "schema_version": PIPELINE_V2_SCHEMA_VERSION,
+            "request_id": request_id,
+            "model": {
+                "name": "fixture-model",
+                "revision": "fixture-revision",
+                "weight_sha256": null,
+                "runtime": "fixture"
+            },
+            "items": [{
+                "page_id": "page-1",
+                "result": result,
+                "error": null,
+                "warnings": []
+            }]
+        })
+    }
+
+    fn rendered_page() -> RenderedPage {
+        let image = image::RgbImage::from_pixel(200, 200, image::Rgb([255, 255, 255]));
+        RenderedPage {
+            page_num: 1,
+            width: 200,
+            height: 200,
+            png_bytes: imaging::to_png_bytes(&image).unwrap(),
         }
     }
 
@@ -417,5 +1022,176 @@ mod tests {
         let encoded = serde_json::to_value(&response).unwrap();
         assert_eq!(encoded["error"]["retryable"], true);
         assert!(encoded["result"].is_null());
+    }
+
+    #[test]
+    fn batch_item_requires_exactly_one_outcome() {
+        let empty = BatchItemResult::<LayoutResult> {
+            page_id: "page-1".into(),
+            result: None,
+            error: None,
+            warnings: vec![],
+        };
+        assert_eq!(
+            empty.validate_outcome(),
+            Err(ContractValidationError::InvalidBatchOutcome)
+        );
+
+        let both = BatchItemResult {
+            page_id: "page-1".into(),
+            result: Some(LayoutResult { regions: vec![] }),
+            error: Some(StageError {
+                code: "failed".into(),
+                message: "failure".into(),
+                retryable: false,
+                region_id: None,
+            }),
+            warnings: vec![],
+        };
+        assert_eq!(
+            both.validate_outcome(),
+            Err(ContractValidationError::InvalidBatchOutcome)
+        );
+    }
+
+    #[test]
+    fn document_contract_rejects_non_pdf_payloads() {
+        let document = EncodedDocument {
+            document_id: "doc-1".into(),
+            media_type: "image/png".into(),
+            base64_data: "cG5n".into(),
+        };
+        assert_eq!(
+            document.validate(),
+            Err(ContractValidationError::UnsupportedDocumentMediaType)
+        );
+    }
+
+    #[tokio::test]
+    async fn rust_orchestrates_the_complete_v2_ocr_workflow() {
+        let adapter = PipelineV2Adapter::from_endpoint_base("http://pipeline.test".into());
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.layout_endpoint,
+            stage_response(
+                "pipeline-v2-1-layout",
+                json!({
+                    "regions": [
+                        {
+                            "region_id": "text-1",
+                            "label": "text",
+                            "bbox": [10.0, 10.0, 190.0, 50.0],
+                            "polygon": null,
+                            "confidence": 0.99,
+                            "coordinate_space": "render_pixels"
+                        },
+                        {
+                            "region_id": "table-1",
+                            "label": "table",
+                            "bbox": [10.0, 70.0, 190.0, 120.0],
+                            "polygon": null,
+                            "confidence": 0.95,
+                            "coordinate_space": "render_pixels"
+                        }
+                    ]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.formula_detection_endpoint,
+            stage_response(
+                "pipeline-v2-1-formula_detect",
+                json!({
+                    "regions": [{
+                        "region_id": "formula-1",
+                        "label": "interline_equation",
+                        "bbox": [10.0, 140.0, 190.0, 175.0],
+                        "polygon": null,
+                        "confidence": 0.93,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.ocr_endpoint,
+            stage_response(
+                "pipeline-v2-1-ocr",
+                json!({
+                    "spans": [{
+                        "span_id": "span-1",
+                        "parent_region_id": "text-1",
+                        "polygon": {"points": [[10.0, 10.0], [190.0, 10.0], [190.0, 30.0], [10.0, 30.0]]},
+                        "text": "Pipeline V2 text",
+                        "language": "en",
+                        "confidence": 0.98,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.formula_recognition_endpoint,
+            stage_response(
+                "pipeline-v2-1-formula_recognize",
+                json!({
+                    "spans": [{
+                        "region_id": "formula-1",
+                        "latex": "x^2 + y^2",
+                        "confidence": 0.97,
+                        "bbox": [10.0, 140.0, 190.0, 175.0]
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.table_endpoint,
+            stage_response(
+                "pipeline-v2-1-table",
+                json!({
+                    "tables": [{
+                        "region_id": "table-1",
+                        "html": "<table><tr><td>A</td></tr></table>",
+                        "structure_tokens": ["<table>", "<tr>", "<td>", "</td>", "</tr>", "</table>"],
+                        "cells": [{
+                            "cell_id": "cell-1",
+                            "row": 0,
+                            "column": 0,
+                            "row_span": 1,
+                            "column_span": 1,
+                            "bbox": [10.0, 70.0, 190.0, 120.0],
+                            "text": "A",
+                            "confidence": 0.96
+                        }],
+                        "classifier_label": "wired",
+                        "rotation_degrees": 0,
+                        "confidence": 0.96
+                    }]
+                }),
+            ),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let blocks = adapter.parse_page(&rendered_page(), &ctx).await.unwrap();
+
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].text.as_deref(), Some("Pipeline V2 text"));
+        assert_eq!(
+            blocks[1].html.as_deref(),
+            Some("<table><tr><td>A</td></tr></table>")
+        );
+        assert_eq!(blocks[2].latex.as_deref(), Some("x^2 + y^2"));
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.reading_order)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.source == BlockSource::OcrPipeline)
+        );
     }
 }

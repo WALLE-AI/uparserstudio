@@ -175,4 +175,5 @@ class PipelinePageAnalyzer:
             tables=table_result.tables,
             reading_order=reading_order,
             markdown=None,
+            assets=[],
         )

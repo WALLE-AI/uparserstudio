@@ -40,6 +40,7 @@ class ModelRegistry(Generic[ModelT]):
 class RegisteredBackend:
     infer: Callable[[object], object]
     metadata: ModelMetadata
+    infer_batch: Callable[[list[object]], list[object]] | None = None
 
 
 class BackendRegistry:

@@ -1,6 +1,47 @@
 {
   "components": {
     "schemas": {
+      "BatchItemResult_DocumentAnalyzeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentAnalyzeResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StageWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BatchItemResult[DocumentAnalyzeResult]",
+        "type": "object"
+      },
       "BatchItemResult_FormulaDetectionResult_": {
         "additionalProperties": false,
         "properties": {
@@ -247,6 +288,36 @@
         "title": "BatchItemResult[TableRecognitionResult]",
         "type": "object"
       },
+      "BatchRequest_DocumentAnalyzeInput_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentAnalyzeInput"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "items"
+        ],
+        "title": "BatchRequest[DocumentAnalyzeInput]",
+        "type": "object"
+      },
       "BatchRequest_FormulaRecognitionInput_": {
         "additionalProperties": false,
         "properties": {
@@ -395,6 +466,38 @@
           "items"
         ],
         "title": "BatchRequest[TableRecognitionInput]",
+        "type": "object"
+      },
+      "BatchResponse_DocumentAnalyzeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult_DocumentAnalyzeResult_"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "uparser.pipeline.v2",
+            "default": "uparser.pipeline.v2",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "items"
+        ],
+        "title": "BatchResponse[DocumentAnalyzeResult]",
         "type": "object"
       },
       "BatchResponse_FormulaDetectionResult_": {
@@ -589,6 +692,82 @@
         "title": "BatchResponse[TableRecognitionResult]",
         "type": "object"
       },
+      "DocumentAnalyzeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/EncodedDocument"
+          },
+          "formula_enabled": {
+            "title": "Formula Enabled",
+            "type": "boolean"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "table_enabled": {
+            "title": "Table Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document",
+          "language",
+          "formula_enabled",
+          "table_enabled"
+        ],
+        "title": "DocumentAnalyzeInput",
+        "type": "object"
+      },
+      "DocumentAnalyzeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedAsset"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown"
+        ],
+        "title": "DocumentAnalyzeResult",
+        "type": "object"
+      },
+      "EncodedDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "base64_data": {
+            "minLength": 1,
+            "title": "Base64 Data",
+            "type": "string"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "media_type": {
+            "const": "application/pdf",
+            "title": "Media Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "media_type",
+          "base64_data"
+        ],
+        "title": "EncodedDocument",
+        "type": "object"
+      },
       "EncodedImage": {
         "additionalProperties": false,
         "properties": {
@@ -725,6 +904,36 @@
           "latex"
         ],
         "title": "FormulaSpan",
+        "type": "object"
+      },
+      "GeneratedAsset": {
+        "additionalProperties": false,
+        "properties": {
+          "base64_data": {
+            "minLength": 1,
+            "title": "Base64 Data",
+            "type": "string"
+          },
+          "media_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "title": "Media Type",
+            "type": "string"
+          },
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "media_type",
+          "base64_data"
+        ],
+        "title": "GeneratedAsset",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -961,6 +1170,13 @@
       "PageAnalyzeResult": {
         "additionalProperties": false,
         "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedAsset"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
           "formula_spans": {
             "items": {
               "$ref": "#/components/schemas/FormulaSpan"
@@ -1497,6 +1713,44 @@
           }
         },
         "summary": "Models"
+      }
+    },
+    "/v2/pipeline/documents:analyze": {
+      "post": {
+        "operationId": "documents_analyze_v2_pipeline_documents_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest_DocumentAnalyzeInput_"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse_DocumentAnalyzeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Documents Analyze"
       }
     },
     "/v2/pipeline/layout:batch": {

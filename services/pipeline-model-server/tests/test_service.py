@@ -101,6 +101,76 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[1]["error"]["code"], "inference_failed")
         self.assertEqual(items[0]["result"], {"regions": []})
 
+    async def test_uses_registered_native_batch_path(self):
+        registry = BackendRegistry()
+        calls = []
+
+        def infer(page):
+            raise AssertionError("individual path should not be used")
+
+        def infer_batch(pages):
+            calls.append([page.page_id for page in pages])
+            return [LayoutResult(regions=[]) for _ in pages]
+
+        registry.register(
+            "layout",
+            RegisteredBackend(
+                infer=infer,
+                infer_batch=infer_batch,
+                metadata=metadata(),
+            ),
+        )
+        response = await self.request(
+            create_app(registry),
+            "POST",
+            "/v2/pipeline/layout:batch",
+            json={
+                "schema_version": "uparser.pipeline.v2",
+                "request_id": "request-batch",
+                "items": [page_payload("first"), page_payload("second")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(calls, [["first", "second"]])
+        self.assertEqual(
+            [item["page_id"] for item in response.json()["items"]],
+            ["first", "second"],
+        )
+
+    async def test_batch_failure_is_visible_when_individual_fallback_succeeds(self):
+        registry = BackendRegistry()
+
+        def infer(page):
+            return LayoutResult(regions=[])
+
+        def infer_batch(pages):
+            raise RuntimeError("fixture batch failure")
+
+        registry.register(
+            "layout",
+            RegisteredBackend(
+                infer=infer,
+                infer_batch=infer_batch,
+                metadata=metadata(),
+            ),
+        )
+        response = await self.request(
+            create_app(registry),
+            "POST",
+            "/v2/pipeline/layout:batch",
+            json={
+                "schema_version": "uparser.pipeline.v2",
+                "request_id": "request-fallback",
+                "items": [page_payload("first"), page_payload("second")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        for item in response.json()["items"]:
+            self.assertEqual(item["warnings"][0]["code"], "batch_fallback")
+            self.assertIn("fixture batch failure", item["warnings"][0]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

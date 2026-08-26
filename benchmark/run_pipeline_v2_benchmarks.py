@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import statistics
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -41,7 +42,7 @@ def _table_html(markup: str) -> str:
 def render_markdown(result: dict) -> str:
     authoritative = result.get("markdown")
     if authoritative is not None:
-        return authoritative.rstrip() + "\n"
+        return authoritative
 
     regions = {region["region_id"]: region for region in result.get("regions", [])}
     ocr_by_parent: dict[str, list[dict]] = {}
@@ -110,18 +111,75 @@ def _encoded_page(image: Image.Image, page_id: str) -> dict:
 
 def _file_page(path: Path) -> dict:
     with Image.open(path) as image:
+        width, height = image.size
+    suffix = path.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        media_type = "image/png" if suffix == ".png" else "image/jpeg"
+        return {
+            "page_id": path.stem,
+            "image": {
+                "media_type": media_type,
+                "base64_data": base64.b64encode(path.read_bytes()).decode("ascii"),
+            },
+            "dimensions": {"width": width, "height": height},
+            "rotation_degrees": 0,
+        }
+    with Image.open(path) as image:
         return _encoded_page(image, path.stem)
 
 
 def _analyze(client: httpx.Client, endpoint: str, page: dict, language: str) -> dict:
+    return _analyze_pages(client, endpoint, [page], language)[0]
+
+
+def _analyze_pages(
+    client: httpx.Client, endpoint: str, pages: list[dict], language: str
+) -> list[dict]:
     response = client.post(
         f"{endpoint.rstrip('/')}/v2/pipeline/pages:analyze",
         json={
             "schema_version": "uparser.pipeline.v2",
-            "request_id": f"eval-{page['page_id']}",
+            "request_id": f"eval-{pages[0]['page_id']}",
             "items": [
                 {
                     "page": page,
+                    "language": language,
+                    "formula_enabled": True,
+                    "table_enabled": True,
+                }
+                for page in pages
+            ],
+        },
+    )
+    response.raise_for_status()
+    results = []
+    for item in response.json()["items"]:
+        if item.get("error"):
+            raise RuntimeError(f"{item['error']['code']}: {item['error']['message']}")
+        fallbacks = [
+            warning for warning in item.get("warnings", [])
+            if warning.get("code") == "batch_fallback"
+        ]
+        if fallbacks:
+            raise RuntimeError(f"formal evaluation rejects batch fallback: {fallbacks[0]['message']}")
+        results.append(item["result"])
+    return results
+
+
+def _analyze_document(client: httpx.Client, endpoint: str, path: Path, language: str) -> str:
+    payload = path.read_bytes()
+    response = client.post(
+        f"{endpoint.rstrip('/')}/v2/pipeline/documents:analyze",
+        json={
+            "schema_version": "uparser.pipeline.v2",
+            "request_id": f"eval-{path.stem}",
+            "items": [
+                {
+                    "document": {
+                        "document_id": path.stem,
+                        "media_type": "application/pdf",
+                        "base64_data": base64.b64encode(payload).decode("ascii"),
+                    },
                     "language": language,
                     "formula_enabled": True,
                     "table_enabled": True,
@@ -133,7 +191,7 @@ def _analyze(client: httpx.Client, endpoint: str, page: dict, language: str) -> 
     item = response.json()["items"][0]
     if item.get("error"):
         raise RuntimeError(f"{item['error']['code']}: {item['error']['message']}")
-    return item["result"]
+    return item["result"]["markdown"]
 
 
 def _omni_paths(dataset: Path, limit: int) -> list[Path]:
@@ -151,19 +209,75 @@ def _omni_paths(dataset: Path, limit: int) -> list[Path]:
     return paths
 
 
+def _run_cli(args, path: Path) -> str:
+    env = os.environ.copy()
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    env["no_proxy"] = "127.0.0.1,localhost"
+    command = [
+        str(args.uparser_bin),
+        "parse",
+        "--protocol",
+        "pipeline",
+        "--format",
+        "markdown",
+        "--endpoint",
+        args.endpoint,
+        "--pipeline-language",
+        args.language,
+        "--max-concurrency",
+        str(args.cli_max_concurrency),
+        "--no-cache",
+        "--no-assets",
+        str(path),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=args.timeout,
+        check=False,
+    )
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"uparser exited {completed.returncode}: {diagnostic}")
+    return completed.stdout
+
+
 def run_omni(args) -> dict:
     paths = _omni_paths(args.dataset, args.limit)
     args.output.mkdir(parents=True, exist_ok=True)
     pending = [path for path in paths if not (args.output / f"{path.stem}.md").is_file()]
 
-    def process(path: Path):
-        started = time.perf_counter()
-        with httpx.Client(timeout=args.timeout, trust_env=False) as client:
-            result = _analyze(client, args.endpoint, _file_page(path), args.language)
-        (args.output / f"{path.stem}.md").write_text(render_markdown(result), encoding="utf-8")
-        return path.name, time.perf_counter() - started
+    if args.runner == "cli":
+        work_items = pending
 
-    summary = _run_parallel(pending, process, args.workers)
+        def process(path: Path):
+            started = time.perf_counter()
+            markdown = _run_cli(args, path)
+            (args.output / f"{path.stem}.md").write_text(markdown, encoding="utf-8")
+            return path.name, time.perf_counter() - started
+    else:
+        work_items = [
+            pending[offset : offset + args.batch_size]
+            for offset in range(0, len(pending), args.batch_size)
+        ]
+
+        def process(paths: list[Path]):
+            started = time.perf_counter()
+            with httpx.Client(timeout=args.timeout, trust_env=False) as client:
+                results = _analyze_pages(
+                    client, args.endpoint, [_file_page(path) for path in paths], args.language
+                )
+            for path, result in zip(paths, results):
+                (args.output / f"{path.stem}.md").write_text(
+                    render_markdown(result), encoding="utf-8"
+                )
+            return [path.name for path in paths], time.perf_counter() - started
+
+    summary = _run_parallel(work_items, process, args.workers)
     summary.update({"count": len(paths), "skipped_existing": len(paths) - len(pending)})
     return summary
 
@@ -191,17 +305,12 @@ def run_odl(args) -> dict:
 
     def process(path: Path):
         started = time.perf_counter()
-        page_markdown = []
-        with httpx.Client(timeout=args.timeout, trust_env=False) as client:
-            for index, image in _pdf_pages(path, args.dpi):
-                try:
-                    page = _encoded_page(image, f"{path.stem}/page-{index + 1}")
-                finally:
-                    image.close()
-                page_markdown.append(render_markdown(_analyze(client, args.endpoint, page, args.language)))
-        (markdown_dir / f"{path.stem}.md").write_text(
-            "\n\n".join(page_markdown), encoding="utf-8"
-        )
+        if args.runner == "cli":
+            markdown = _run_cli(args, path)
+        else:
+            with httpx.Client(timeout=args.timeout, trust_env=False) as client:
+                markdown = _analyze_document(client, args.endpoint, path, args.language)
+        (markdown_dir / f"{path.stem}.md").write_text(markdown, encoding="utf-8")
         return path.name, time.perf_counter() - started
 
     summary = _run_parallel(pending, process, args.workers)
@@ -212,14 +321,17 @@ def run_odl(args) -> dict:
 def _run_parallel(paths, process, workers: int) -> dict:
     started = time.perf_counter()
     timings = []
+    success = 0
     failures = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process, path): path for path in paths}
         for completed, future in enumerate(as_completed(futures), start=1):
             path = futures[future]
             try:
-                name, elapsed = future.result()
-                timings.append(elapsed)
+                names, elapsed = future.result()
+                item_count = len(names) if isinstance(names, list) else 1
+                success += item_count
+                timings.extend([elapsed / item_count] * item_count)
             except Exception as exc:
                 failures.append({"path": str(path), "error": str(exc)})
             if completed == 1 or completed % 25 == 0 or completed == len(paths):
@@ -227,7 +339,7 @@ def _run_parallel(paths, process, workers: int) -> dict:
     wall = time.perf_counter() - started
     return {
         "count": len(paths),
-        "success": len(timings),
+        "success": success,
         "failures": failures,
         "wall_seconds": wall,
         "mean_item_seconds": statistics.mean(timings) if timings else None,
@@ -237,12 +349,16 @@ def _run_parallel(paths, process, workers: int) -> dict:
 
 def merge_resume_summary(previous: dict | None, current: dict) -> dict:
     skipped = current.get("skipped_existing", 0)
-    if not previous or not skipped or previous.get("success") != skipped:
+    if not skipped:
         return current
 
     resumed = current.copy()
     new_success = current["success"]
     resumed["success"] = skipped + new_success
+    if not previous or previous.get("success") != skipped:
+        resumed["prior_completed_without_matching_summary"] = skipped
+        resumed["timing_scope"] = "current_resume_only"
+        return resumed
     if not new_success:
         for key in ("wall_seconds", "mean_item_seconds", "median_item_seconds"):
             resumed[key] = previous.get(key)
@@ -266,15 +382,23 @@ def merge_resume_summary(previous: dict | None, current: dict) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", choices=("omnidoc", "opendataloader"))
+    parser.add_argument("--runner", choices=("http", "cli"), default="http")
     parser.add_argument("--endpoint", default="http://127.0.0.1:19001")
+    parser.add_argument(
+        "--uparser-bin",
+        type=Path,
+        default=ROOT / "uparser" / "target" / "release" / "uparser",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--input", type=Path, default=ODL_ROOT / "pdfs")
     parser.add_argument("--dataset", type=Path, default=OMNI_DATA)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--timeout", type=float, default=600)
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--language", default="ch")
+    parser.add_argument("--cli-max-concurrency", type=int, default=1)
     return parser.parse_args()
 
 
@@ -290,11 +414,17 @@ def main() -> int:
         {
             "target": args.target,
             "endpoint": args.endpoint,
+            "runner": args.runner,
+            "uparser_bin": str(args.uparser_bin) if args.runner == "cli" else None,
             "workers": args.workers,
             "device": os.getenv("UPARSER_PIPELINE_DEVICE", "server-managed"),
             "engine_name": "uparser-pipeline-v2",
             "engine_version": "0.1.0",
-            "processor": "Pipeline V2 HTTP service",
+            "processor": (
+                "uparser CLI -> Rust PipelineV2Adapter -> staged model service"
+                if args.runner == "cli"
+                else "Pipeline V2 HTTP service"
+            ),
             "document_count": summary["count"],
             "total_elapsed": summary["wall_seconds"],
             "elapsed_per_doc": (

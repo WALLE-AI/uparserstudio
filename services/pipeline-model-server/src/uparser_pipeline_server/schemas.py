@@ -186,6 +186,12 @@ class PageAnalyzeInput(ContractModel):
     table_enabled: bool
 
 
+class GeneratedAsset(ContractModel):
+    path: str = Field(min_length=1)
+    media_type: Literal["image/png", "image/jpeg"]
+    base64_data: str = Field(min_length=1)
+
+
 class PageAnalyzeResult(ContractModel):
     regions: list[Region]
     ocr_spans: list[OcrSpan]
@@ -195,6 +201,25 @@ class PageAnalyzeResult(ContractModel):
     # Full-pipeline backends may provide their own finalized Markdown.  Clients
     # should prefer it over reconstructing content from stage-level geometry.
     markdown: str | None = None
+    assets: list[GeneratedAsset] = Field(default_factory=list)
+
+
+class EncodedDocument(ContractModel):
+    document_id: str = Field(min_length=1)
+    media_type: Literal["application/pdf"]
+    base64_data: str = Field(min_length=1)
+
+
+class DocumentAnalyzeInput(ContractModel):
+    document: EncodedDocument
+    language: str
+    formula_enabled: bool
+    table_enabled: bool
+
+
+class DocumentAnalyzeResult(ContractModel):
+    markdown: str
+    assets: list[GeneratedAsset] = Field(default_factory=list)
 
 
 LayoutBatchRequest = BatchRequest[PageImage]
@@ -209,3 +234,5 @@ TableRecognitionBatchRequest = BatchRequest[TableRecognitionInput]
 TableRecognitionBatchResponse = BatchResponse[TableRecognitionResult]
 PageAnalyzeBatchRequest = BatchRequest[PageAnalyzeInput]
 PageAnalyzeBatchResponse = BatchResponse[PageAnalyzeResult]
+DocumentAnalyzeBatchRequest = BatchRequest[DocumentAnalyzeInput]
+DocumentAnalyzeBatchResponse = BatchResponse[DocumentAnalyzeResult]

@@ -1,6 +1,9 @@
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
+
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +15,20 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PipelineBenchmarkRendererTests(unittest.TestCase):
+    def test_file_page_preserves_png_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "page.png"
+            Image.new("RGB", (7, 5), "white").save(path)
+
+            encoded = MODULE._file_page(path)
+
+            self.assertEqual(encoded["image"]["media_type"], "image/png")
+            self.assertEqual(
+                __import__("base64").b64decode(encoded["image"]["base64_data"]),
+                path.read_bytes(),
+            )
+            self.assertEqual(encoded["dimensions"], {"width": 7, "height": 5})
+
     def test_prefers_authoritative_full_pipeline_markdown(self):
         result = {
             "markdown": "# Official\n\nMerged paragraph\n",
@@ -23,6 +40,9 @@ class PipelineBenchmarkRendererTests(unittest.TestCase):
         }
 
         self.assertEqual(MODULE.render_markdown(result), "# Official\n\nMerged paragraph\n")
+
+    def test_does_not_normalize_authoritative_markdown(self):
+        self.assertEqual(MODULE.render_markdown({"markdown": "exact  "}), "exact  ")
 
     def test_renders_reading_order_headings_formula_and_canonical_table(self):
         result = {
@@ -90,6 +110,23 @@ class PipelineBenchmarkRendererTests(unittest.TestCase):
         self.assertEqual(merged["mean_item_seconds"], 2.4)
         self.assertEqual(merged["median_item_seconds"], 1.5)
         self.assertEqual(merged["runs"], 2)
+
+    def test_resume_counts_existing_outputs_without_matching_summary(self):
+        current = {
+            "count": 10,
+            "success": 3,
+            "failures": [],
+            "wall_seconds": 4.0,
+            "mean_item_seconds": 1.0,
+            "median_item_seconds": 1.0,
+            "skipped_existing": 7,
+        }
+
+        merged = MODULE.merge_resume_summary({"success": 1}, current)
+
+        self.assertEqual(merged["success"], 10)
+        self.assertEqual(merged["prior_completed_without_matching_summary"], 7)
+        self.assertEqual(merged["timing_scope"], "current_resume_only")
 
 
 if __name__ == "__main__":

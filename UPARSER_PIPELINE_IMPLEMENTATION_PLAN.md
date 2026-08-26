@@ -6,14 +6,24 @@
 
 - DocLayout-YOLO：版面检测。
 - YOLOv8-MFD：整页公式检测。
-- UniMERNet-small：公式识别。
+- PP-FormulaNet-plus-M：默认公式识别；UniMERNet-small 保留为对照 profile。
 - PaddleOCR：文本检测与识别。
 - RapidTable/SLANet-plus：表格结构识别。
 - LayoutReader 或 MinerU `para_split`：阅读顺序与段落重建。
 
 推荐采用“Rust 负责流程编排，Python 模型服务负责推理”的架构。第一阶段先将 legacy 模型输出适配为新版 MinerU pipeline 的标准中间结果，再对齐新版 MinerU 的文档级行为，之后才进行 ONNX、TensorRT 或进程内推理优化。
 
-当前冻结的参考源码为 MinerU `3.4.4`、commit `79d6d8d79fb8f3ddba5cc34c07a16f0ec36f56c7`。后续升级必须显式更新 manifest、golden 和评测报告，不能隐式跟随工作区变化。
+当前默认参考源码已升级为 MinerU `3.4.5`、commit
+`4fe4bde114a23ee5dd637eae99b767f4669bf58c`，模型清单为
+`pipeline/model-manifest-mineru-3.4.5.json`。旧版 3.4.4/`magic-pdf.json` 清单仅保留用于严格同模
+A/B 和阶段诊断。后续升级必须显式更新 manifest、golden 和评测报告，不能隐式跟随工作区变化。
+
+3.4.5 默认链路为 PP-DocLayoutV2 + PP-OCRv6 + PP-FormulaNet-plus-M + 表格分类/方向 +
+UnetStructure/SLANet-plus，并直接复用官方文档 finalize 与 Markdown。1,651 页候选实验证明其
+直接候选的 OmniDocBench Overall 为 `88.5123`、Formula CDM 为 `88.5788`；最终 uparser 服务路径
+为 `88.4489`/`88.4867`，分别高于 UniMERNet-small 的 `85.3391`/`79.5826`，因此已切为默认；
+设置 `MINERU_FORMULA_CH_SUPPORT=False` 可复现 UniMERNet
+对照。
 
 不建议第一阶段直接在 Rust 中重写全部模型推理。当前模型横跨 PyTorch、Paddle、Transformers 和 ONNX，模型精度高度依赖上游的图像预处理、批处理、输出解码和后处理逻辑。
 

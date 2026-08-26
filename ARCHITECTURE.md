@@ -302,16 +302,16 @@ uparser parse <input> \
   [--format md|json|content-list] \
   [--out <dir>]
 
-# --protocol pipeline 专属：逐阶段独立配置后端（v0.7新增）
+# --protocol pipeline 专属：Rust 编排 V2 工作流，模型阶段全部由服务执行
 uparser parse <input> --protocol pipeline \
-  --layout-backend  local|remote [--layout-endpoint  <url>] \
-  --ocr-backend     local|remote [--ocr-endpoint     <url>] \
-  --formula-backend local|remote [--formula-endpoint <url>] \
-  --table-backend   local|remote [--table-endpoint   <url>]     # 默认值见 §11.2
+  --endpoint <pipeline-model-service-root> \
+  [--layout-endpoint <url>] [--formula-detection-endpoint <url>] \
+  [--ocr-endpoint <url>] [--formula-endpoint <url>] \
+  [--table-endpoint <url>] [--pipeline-language ch]
 
 uparser protocols                 # 列出已注册的 adapter 及其 capabilities（是否需要外部服务/坐标系/是否自带阅读顺序/各stage的resource_hint）
 uparser doctor --protocol <name> --endpoint <url>   # 按该协议的探测方式做健康检查（OpenAI协议探 /v1/models，PaddleOCR协议探其自身健康接口）
-uparser doctor --protocol pipeline                  # 额外探测本机CPU核数/可用内存，对 resource_hint=Heavy 的stage给出"建议改用 --xxx-backend remote"的诊断
+uparser doctor --protocol pipeline [--endpoint <url>] # 探测模型服务 /health
 ```
 
 ### 6.1 Agent-first CLI 契约（v0.9 恢复——v0.1-v0.3 的核心规约，在 v0.4-v0.8 迭代中脱落）
@@ -325,7 +325,7 @@ uparser doctor --protocol pipeline                  # 额外探测本机CPU核�
 
 ### 6.2 协议语义说明
 
-- `--protocol` 语义是"选择 core 内部的一个前后处理插件"。对 `mineru-vlm`/`dots-ocr`/`monkeyocr`/`paddleocr` 四个协议，模型推理始终是外部服务；`native` 协议完全不涉及模型（也不涉及外部服务）；`pipeline` 协议是唯一允许"部分 model_stage 在 core 进程内跑轻量 ONNX 模型"的例外，且该例外**显式声明、用户可配置**，非隐性耦合。core 二进制除 `pipeline` 的 `Local` stage 按需加载 `ort` 运行时、`native` 静态链接 liteparse（含 PDFium，OCR 引擎按 feature 可选）外，不引入 torch/CUDA 等重依赖（liteparse 内嵌带来的二进制体积权衡见 §10.3）。
+- `--protocol` 语义是"选择 core 内部的一个前后处理插件"。对 `mineru-vlm`/`dots-ocr`/`monkeyocr`/`paddleocr`，模型推理始终是外部服务；`native` 完全不涉及模型；`pipeline` 由 Rust 负责 layout → MFD → OCR → MFR → table → assemble → reading-order 工作流，但五个模型阶段全部通过 V2 HTTP 服务执行。Rust 进程不加载 MinerU、PaddleOCR、torch、CUDA 或 ONNX runtime；`pipeline-local-table` 只保留给 legacy V1 实验，不属于 V2 生产路径。
 
 ## 7. 分阶段落地路线图
 
