@@ -2,6 +2,8 @@
 
 > 最后更新：2026-08-26；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
 > PP-OCRv6 + PP-FormulaNet-plus-M。
+> 该默认指整页 `documents/pages:analyze` 后端；`pipeline_v2.rs` 使用的 standalone
+> stage endpoints 当前仍是 legacy-compatible 模型链，两者必须分开报分。
 
 本报告包含**两个互相独立、不可直接比较的评测语料/榜单**,分属两套评测体系(不同数据集、不同官方评测器、不同指标定义)——阅读时请对照下表先确认在看哪一个:
 
@@ -12,7 +14,7 @@
 | 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) |
 | 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 |
 | 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 |
-| 结论一句话 | 服务内部 finalize 路径为 0.85789；本次 `pipeline_v2.rs` Rust CLI 分阶段路径为 0.74323，表格内容装配明显回退 | 服务内部 finalize 路径为 88.4489；本次 Rust CLI 分阶段路径见 Part B 最新行 |
+| 结论一句话 | 服务内部 finalize 路径为 0.85789；本次 `pipeline_v2.rs` Rust CLI 分阶段路径为 0.74323，表格内容装配明显回退 | 服务内部 finalize 路径为 88.4489；本次 Rust CLI 分阶段路径仅 58.6162，同样受表格内容装配拖累 |
 
 两个 Part 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
 
@@ -45,7 +47,7 @@
 | **uparser Pipeline V2 · Rust CLI staged(本次)** | **0.7432** | **0.8053** | **0.2768** | **0.7201** | 0.986(A100) | `pipeline_v2.rs` + 独立阶段服务 |
 | **liteparse(榜单)** | 0.576 | 0.866 | 0.000 | 0.000 | 1.061 | PDFium+OCR |
 
-**五条主结论:**
+**主结论:**
 1. **当前 V2 mineru-vlm 仍超过外部榜首 hybrid**(Overall 0.924 vs 0.907)，并以 Table TEDS `0.9682` 超过历史冻结结果 `0.9439`；但 Overall、Reading Order 和 Heading 分别回退 `0.0044`、`0.0037`、`0.0105`。回退均小于 V2 发布闸门 `0.02`，但不能把历史 `0.9284` 写成当前 V2 分数。
 2. **V2 native 与冻结输出和质量逐文件一致**，统一 runner 的无缓存开销从 `0.0473` 增至 `0.0508 s/篇`，约 `+7.33%`；仍在精度与速度两个维度超过 liteparse。
 3. **V2 auto 是折中档**：156 篇走 native、44 篇走 mineru-vlm，Overall `0.8920`，比纯 native 高 `0.0166`，速度约为全量 VLM 的 `4.53x`。
@@ -86,7 +88,7 @@
 
 ### 2.5 MinerU-VLM / Pipeline 完整对比
 
-全部指标越高越好；三条路径均覆盖 200/200 文档且无预测失败。
+全部指标越高越好；各本地路径均覆盖 200/200 文档且无预测失败。
 
 | 路径 | Overall | NID | NID-S | TEDS | TEDS-S | MHS | MHS-S |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -169,6 +171,9 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 - pdf-inspector baseline:其自带 `cargo build --release --bin pdf2md`。
 - Pipeline V2：`python3 benchmark/run_pipeline_v2_benchmarks.py`；结构化结果见
   `benchmark/results/pipeline_v2_accuracy_20260825.json`。
+- 本次 Rust CLI staged：200 篇预测和官方评分分别见
+  `opensource/opendataloader-bench/prediction/uparser-pipeline-v2-rust-cli-staged-20260826/summary.json`
+  和同目录的 `evaluation.json`。
 - 原始同模复跑：`benchmark/run_original_mineru_pipeline.py`；MinerU 3.4.5 复跑：
   `benchmark/run_mineru_345_pipeline.py`；三方结构化结果见
   `benchmark/results/pipeline_comparison_20260825.json`。
@@ -232,8 +237,10 @@ MinerU-VLM 的 `92.4279` 与上表 665 个表格 sample aggregate `0.9061` 数�
 | 官方 MinerU2.5-Pro | 95.75 | 0.036 | 97.45 | 93.42 | 95.92 | 0.120 |
 | MinerU-VLM 差值 | -4.3249 | +0.033960 | -8.6067 | -0.9921 | -0.6751 | +0.016131 |
 | **uparser Pipeline V2(旧权重)** | **75.7789** | **0.190804** | **73.3099** | **73.1073** | **84.7475** | **0.294770** |
+| **uparser Pipeline V2 · Rust CLI staged(本次)** | **58.6162** | **0.217967** | **70.1110** | **27.5343** | **84.7622** | **0.288339** |
 | 官方 MinerU-Pipeline | 86.47 | 0.055 | 83.07 | 81.88 | 88.68 | 0.153 |
-| Pipeline 差值 | -10.6911 | +0.135804 | -9.7601 | -8.7727 | -3.9325 | +0.141770 |
+| 旧 V2 差值 vs 官方 | -10.6911 | +0.135804 | -9.7601 | -8.7727 | -3.9325 | +0.141770 |
+| Rust staged 差值 vs 官方 | **-27.8538** | **+0.162967** | **-12.9590** | **-54.3457** | **-3.9178** | **+0.135339** |
 | **本地 MinerU 3.4.5 Pipeline** | **85.3391** | **0.056176** | **79.5826** | **82.0523** | **88.8441** | **0.153534** |
 | 3.4.5 差值 vs 官方 | -1.1309 | +0.001176 | -3.4874 | +0.1723 | +0.1641 | +0.000534 |
 | 本地 MinerU 3.4.5 + PP-Formula（直接候选） | 88.5123 | 0.054230 | 88.5788 | 82.3811 | 88.8515 | 0.147369 |
@@ -268,6 +275,28 @@ MinerU 直接候选仅低 `0.0634` 分，文本和阅读顺序 Edit 反而分别
 uparser MinerU-VLM `91.4251` 和官方 MinerU2.5-Pro `95.75`；若“所有基线”包含 VLM，必须增加
 质量路由或 VLM fallback，不能声称固定 Pipeline 已达到该门槛。
 
+本次新增的 **Rust CLI staged** 行才是当前
+`uparser/crates/uparser-core/src/adapters/pipeline_v2.rs` 的实际路径：release CLI 独立调度
+layout→MFD→OCR→MFR→table→assemble→order，模型服务只提供阶段推理。因为当前
+服务的 standalone stage endpoints 仍是 legacy-compatible 后端，本行使用
+DocLayout-YOLO、YOLOv8-MFD、PaddleOCR、UniMERNet-small 和 SLANet-plus，**不是**
+MinerU 3.4.5 + PP-DocLayoutV2 的内部整页 finalize 路径。
+
+1,651/1,651 页生成成功、无 CLI 失败，但有 60 页仅含空白字符。首轮在 794 页后
+因 5,000 万像素安全上限中断；对可信评测输入设置
+`UPARSER_PIPELINE_MAX_IMAGE_PIXELS=200000000` 后全部补齐。`summary.json` 的 `2,149.52s`
+只是最终 resume 段，不是完整生成墙钟，因此本次不报一个伪造的全程 s/page。
+官方 evaluator 覆盖 1,651 页，page timeout fallback 1；2,352 个 CDM 和 665 个 TEDS
+样本均为 0 timeout、0 error、0 exception。
+
+Overall `58.6162` 较旧 uparser Pipeline V2 低 `17.1627` 分，较官方 MinerU-Pipeline
+低 `27.8538` 分。其中 Table TEDS 仅 `27.5343`，但结构指标 TEDS-S 为
+`84.7622`；这与 ODL 的 TEDS/TEDS-S `0.276770/0.918768` 形成同样的强烈分化，
+可将问题收敛到当前 staged 表格链的 table region→全页 OCR span→table service→
+HTML/Markdown 内容绑定，而不是单纯的表格结构检测失败。要继续区分
+`pipeline_v2.rs` 的请求组装与 table endpoint 内部识别的责任，需对失败页保存阶段 trace
+并对照原始 MinerU 的 cell-level 中间产物。
+
 ### 1.3 原始 MinerU 与 uparser Pipeline V2 严格同模 A/B
 
 两条路径对同一 1,651 页使用相同旧权重、`ocr` 方法、同一 v1.7 evaluator；因此下表的差值可用于
@@ -297,6 +326,9 @@ CDM 使用官方 v1.7 算法，但本机通过 TeX Live 2022 + `pdftocairo` 兼�
 - `benchmark/OmniDocBench/result/mineru-3.4.5-pipeline-20260825_quick_match_run_summary.json`
 - `benchmark/OmniDocBench/result/uparser-pipeline-v2-mineru345-ppformula-20260826_quick_match_run_summary.json`
 - `benchmark/OmniDocBench/result/uparser-pipeline-v2-mineru345-ppformula-20260826_quick_match_metric_result.json`
+- `benchmark/omnidoc_pred/uparser-pipeline-v2-rust-cli-staged-20260826/summary.json`
+- `benchmark/OmniDocBench/result/uparser-pipeline-v2-rust-cli-staged-20260826_quick_match_run_summary.json`
+- `benchmark/OmniDocBench/result/uparser-pipeline-v2-rust-cli-staged-20260826_quick_match_metric_result.json`
 
 ### 1.4 Qwen3.8-27B 历史实验解读
 
@@ -317,6 +349,29 @@ python3 gen_qwen_omnidoc.py --name qwen3.8-27b-pure --workers 6          # 生�
 python3 gen_qwen_omnidoc.py --name qwen3.8-27b-pure --skip-generate      # 仅跑官方评测器
 python3 summarize_omnidoc.py qwen3.8-27b-pure                            # 汇总四项指标
 ```
+
+`pipeline_v2.rs` Rust CLI staged 复现命令：
+
+```bash
+cargo build --manifest-path uparser/Cargo.toml -p uparser-core --release --features pdfium
+
+python3 benchmark/run_pipeline_v2_benchmarks.py opendataloader --runner cli --workers 1 \
+  --endpoint http://127.0.0.1:19001 \
+  --output opensource/opendataloader-bench/prediction/uparser-pipeline-v2-rust-cli-staged-20260826
+(cd opensource/opendataloader-bench && \
+  .venv/bin/python src/evaluator.py --engine uparser-pipeline-v2-rust-cli-staged-20260826 --log-level INFO)
+
+python3 benchmark/run_pipeline_v2_benchmarks.py omnidoc --runner cli --workers 1 \
+  --endpoint http://127.0.0.1:19001 \
+  --output benchmark/omnidoc_pred/uparser-pipeline-v2-rust-cli-staged-20260826
+python3 benchmark/run_uparser_omnidoc.py \
+  --name uparser-pipeline-v2-rust-cli-staged-20260826 --protocol pipeline --skip-generate
+```
+
+上述服务用 `UPARSER_PIPELINE_PROFILE=legacy`、`UPARSER_PIPELINE_DEVICE=cuda` 和
+`UPARSER_PIPELINE_MAX_IMAGE_PIXELS=200000000` 启动，Omni 评分额外使用报告产物
+`*_runtime_environment.json` 记录的 TeX Live 2022/CJK 环境。生产服务仍应保留默认
+5,000 万像素上限。
 
 当前 V2 官方结果的可提交副本为 `benchmark/results/architecture_v2_omnidoc_metric_20260821.json` 和
 `benchmark/results/architecture_v2_omnidoc_summary_20260821.json`；完整方法与哈希见

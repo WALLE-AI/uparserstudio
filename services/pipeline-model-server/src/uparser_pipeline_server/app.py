@@ -128,6 +128,7 @@ def create_app(registry: BackendRegistry | None = None) -> FastAPI:
 def create_configured_app() -> FastAPI:
     from .legacy_backends import register_pipeline_backends
     from .mineru345_backend import register_mineru345_page_backend
+    from .mineru345_stage_backends import register_mineru345_stage_backends
 
     manifest = Path(
         os.getenv("UPARSER_PIPELINE_MANIFEST", "pipeline/model-manifest.json")
@@ -137,20 +138,32 @@ def create_configured_app() -> FastAPI:
     registry = BackendRegistry()
     if profile not in {"mineru-3.4.5", "legacy"}:
         raise ValueError(f"unsupported UPARSER_PIPELINE_PROFILE: {profile}")
-    register_pipeline_backends(
-        registry,
-        manifest,
-        device,
-        include_page_analyzer=profile == "legacy",
-    )
     if profile == "mineru-3.4.5":
+        # The five standalone stage endpoints `pipeline_v2.rs` actually
+        # dispatches to (layout/formula_detect/ocr/formula_recognize/table)
+        # now get real MinerU 3.4.5 models — previously
+        # `register_pipeline_backends` bound them to the legacy-compatible
+        # chain *unconditionally*, so `UPARSER_PIPELINE_PROFILE=mineru-3.4.5`
+        # had no effect at all on the Rust orchestration path (D5 in
+        # `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`). `pages_analyze`/
+        # `documents_analyze` are registered separately below and remain
+        # benchmark-reference-only (whole-page/document finalize, not
+        # reachable via `pipeline_v2.rs`'s per-stage dispatch) — see §0.5.
         source_root = Path(
             os.getenv("UPARSER_MINERU_ROOT", "opensource/MinerU")
         ).resolve()
         config_path = Path(
             os.getenv("UPARSER_MINERU_CONFIG", "/home/dataset1/gaojing/mineru.json")
         ).resolve()
+        register_mineru345_stage_backends(registry, source_root, config_path, device)
         register_mineru345_page_backend(registry, source_root, config_path, device)
+    else:
+        register_pipeline_backends(
+            registry,
+            manifest,
+            device,
+            include_page_analyzer=True,
+        )
     return create_app(registry)
 
 

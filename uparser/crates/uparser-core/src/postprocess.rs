@@ -54,7 +54,7 @@ pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
 fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
     if let Some(next_text) = &next.text {
         last.text = Some(match &last.text {
-            Some(existing) => format!("{existing} {next_text}"),
+            Some(existing) => join_wrapped_lines(existing, next_text),
             None => next_text.clone(),
         });
     }
@@ -71,6 +71,54 @@ fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
         combined_bbox[2] as f32,
         combined_bbox[3] as f32,
     ]);
+}
+
+/// Join two consecutive wrapped lines of the same paragraph with the
+/// separator their content actually needs, instead of always inserting
+/// an ASCII space (D8's "language-related spacing/hyphenation" item —
+/// see `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`). Two real defects
+/// this was previously silent about, both mechanical enough to fix
+/// without needing real benchmark data to tune a heuristic threshold:
+///
+/// 1. **CJK line wrap never uses a space.** Chinese/Japanese/Korean
+///    prose doesn't put spaces between words — joining two wrapped CJK
+///    lines with `format!("{a} {b}")` inserts a visible, incorrect gap
+///    (e.g. "…第一条" + "为了…" previously became "…第一条 为了…", not
+///    "…第一条为了…"). Detected by checking whether the join point itself
+///    (last char of `existing`, first char of `next`) is a Han
+///    ideograph, so this doesn't misfire on an English word ending or
+///    starting a wrapped line inside an otherwise CJK-dominant document.
+/// 2. **End-of-line hyphenation is never undone.** A word broken across
+///    a line wrap (`"infor-"` + `"mation"`) previously stayed broken
+///    with a space in the middle (`"infor- mation"`) instead of
+///    rejoining into `"information"`. Triggers only when the hyphen
+///    immediately follows an ASCII letter and the next line starts with
+///    a lowercase ASCII letter — deliberately narrow so it doesn't
+///    misfire on a genuine trailing "-" (e.g. a bullet marker or a
+///    number range) or on an acronym/proper-noun continuation.
+fn join_wrapped_lines(existing: &str, next: &str) -> String {
+    let last_char = existing.chars().next_back();
+    let next_first_char = next.chars().next();
+
+    if let (Some(before_hyphen), Some(next_first)) = (
+        existing
+            .strip_suffix('-')
+            .and_then(|s| s.chars().next_back()),
+        next_first_char,
+    ) && before_hyphen.is_ascii_alphabetic()
+        && next_first.is_ascii_lowercase()
+    {
+        let stripped = &existing[..existing.len() - 1];
+        return format!("{stripped}{next}");
+    }
+
+    let joins_without_space = matches!(last_char, Some(c) if crate::content_normalize::is_han_ideograph(c))
+        || matches!(next_first_char, Some(c) if crate::content_normalize::is_han_ideograph(c));
+    if joins_without_space {
+        format!("{existing}{next}")
+    } else {
+        format!("{existing} {next}")
+    }
 }
 
 #[cfg(test)]
@@ -203,6 +251,71 @@ mod tests {
         let merged = merge_paragraphs_by_geometry(blocks);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].text.as_deref(), Some("One Two Three"));
+    }
+
+    /// D8: merging two wrapped CJK lines must not insert an ASCII space
+    /// between them — Chinese prose doesn't use spaces between words,
+    /// and a visible gap in the merged output is a real, user-visible
+    /// defect distinct from `content_normalize.rs`'s punctuation fix.
+    #[test]
+    fn merges_cjk_lines_without_inserting_a_space() {
+        let blocks = vec![
+            text_block([10, 0, 200, 20], "安全生产许可证条例第一条"),
+            text_block([10, 25, 200, 45], "为了加强安全生产许可管理"),
+        ];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("安全生产许可证条例第一条为了加强安全生产许可管理")
+        );
+    }
+
+    /// D8: a word broken across a line wrap by a hyphen (e.g. from a
+    /// justified English PDF) should rejoin into the real word, not stay
+    /// split with a space in the middle.
+    #[test]
+    fn dehyphenates_a_word_broken_across_a_line_wrap() {
+        let blocks = vec![
+            text_block([10, 0, 200, 20], "This is an infor-"),
+            text_block([10, 25, 200, 45], "mation retrieval system."),
+        ];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("This is an information retrieval system.")
+        );
+    }
+
+    /// D8: a genuine trailing hyphen that isn't a line-wrap break (e.g.
+    /// followed by a capitalized word/number, or a bullet-style dash)
+    /// must not be silently dehyphenated.
+    #[test]
+    fn does_not_dehyphenate_when_the_next_line_does_not_look_like_a_word_continuation() {
+        let blocks = vec![
+            text_block([10, 0, 200, 20], "See appendix A-"),
+            text_block([10, 25, 200, 45], "1 for details."),
+        ];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("See appendix A- 1 for details.")
+        );
+    }
+
+    /// D8: ordinary English word-wrap (no hyphen, no CJK) keeps the
+    /// existing single-space join — this fix must not regress the
+    /// already-correct default case.
+    #[test]
+    fn ordinary_latin_line_wrap_still_joins_with_a_single_space() {
+        let blocks = vec![
+            text_block([10, 0, 200, 20], "First line."),
+            text_block([10, 25, 200, 45], "Second line."),
+        ];
+        let merged = merge_paragraphs_by_geometry(blocks);
+        assert_eq!(merged[0].text.as_deref(), Some("First line. Second line."));
     }
 
     /// Gate G2 proof: this module is unmodified by P2, and must treat a

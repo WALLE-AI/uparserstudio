@@ -247,7 +247,7 @@ impl ParseCtx {
                 _ = self.cancellation.cancelled() => Err(DispatchError::Cancelled),
             },
             Dispatcher::Mock(mock) => mock
-                .dispatch(endpoint)
+                .dispatch_recording(endpoint, body)
                 .ok_or_else(|| DispatchError::MockKeyMissing(endpoint.to_string())),
         }
     }

@@ -588,6 +588,32 @@ impl PipelineV2Adapter {
         validate_regions(page, "layout", &layout.regions)?;
         validate_regions(page, "formula_detect", &formulas.regions)?;
 
+        // Table regions never receive OCR spans from the page-level OCR call:
+        // the OCR backend's `TEXT_REGION_LABELS` deliberately excludes
+        // "table" (MinerU's own page-level OCR skips tables too, since the
+        // table model owns its own text recognition dependency). A second,
+        // table-scoped OCR dispatch is required — relabeling each table
+        // region so it passes the OCR backend's region-type filter — mirrors
+        // the reference `PipelinePageAnalyzer` orchestration in
+        // `page_analyzer.py`. Without this, `TableRecognitionInput.ocr_spans`
+        // is structurally empty for every table and the table model has no
+        // text to bind to its predicted cell structure (see
+        // `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`, D1).
+        let table_regions = layout
+            .regions
+            .iter()
+            .filter(|region| category_map::map_pipeline_category(&region.label).0 == "table")
+            .cloned()
+            .collect::<Vec<_>>();
+        let table_ocr_regions = table_regions
+            .iter()
+            .cloned()
+            .map(|region| Region {
+                label: "text".to_owned(),
+                ..region
+            })
+            .collect::<Vec<_>>();
+
         let ocr = self.dispatch_stage::<_, OcrResult>(
             page,
             ctx,
@@ -610,16 +636,30 @@ impl PipelineV2Adapter {
                 formula_regions: formulas.regions.clone(),
             },
         );
-        let (ocr, recognized_formulas) = tokio::join!(ocr, recognized_formulas);
+        let table_ocr = async {
+            if table_ocr_regions.is_empty() {
+                return Ok(OcrResult { spans: vec![] });
+            }
+            self.dispatch_stage::<_, OcrResult>(
+                page,
+                ctx,
+                &self.ocr_endpoint,
+                "table_ocr",
+                OcrPageInput {
+                    page: encoded.clone(),
+                    layout_regions: table_ocr_regions,
+                    formula_regions: formulas.regions.clone(),
+                    language: self.language.clone(),
+                },
+            )
+            .await
+        };
+        let (ocr, recognized_formulas, table_ocr) =
+            tokio::join!(ocr, recognized_formulas, table_ocr);
         let ocr = ocr?;
         let recognized_formulas = recognized_formulas?;
+        let table_ocr = table_ocr?;
 
-        let table_regions = layout
-            .regions
-            .iter()
-            .filter(|region| category_map::map_pipeline_category(&region.label).0 == "table")
-            .cloned()
-            .collect::<Vec<_>>();
         let tables = if table_regions.is_empty() {
             TableRecognitionResult { tables: vec![] }
         } else {
@@ -631,14 +671,41 @@ impl PipelineV2Adapter {
                 TableRecognitionInput {
                     page: encoded,
                     table_regions: table_regions.clone(),
-                    ocr_spans: ocr.spans.clone(),
+                    ocr_spans: table_ocr.spans.clone(),
                     formula_spans: recognized_formulas.spans.clone(),
                 },
             )
             .await?
         };
 
-        let mut regions = layout.regions;
+        let mut all_ocr_spans = ocr.spans;
+        all_ocr_spans.extend(table_ocr.spans);
+
+        // The layout model can independently detect its own
+        // `inline_formula`/`display_formula` regions (e.g. legacy class
+        // ids 8/9 in `compat.py::LEGACY_LAYOUT_LABELS`), duplicating what
+        // the dedicated MFD (formula detection) model finds more
+        // precisely for the same area. Left unfiltered, these duplicates
+        // survive as blank blocks: they're excluded from page-level OCR
+        // (formula regions aren't in `TEXT_REGION_LABELS`) and never
+        // receive a `latex` value (MFR only recognizes MFD-origin
+        // regions), so they occupy a reading-order slot and skew XY-cut
+        // for nothing. Mirrors `compat.py::merge_layout_and_mfd`'s
+        // IoMin ≥ 0.7 dedup — see D4 in
+        // `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
+        let mut regions = layout
+            .regions
+            .into_iter()
+            .filter(|region| {
+                let is_formula_label =
+                    matches!(region.label.as_str(), "inline_formula" | "display_formula");
+                !is_formula_label
+                    || !formulas
+                        .regions
+                        .iter()
+                        .any(|mfd| intersection_over_min_area(region.bbox, mfd.bbox) >= 0.7)
+            })
+            .collect::<Vec<_>>();
         let mut known_ids = regions
             .iter()
             .map(|region| region.region_id.clone())
@@ -654,7 +721,7 @@ impl PipelineV2Adapter {
         let order = region_reading_order(page, &regions)?;
         Ok(PageAnalyzeResult {
             regions,
-            ocr_spans: ocr.spans,
+            ocr_spans: all_ocr_spans,
             formula_spans: recognized_formulas.spans,
             tables: tables.tables,
             reading_order: order,
@@ -795,6 +862,25 @@ fn bbox_contains_center(outer: [f32; 4], inner: [f32; 4]) -> bool {
     outer[0] <= center_x && center_x <= outer[2] && outer[1] <= center_y && center_y <= outer[3]
 }
 
+/// Intersection area divided by the smaller of the two boxes' areas.
+/// Mirrors `compat.py::intersection_over_min_area` — deliberately not
+/// IoU: a small, precise MFD formula box fully contained inside a larger,
+/// coarser layout-model formula box should still count as "the same
+/// region" even though their IoU would be low.
+fn intersection_over_min_area(left: [f32; 4], right: [f32; 4]) -> f32 {
+    let width = (left[2].min(right[2]) - left[0].max(right[0])).max(0.0);
+    let height = (left[3].min(right[3]) - left[1].max(right[1])).max(0.0);
+    let intersection = width * height;
+    let left_area = (left[2] - left[0]).max(0.0) * (left[3] - left[1]).max(0.0);
+    let right_area = (right[2] - right[0]).max(0.0) * (right[3] - right[1]).max(0.0);
+    let denominator = left_area.min(right_area);
+    if denominator > 0.0 {
+        intersection / denominator
+    } else {
+        0.0
+    }
+}
+
 fn build_blocks(
     page: &RenderedPage,
     ctx: &ParseCtx,
@@ -887,6 +973,40 @@ fn build_blocks(
         });
     }
     blocks.sort_by_key(|block| block.reading_order.unwrap_or(u32::MAX));
+
+    // D8's blank-page finding: uparser Pipeline V2 renders 60/1651
+    // OmniDocBench pages as fully blank Markdown vs. the original
+    // MinerU's 2 — and this held true even for the Python
+    // `page_analyzer.py`-orchestrated V2, before this file's Rust
+    // orchestration existed, so it isn't a `pipeline_v2.rs`-specific
+    // regression. The most likely root cause is the legacy layout
+    // model classifying an entire page as `discarded` (or otherwise
+    // producing regions with no OCR/latex/html/image content) on pages
+    // its weaker classification handles poorly — something S3's real
+    // PP-DocLayoutV2 model should reduce as a side effect, not something
+    // this render-agnostic adapter code can fix outright. What was
+    // previously missing: this failure mode was completely silent —
+    // a blank Markdown page and a genuinely blank source page were
+    // indistinguishable in `warnings`. See
+    // `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`, D8.
+    if blocks.is_empty() {
+        ctx.warn(format!(
+            "pipeline-v2 page {}: layout produced no regions at all (page will render blank)",
+            page.page_num
+        ));
+    } else if blocks.iter().all(|block| {
+        block.text.is_none()
+            && block.html.is_none()
+            && block.latex.is_none()
+            && block.asset_bytes.is_none()
+    }) {
+        ctx.warn(format!(
+            "pipeline-v2 page {}: {} region(s) detected but none produced renderable text/html/latex/image content (page will render blank)",
+            page.page_num,
+            blocks.len()
+        ));
+    }
+
     Ok(blocks)
 }
 
@@ -1144,6 +1264,27 @@ mod tests {
                 }),
             ),
         );
+        // Table regions never receive spans from the page-level OCR call
+        // (the OCR backend's `TEXT_REGION_LABELS` excludes "table"), so a
+        // second, table-scoped OCR dispatch is required — this is the
+        // response to that second call.
+        mock.seed(
+            &adapter.ocr_endpoint,
+            stage_response(
+                "pipeline-v2-1-table_ocr",
+                json!({
+                    "spans": [{
+                        "span_id": "table-span-1",
+                        "parent_region_id": "table-1",
+                        "polygon": {"points": [[10.0, 70.0], [190.0, 70.0], [190.0, 120.0], [10.0, 120.0]]},
+                        "text": "A",
+                        "language": "ch",
+                        "confidence": 0.95,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
         mock.seed(
             &adapter.table_endpoint,
             stage_response(
@@ -1171,7 +1312,7 @@ mod tests {
             ),
         );
 
-        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let ctx = ParseCtx::with_mock(mock.clone(), Arc::new(Semaphore::new(4)));
         let blocks = adapter.parse_page(&rendered_page(), &ctx).await.unwrap();
 
         assert_eq!(blocks.len(), 3);
@@ -1193,5 +1334,209 @@ mod tests {
                 .iter()
                 .all(|block| block.source == BlockSource::OcrPipeline)
         );
+
+        // Prove the table stage genuinely received the table-scoped OCR
+        // spans (parent_region_id "table-1", text "A") and not the
+        // page-level OCR response (parent_region_id "text-1") — the
+        // regression this test exists to catch (see
+        // `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`, D1).
+        let table_requests = mock.recorded_requests(&adapter.table_endpoint);
+        assert_eq!(table_requests.len(), 1);
+        let sent_spans = table_requests[0]["items"][0]["ocr_spans"]
+            .as_array()
+            .expect("table request carries an ocr_spans array");
+        assert_eq!(sent_spans.len(), 1);
+        assert_eq!(sent_spans[0]["parent_region_id"], "table-1");
+        assert_eq!(sent_spans[0]["text"], "A");
+
+        // Two independent dispatches actually reached the OCR endpoint
+        // (page-level "ocr" stage + table-scoped "table_ocr" stage).
+        let ocr_requests = mock.recorded_requests(&adapter.ocr_endpoint);
+        assert_eq!(ocr_requests.len(), 2);
+    }
+
+    /// D4: the layout model's own duplicate formula detection (a
+    /// `display_formula` region overlapping the same area an independent
+    /// MFD detection already covers) must be dropped — otherwise it
+    /// survives as a blank block (no OCR, since formula regions aren't in
+    /// `TEXT_REGION_LABELS`; no latex, since MFR only recognizes
+    /// MFD-origin regions) that occupies a reading-order slot for
+    /// nothing. See `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`, D4.
+    #[tokio::test]
+    async fn duplicate_layout_formula_region_is_dropped_in_favor_of_mfd_detection() {
+        let adapter = PipelineV2Adapter::from_endpoint_base("http://pipeline.test".into());
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.layout_endpoint,
+            stage_response(
+                "pipeline-v2-1-layout",
+                json!({
+                    "regions": [
+                        {
+                            "region_id": "text-1",
+                            "label": "text",
+                            "bbox": [10.0, 10.0, 190.0, 50.0],
+                            "polygon": null,
+                            "confidence": 0.99,
+                            "coordinate_space": "render_pixels"
+                        },
+                        {
+                            "region_id": "layout-formula-1",
+                            "label": "display_formula",
+                            "bbox": [10.0, 140.0, 190.0, 175.0],
+                            "polygon": null,
+                            "confidence": 0.5,
+                            "coordinate_space": "render_pixels"
+                        }
+                    ]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.formula_detection_endpoint,
+            stage_response(
+                "pipeline-v2-1-formula_detect",
+                json!({
+                    "regions": [{
+                        "region_id": "mfd-formula-1",
+                        "label": "display_formula",
+                        "bbox": [10.0, 140.0, 190.0, 175.0],
+                        "polygon": null,
+                        "confidence": 0.93,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.ocr_endpoint,
+            stage_response(
+                "pipeline-v2-1-ocr",
+                json!({
+                    "spans": [{
+                        "span_id": "span-1",
+                        "parent_region_id": "text-1",
+                        "polygon": {"points": [[10.0, 10.0], [190.0, 10.0], [190.0, 30.0], [10.0, 30.0]]},
+                        "text": "Pipeline V2 text",
+                        "language": "en",
+                        "confidence": 0.98,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.formula_recognition_endpoint,
+            stage_response(
+                "pipeline-v2-1-formula_recognize",
+                json!({
+                    "spans": [{
+                        "region_id": "mfd-formula-1",
+                        "latex": "x^2 + y^2",
+                        "confidence": 0.97,
+                        "bbox": [10.0, 140.0, 190.0, 175.0]
+                    }]
+                }),
+            ),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let blocks = adapter.parse_page(&rendered_page(), &ctx).await.unwrap();
+
+        // Only the text block and the single MFD-origin formula block
+        // survive — the duplicate layout-origin "display_formula" region
+        // (same bbox, no latex) is dropped, not kept as a second,
+        // content-free "display_formula" block.
+        assert_eq!(blocks.len(), 2);
+        let formula_blocks = blocks
+            .iter()
+            .filter(|block| block.category_raw == "display_formula")
+            .collect::<Vec<_>>();
+        assert_eq!(formula_blocks.len(), 1);
+        assert_eq!(formula_blocks[0].latex.as_deref(), Some("x^2 + y^2"));
+    }
+
+    /// D8: a page whose layout stage returns zero regions previously
+    /// rendered as silently-blank Markdown with no signal anywhere that
+    /// distinguishes it from a genuinely blank source page. It should now
+    /// surface a warning.
+    #[tokio::test]
+    async fn layout_returning_no_regions_at_all_surfaces_a_warning() {
+        let adapter = PipelineV2Adapter::from_endpoint_base("http://pipeline.test".into());
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.layout_endpoint,
+            stage_response("pipeline-v2-1-layout", json!({"regions": []})),
+        );
+        mock.seed(
+            &adapter.formula_detection_endpoint,
+            stage_response("pipeline-v2-1-formula_detect", json!({"regions": []})),
+        );
+        mock.seed(
+            &adapter.ocr_endpoint,
+            stage_response("pipeline-v2-1-ocr", json!({"spans": []})),
+        );
+        mock.seed(
+            &adapter.formula_recognition_endpoint,
+            stage_response("pipeline-v2-1-formula_recognize", json!({"spans": []})),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let blocks = adapter.parse_page(&rendered_page(), &ctx).await.unwrap();
+
+        assert!(blocks.is_empty());
+        assert!(
+            ctx.warnings_snapshot()
+                .iter()
+                .any(|warning| warning.contains("layout produced no regions at all")),
+        );
+    }
+
+    /// D8: a page with detected regions that nonetheless produce zero
+    /// renderable content (no OCR text, no latex, no table HTML, no
+    /// image crop — e.g. a region the OCR backend's region-type filter
+    /// excludes and that isn't itself a table/formula/image) is the same
+    /// "silently blank" failure mode as the zero-region case, just with
+    /// regions present. It should also warn.
+    #[tokio::test]
+    async fn regions_with_no_renderable_content_surface_a_warning() {
+        let adapter = PipelineV2Adapter::from_endpoint_base("http://pipeline.test".into());
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.layout_endpoint,
+            stage_response(
+                "pipeline-v2-1-layout",
+                json!({
+                    "regions": [{
+                        "region_id": "discarded-1",
+                        "label": "discarded",
+                        "bbox": [10.0, 10.0, 190.0, 50.0],
+                        "polygon": null,
+                        "confidence": 0.6,
+                        "coordinate_space": "render_pixels"
+                    }]
+                }),
+            ),
+        );
+        mock.seed(
+            &adapter.formula_detection_endpoint,
+            stage_response("pipeline-v2-1-formula_detect", json!({"regions": []})),
+        );
+        mock.seed(
+            &adapter.ocr_endpoint,
+            stage_response("pipeline-v2-1-ocr", json!({"spans": []})),
+        );
+        mock.seed(
+            &adapter.formula_recognition_endpoint,
+            stage_response("pipeline-v2-1-formula_recognize", json!({"spans": []})),
+        );
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
+        let blocks = adapter.parse_page(&rendered_page(), &ctx).await.unwrap();
+
+        assert_eq!(blocks.len(), 1);
+        assert!(ctx.warnings_snapshot().iter().any(|warning| {
+            warning.contains("none produced renderable text/html/latex/image content")
+        }));
     }
 }

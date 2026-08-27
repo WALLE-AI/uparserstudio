@@ -166,6 +166,15 @@ pub enum Command {
         /// introduces by default.
         #[arg(long)]
         no_assets: bool,
+        /// Override the DPI used to rasterize PDF pages before handing
+        /// them to a visual-page protocol (`native`/image-only inputs are
+        /// unaffected). Defaults to `runner::DEFAULT_RASTER_DPI` (200,
+        /// matching MinerU's own `DEFAULT_PDF_IMAGE_DPI` — see D7 in
+        /// `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`); a lower value
+        /// trades OCR/table/formula recognition fidelity for smaller
+        /// images and less bandwidth to a remote endpoint.
+        #[arg(long)]
+        raster_dpi: Option<u16>,
         /// Redact common email, mainland-China phone, and resident-ID
         /// values in emitted CLI output. Parsing and cached results remain
         /// faithful to the source.
@@ -285,6 +294,7 @@ pub fn run(cli: Cli) -> i32 {
             pages,
             assets_dir,
             no_assets,
+            raster_dpi,
             redact_pii,
             no_notes,
             headers_footers,
@@ -381,6 +391,7 @@ pub fn run(cli: Cli) -> i32 {
                 wanted_pages,
                 assets_dir,
                 no_assets,
+                raster_dpi,
                 redact_pii,
                 no_notes,
                 headers_footers,
@@ -462,6 +473,7 @@ fn run_parse(
     wanted_pages: Option<Vec<u32>>,
     assets_dir: Option<String>,
     no_assets: bool,
+    raster_dpi: Option<u16>,
     redact_pii: bool,
     no_notes: bool,
     headers_footers: bool,
@@ -659,6 +671,7 @@ fn run_parse(
                 "--max-concurrency",
                 max_concurrency != DEFAULT_MAX_CONCURRENCY,
             ),
+            ("--raster-dpi", raster_dpi.is_some()),
         ] {
             if given {
                 eprintln!("warning: {flag} has no effect on native whole-document execution");
@@ -677,6 +690,7 @@ fn run_parse(
         pages: wanted_pages,
         assets_dir: assets_dir.map(std::path::PathBuf::from),
         no_assets,
+        raster_dpi,
         document_options,
         cancellation,
     };
@@ -905,9 +919,10 @@ fn native_markdown_fast_path(
                                 | uparser_native_engine::OCR_REASON_SCANNED
                         )
                     })
-                }) || artifact.positioned_items.iter().any(|item| {
-                    uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)
-                }))
+                }) || artifact
+                    .positioned_items
+                    .iter()
+                    .any(|item| uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)))
             {
                 return Ok(None);
             }

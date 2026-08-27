@@ -97,6 +97,53 @@ def _cell_text(
     return " ".join(text for _, _, text in sorted(matches))
 
 
+def table_cell_from_geometry(
+    region_id: str,
+    index: int,
+    box,
+    logic,
+    left: int,
+    top: int,
+    selected_spans: list[OcrSpan],
+) -> TableCell:
+    """Build a `TableCell` from one wired/wireless table model's raw
+    `(cell_bboxes[i], logic_points[i])` pair, clamping row/column/span to
+    the schema's actual constraints (`row`/`column` >= 0,
+    `row_span`/`column_span` > 0 — see `schemas.py::TableCell`).
+
+    A real run against real MinerU 3.4.5 weights hit a genuine, previously
+    unguarded case: a degenerate `logic_points` entry (`row_end <
+    row_start` or `column_end < column_start`) produced a zero or
+    negative span, which `TableCell`'s pydantic validation then rejected
+    outright — turning one malformed cell into a hard `PageError` for the
+    entire page instead of a merely-imperfect table. Clamping here keeps
+    the cell (with the best geometry/text it can salvage) instead of
+    failing the page over one model output quirk; this mirrors this
+    project's established `sanitize_bbox_px`/`geometry.rs` convention of
+    clamping a model's geometry to the nearest valid value rather than
+    erroring on it.
+    """
+    values = np.asarray(box, dtype=float).reshape(-1)
+    local_xs = values[0::2]
+    local_ys = values[1::2]
+    cell_bbox = (
+        float(local_xs.min() + left),
+        float(local_ys.min() + top),
+        float(local_xs.max() + left),
+        float(local_ys.max() + top),
+    )
+    row_start, row_end, column_start, column_end = [int(value) for value in logic]
+    return TableCell(
+        cell_id=f"{region_id}/cell-{index}",
+        row=max(0, row_start),
+        column=max(0, column_start),
+        row_span=max(1, row_end - row_start + 1),
+        column_span=max(1, column_end - column_start + 1),
+        bbox=cell_bbox,
+        text=_cell_text(cell_bbox, selected_spans),
+    )
+
+
 class CurrentMineruSlanetBackend:
     def __init__(
         self,
@@ -151,29 +198,12 @@ class CurrentMineruSlanetBackend:
             markup = output.pred_html or ""
             cell_boxes = output.cell_bboxes if output.cell_bboxes is not None else []
             logic_points = output.logic_points if output.logic_points is not None else []
-            cells = []
-            for index, (box, logic) in enumerate(zip(cell_boxes, logic_points)):
-                values = np.asarray(box, dtype=float).reshape(-1)
-                local_xs = values[0::2]
-                local_ys = values[1::2]
-                cell_bbox = (
-                    float(local_xs.min() + left),
-                    float(local_ys.min() + top),
-                    float(local_xs.max() + left),
-                    float(local_ys.max() + top),
+            cells = [
+                table_cell_from_geometry(
+                    region.region_id, index, box, logic, left, top, selected_spans
                 )
-                row_start, row_end, column_start, column_end = [int(value) for value in logic]
-                cells.append(
-                    TableCell(
-                        cell_id=f"{region.region_id}/cell-{index}",
-                        row=row_start,
-                        column=column_start,
-                        row_span=row_end - row_start + 1,
-                        column_span=column_end - column_start + 1,
-                        bbox=cell_bbox,
-                        text=_cell_text(cell_bbox, selected_spans),
-                    )
-                )
+                for index, (box, logic) in enumerate(zip(cell_boxes, logic_points))
+            ]
             tables.append(
                 RecognizedTable(
                     region_id=region.region_id,

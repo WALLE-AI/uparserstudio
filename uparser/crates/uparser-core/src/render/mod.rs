@@ -3,7 +3,7 @@
 //! formatting (those land alongside the adapters that produce the
 //! richer signals they depend on).
 
-use crate::types::ParseResult;
+use crate::types::{MergeHint, ParseResult};
 
 pub fn to_json(result: &ParseResult) -> String {
     serde_json::to_string_pretty(result).expect("ParseResult is always serializable")
@@ -17,9 +17,23 @@ pub fn to_markdown(result: &ParseResult) -> String {
                 out.push_str(html);
                 out.push_str("\n\n");
             } else if let Some(latex) = &block.latex {
-                out.push_str("$$\n");
-                out.push_str(latex);
-                out.push_str("\n$$\n\n");
+                // Inline formulas (`category == "equation_inline"`, e.g.
+                // pipeline's `inline_formula` regions) render as `$...$`
+                // so they stay inline with surrounding text; every other
+                // formula renders as a display-math `$$...$$` block. See
+                // D3 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md` — the
+                // prior unconditional `$$...$$` split every paragraph
+                // containing an inline formula into two blocks.
+                if block.category.as_deref() == Some("equation_inline") {
+                    out.push('$');
+                    out.push_str(latex);
+                    out.push('$');
+                } else {
+                    out.push_str("$$\n");
+                    out.push_str(latex);
+                    out.push_str("\n$$");
+                }
+                out.push_str("\n\n");
             } else if let Some(text) = &block.text {
                 // Emit semantic Markdown markup from the block's normalized
                 // category so heading/list structure survives into Markdown
@@ -31,7 +45,20 @@ pub fn to_markdown(result: &ParseResult) -> String {
                 // unaffected.
                 match block.category.as_deref() {
                     Some("title") => {
-                        out.push_str("# ");
+                        // `merge_hint::TitleLevel(n)` (currently only set
+                        // by the `pipeline` adapter's doc_title/
+                        // paragraph_title distinction — see D6) drives
+                        // heading depth when present; every other
+                        // protocol collapses "title" to a single `#`,
+                        // unchanged from before this fix.
+                        let level = match &block.merge_hint {
+                            Some(MergeHint::TitleLevel(level)) => (*level).clamp(1, 6),
+                            _ => 1,
+                        };
+                        for _ in 0..level {
+                            out.push('#');
+                        }
+                        out.push(' ');
                         out.push_str(text);
                     }
                     Some("list") => {
@@ -276,5 +303,81 @@ mod tests {
         assert!(md.contains("- an item"), "list → '- ': {md}");
         // Plain text is unprefixed.
         assert!(md.contains("a paragraph") && !md.contains("# a paragraph"));
+    }
+
+    /// D3: an inline formula (`category == "equation_inline"`, e.g.
+    /// pipeline's `inline_formula` regions) renders as `$...$` so it stays
+    /// inline with any surrounding text, instead of the unconditional
+    /// `$$...$$` that previously split every paragraph containing one into
+    /// two blocks. Every other formula category still gets `$$...$$`.
+    #[test]
+    fn inline_formula_category_renders_as_dollar_delimited_not_display_math() {
+        fn formula(category: &str, latex: &str) -> Block {
+            Block {
+                geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+                geom_frame: CoordFrame::Page,
+                bbox_px: Some([0, 0, 10, 10]),
+                category_raw: category.into(),
+                category: Some(category.into()),
+                reading_order: None,
+                text: None,
+                html: None,
+                latex: Some(latex.into()),
+                spans: vec![],
+                merge_hint: None,
+                confidence: None,
+                source: BlockSource::LayoutThenRecognize,
+                error: None,
+                asset_bytes: None,
+                asset_path: None,
+                asset_caption: None,
+            }
+        }
+        let mut r = sample_result();
+        r.pages[0].blocks = vec![formula("equation_inline", "x^2")];
+        assert_eq!(to_markdown(&r), "$x^2$");
+
+        r.pages[0].blocks = vec![formula("equation", "x^2")];
+        assert_eq!(to_markdown(&r), "$$\nx^2\n$$");
+    }
+
+    /// D6: `merge_hint::TitleLevel(n)` drives heading depth for
+    /// `category == "title"` blocks when present (currently only set by
+    /// the `pipeline` adapter's doc_title/paragraph_title distinction).
+    /// Protocols that never set `merge_hint` keep collapsing every title
+    /// to a single `#`, unchanged from before this fix.
+    #[test]
+    fn title_level_merge_hint_drives_heading_depth() {
+        fn titled(text: &str, level: Option<u8>) -> Block {
+            Block {
+                geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+                geom_frame: CoordFrame::Page,
+                bbox_px: Some([0, 0, 10, 10]),
+                category_raw: "title".into(),
+                category: Some("title".into()),
+                reading_order: None,
+                text: Some(text.into()),
+                html: None,
+                latex: None,
+                spans: vec![],
+                merge_hint: level.map(MergeHint::TitleLevel),
+                confidence: None,
+                source: BlockSource::LayoutThenRecognize,
+                error: None,
+                asset_bytes: None,
+                asset_path: None,
+                asset_caption: None,
+            }
+        }
+        let mut r = sample_result();
+        r.pages[0].blocks = vec![
+            titled("Document Title", Some(1)),
+            titled("Section", Some(2)),
+            titled("No Hint", None),
+        ];
+        let md = to_markdown(&r);
+        assert!(md.contains("# Document Title"));
+        assert!(md.contains("## Section"));
+        assert!(md.contains("# No Hint"));
     }
 }

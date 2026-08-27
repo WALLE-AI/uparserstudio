@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 /// halfwidth punctuation in English text, code blocks, or formulas.
 const CJK_RATIO_THRESHOLD: f64 = 0.2;
 
-fn is_han_ideograph(c: char) -> bool {
+pub(crate) fn is_han_ideograph(c: char) -> bool {
     matches!(c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF)
 }
 

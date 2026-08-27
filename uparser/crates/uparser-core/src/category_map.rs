@@ -179,10 +179,24 @@ pub fn map_monkeyocrv2_category(raw: &str) -> (String, Option<String>) {
     (normalized.to_string(), None)
 }
 
-/// `pipeline` protocol's native layout-stage category vocabulary,
-/// confirmed from `opensource/MinerU/mineru/utils/enum_class.py`'s
-/// `BlockType` — specifically the "Added in pp_doclayout_v2" subset,
-/// since PP-DocLayoutV2 is the pipeline's sole layout model (P5).
+/// `pipeline` protocol's native layout-stage category vocabulary.
+///
+/// **Correction**: this constant was originally documented as "confirmed
+/// from `enum_class.py`'s `BlockType` — the 'Added in pp_doclayout_v2'
+/// subset", which is misleading — that `BlockType` subset (`abstract`,
+/// `doc_title`, `paragraph_title`, `vertical_text`, `header_image`,
+/// `footer_image`, `formula_number`) is MinerU's own *post-processed*
+/// semantic vocabulary, not the raw model output. The real PP-DocLayoutV2
+/// model's native label set (`PP_DOCLAYOUT_V2_LABELS` in
+/// `opensource/MinerU/mineru/model/layout/pp_doclayoutv2.py`) is a third,
+/// larger, mostly-disjoint 25-label vocabulary (`algorithm`,
+/// `aside_text`, `content`, `number`, `reference`, `reference_content`,
+/// `seal`, etc., alongside labels this constant already lists). See
+/// `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`'s S3 notes.
+/// `map_pipeline_category` below accepts all three vocabularies (this
+/// constant's, the legacy PDF-Extract-Kit one, and the real
+/// PP-DocLayoutV2 one) so it works unmodified regardless of which model
+/// chain the standalone stage endpoints are currently running.
 pub const PIPELINE_LAYOUT_CATEGORIES: &[&str] = &[
     "doc_title",
     "paragraph_title",
@@ -205,21 +219,51 @@ pub const PIPELINE_LAYOUT_CATEGORIES: &[&str] = &[
 /// Map a `pipeline` native layout category to this project's normalized
 /// category string. Unrecognized input falls back to `"unknown"` with a
 /// warning.
+///
+/// The `pipeline` adapter's standalone stage endpoints currently run the
+/// legacy-compatible model chain (`legacy_backends.py`/`compat.py`),
+/// whose label set (`LEGACY_LAYOUT_LABELS`/`LEGACY_MFD_LABELS`) is a
+/// PDF-Extract-Kit vocabulary, not `PIPELINE_LAYOUT_CATEGORIES`' native
+/// PP-DocLayoutV2 vocabulary — the two never agreed, so
+/// `display_formula`/`inline_formula`/`figure_title`/`vision_footnote`/
+/// `formula_number` all fell through to `unknown` (see
+/// `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`, D2). Both vocabularies are
+/// accepted here so this mapper works unmodified once the standalone
+/// endpoints are upgraded to the PP-DocLayoutV2 model chain.
+///
+/// `"inline_formula"` maps to a distinct `"equation_inline"` category
+/// (not `"equation"`) so the renderer can emit `$...$` instead of
+/// `$$...$$` for it — see `render::to_markdown` and D3.
+///
+/// The real PP-DocLayoutV2 additions (`algorithm`, `aside_text`,
+/// `content`, `footer_image`, `header_image`, `number`, `reference`,
+/// `reference_content`, `seal`) are mapped per MinerU's own ground-truth
+/// translation table, `PP_DOCLAYOUT_V2_LABELS_TO_BLOCK_TYPES` in
+/// `opensource/MinerU/mineru/backend/pipeline/pipeline_magic_model.py` —
+/// read directly, not guessed. That table has no entry for bare
+/// `"reference"` (only `"reference_content"`) — real MinerU appears to
+/// treat the `"reference"` list-outer-frame region as a non-content
+/// container, so it's mapped to `"discarded"` here rather than invented.
 pub fn map_pipeline_category(raw: &str) -> (String, Option<String>) {
     let normalized = match normalize_key(raw).as_str() {
         "doctitle" | "paragraphtitle" | "verticaltext" => "title",
-        "text" | "abstract" => "text",
-        "image" => "image",
+        "text" | "abstract" | "asidetext" => "text",
+        "image" | "seal" => "image",
         "table" => "table",
         "chart" => "chart",
-        "interlineequation" => "equation",
+        "interlineequation" | "displayformula" => "equation",
+        "inlineformula" => "equation_inline",
         "list" => "list",
-        "index" => "index",
-        "header" => "header",
-        "footer" => "footer",
-        "pagenumber" => "page_number",
-        "footnote" => "footnote",
-        "discarded" => "discarded",
+        "index" | "content" => "index",
+        "header" | "headerimage" => "header",
+        "footer" | "footerimage" => "footer",
+        "pagenumber" | "number" => "page_number",
+        "footnote" | "visionfootnote" => "footnote",
+        "figuretitle" => "caption",
+        "formulanumber" => "text",
+        "algorithm" => "code",
+        "referencecontent" => "reference",
+        "discarded" | "reference" => "discarded",
         _ => {
             return (
                 "unknown".to_string(),
@@ -365,5 +409,83 @@ mod tests {
         let (normalized, warning) = map_pipeline_category("watermark");
         assert_eq!(normalized, "unknown");
         assert!(warning.is_some());
+    }
+
+    /// D2: the standalone `pipeline` stage endpoints currently run the
+    /// legacy-compatible model chain, whose label set
+    /// (`compat.py::LEGACY_LAYOUT_LABELS`/`LEGACY_MFD_LABELS`) is disjoint
+    /// from `PIPELINE_LAYOUT_CATEGORIES`. Every legacy label must map to a
+    /// known category without warning.
+    #[test]
+    fn pipeline_category_accepts_the_legacy_backend_label_set() {
+        for raw in [
+            "paragraph_title",
+            "text",
+            "discarded",
+            "image",
+            "figure_title",
+            "table",
+            "vision_footnote",
+            "display_formula",
+            "formula_number",
+            "inline_formula",
+        ] {
+            let (normalized, warning) = map_pipeline_category(raw);
+            assert_ne!(
+                normalized, "unknown",
+                "legacy label {raw} mapped to unknown"
+            );
+            assert!(warning.is_none(), "legacy label {raw} should not warn");
+        }
+    }
+
+    #[test]
+    fn pipeline_inline_formula_is_distinct_from_block_formula() {
+        assert_eq!(map_pipeline_category("inline_formula").0, "equation_inline");
+        assert_eq!(map_pipeline_category("display_formula").0, "equation");
+        assert_eq!(map_pipeline_category("interline_equation").0, "equation");
+    }
+
+    /// S3: `Mineru345LayoutBackend` (the real PP-DocLayoutV2 model) emits
+    /// the full native `PP_DOCLAYOUT_V2_LABELS` vocabulary, a third,
+    /// mostly-disjoint set from both the legacy vocabulary and this
+    /// module's own `PIPELINE_LAYOUT_CATEGORIES` constant — every label
+    /// in it must map to something known.
+    #[test]
+    fn pipeline_category_accepts_the_real_pp_doclayout_v2_label_set() {
+        for raw in [
+            "abstract",
+            "algorithm",
+            "aside_text",
+            "chart",
+            "content",
+            "display_formula",
+            "doc_title",
+            "figure_title",
+            "footer",
+            "footer_image",
+            "footnote",
+            "formula_number",
+            "header",
+            "header_image",
+            "image",
+            "inline_formula",
+            "number",
+            "paragraph_title",
+            "reference",
+            "reference_content",
+            "seal",
+            "table",
+            "text",
+            "vertical_text",
+            "vision_footnote",
+        ] {
+            let (normalized, warning) = map_pipeline_category(raw);
+            assert_ne!(
+                normalized, "unknown",
+                "real PP-DocLayoutV2 label {raw} mapped to unknown"
+            );
+            assert!(warning.is_none(), "real label {raw} should not warn");
+        }
     }
 }
