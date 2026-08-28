@@ -72,6 +72,7 @@ pub enum CoordinateKind {
 pub enum OrderSource {
     SourceSemantic,
     FromModel,
+    AdapterComputed,
     GeometricFallback,
 }
 
@@ -194,7 +195,7 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         preprocess: PreprocessKind::StageGraph,
         decode: DecodeKind::StageOutputs,
         coordinates: CoordinateKind::PixelAbs,
-        order: OrderSource::GeometricFallback,
+        order: OrderSource::AdapterComputed,
         default_endpoint: None,
         requires_pdf_native_feature: false,
     },

@@ -105,6 +105,9 @@ pub enum Command {
         layout_backend: Option<StageBackendChoice>,
         #[arg(long)]
         layout_endpoint: Option<String>,
+        /// Pipeline V2 formula-detection (MFD) batch endpoint.
+        #[arg(long)]
+        formula_detection_endpoint: Option<String>,
         #[arg(long, value_enum)]
         ocr_backend: Option<StageBackendChoice>,
         #[arg(long)]
@@ -113,13 +116,18 @@ pub enum Command {
         formula_backend: Option<StageBackendChoice>,
         #[arg(long)]
         formula_endpoint: Option<String>,
-        /// `table` is the only stage that defaults `Local` (via `ort`,
-        /// requires the `pipeline-local-table` feature); `--table-backend
-        /// remote` switches it to Pipeline Model Serving instead.
+        /// Pipeline V2 model stages are service-only. `remote` is accepted
+        /// for compatibility; `local` is rejected.
         #[arg(long, value_enum)]
         table_backend: Option<StageBackendChoice>,
+        /// Pipeline V2 table-recognition batch endpoint.
+        #[arg(long)]
+        table_endpoint: Option<String>,
         #[arg(long)]
         table_model_path: Option<String>,
+        /// OCR language forwarded to the model service (default: ch).
+        #[arg(long)]
+        pipeline_language: Option<String>,
         /// Bypass the content-hash cache (T-9.1) entirely — forces a
         /// real re-parse even if an identical `(bytes, protocol,
         /// endpoint, model)` fingerprint was cached from a prior run.
@@ -158,6 +166,15 @@ pub enum Command {
         /// introduces by default.
         #[arg(long)]
         no_assets: bool,
+        /// Override the DPI used to rasterize PDF pages before handing
+        /// them to a visual-page protocol (`native`/image-only inputs are
+        /// unaffected). Defaults to `runner::DEFAULT_RASTER_DPI` (200,
+        /// matching MinerU's own `DEFAULT_PDF_IMAGE_DPI` — see D7 in
+        /// `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`); a lower value
+        /// trades OCR/table/formula recognition fidelity for smaller
+        /// images and less bandwidth to a remote endpoint.
+        #[arg(long)]
+        raster_dpi: Option<u16>,
         /// Redact common email, mainland-China phone, and resident-ID
         /// values in emitted CLI output. Parsing and cached results remain
         /// faithful to the source.
@@ -262,18 +279,22 @@ pub fn run(cli: Cli) -> i32 {
             max_concurrency,
             layout_backend,
             layout_endpoint,
+            formula_detection_endpoint,
             ocr_backend,
             ocr_endpoint,
             formula_backend,
             formula_endpoint,
             table_backend,
+            table_endpoint,
             table_model_path,
+            pipeline_language,
             no_cache,
             stream,
             no_postprocess,
             pages,
             assets_dir,
             no_assets,
+            raster_dpi,
             redact_pii,
             no_notes,
             headers_footers,
@@ -311,6 +332,7 @@ pub fn run(cli: Cli) -> i32 {
                 ("layout", layout_backend),
                 ("ocr", ocr_backend),
                 ("formula", formula_backend),
+                ("table", table_backend),
             ] {
                 if backend == Some(StageBackendChoice::Local) {
                     return emit_error(
@@ -318,9 +340,8 @@ pub fn run(cli: Cli) -> i32 {
                         EXIT_USAGE,
                         "unsupported_stage_backend",
                         &format!(
-                            "pipeline's `{stage}` stage has no `Local` implementation \
-                             (its model has no confirmed ONNX export) — only `table` \
-                             supports `--table-backend local`"
+                            "pipeline V2's `{stage}` stage is model-service-only; \
+                             no model runtime is linked into the Rust client"
                         ),
                         &protocol,
                         Some(stage),
@@ -328,15 +349,30 @@ pub fn run(cli: Cli) -> i32 {
                 }
             }
 
+            if table_model_path.is_some() {
+                return emit_error(
+                    format,
+                    EXIT_USAGE,
+                    "unsupported_stage_backend",
+                    "pipeline V2 does not load table models in the Rust process; configure the \
+                     model service and use --table-endpoint instead",
+                    &protocol,
+                    Some("table"),
+                );
+            }
+
             let pipeline_config = PipelineConfig {
                 layout_backend: None,
                 layout_endpoint,
+                formula_detection_endpoint,
                 ocr_backend: None,
                 ocr_endpoint,
                 formula_backend: None,
                 formula_endpoint,
                 table_backend,
+                table_endpoint,
                 table_model_path,
+                language: pipeline_language,
             };
             run_parse(
                 path,
@@ -355,6 +391,7 @@ pub fn run(cli: Cli) -> i32 {
                 wanted_pages,
                 assets_dir,
                 no_assets,
+                raster_dpi,
                 redact_pii,
                 no_notes,
                 headers_footers,
@@ -436,6 +473,7 @@ fn run_parse(
     wanted_pages: Option<Vec<u32>>,
     assets_dir: Option<String>,
     no_assets: bool,
+    raster_dpi: Option<u16>,
     redact_pii: bool,
     no_notes: bool,
     headers_footers: bool,
@@ -633,6 +671,7 @@ fn run_parse(
                 "--max-concurrency",
                 max_concurrency != DEFAULT_MAX_CONCURRENCY,
             ),
+            ("--raster-dpi", raster_dpi.is_some()),
         ] {
             if given {
                 eprintln!("warning: {flag} has no effect on native whole-document execution");
@@ -651,6 +690,7 @@ fn run_parse(
         pages: wanted_pages,
         assets_dir: assets_dir.map(std::path::PathBuf::from),
         no_assets,
+        raster_dpi,
         document_options,
         cancellation,
     };
@@ -879,9 +919,10 @@ fn native_markdown_fast_path(
                                 | uparser_native_engine::OCR_REASON_SCANNED
                         )
                     })
-                }) || artifact.positioned_items.iter().any(|item| {
-                    uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)
-                }))
+                }) || artifact
+                    .positioned_items
+                    .iter()
+                    .any(|item| uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)))
             {
                 return Ok(None);
             }
@@ -1125,53 +1166,17 @@ fn default_endpoint_for(protocol: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// `MemAvailable` from `/proc/meminfo`, in MB. `None` on non-Linux or if
-/// the file/field is missing — a diagnostic heuristic, not something
-/// worth a new dependency (e.g. `sysinfo`) or a hard failure over.
-fn available_memory_mb() -> Option<u64> {
-    let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
-    for line in contents.lines() {
-        if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            let kb: u64 = rest.trim().trim_end_matches(" kB").trim().parse().ok()?;
-            return Some(kb / 1024);
-        }
-    }
-    None
-}
-
-/// `uparser doctor` (T-9.3): reachability probe for HTTP-backed
-/// protocols, or a local CPU/memory advisory for `pipeline`. Diagnostic
-/// only — a failed probe never changes `parse`'s behavior.
+/// `uparser doctor` (T-9.3): reachability probe for HTTP-backed protocols.
+/// Diagnostic only — a failed probe never changes `parse`'s behavior.
 fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
     // Same endpoint resolution as `parse` (flag → env → config[protocol]) so a
     // pre-flight `doctor` probes the very endpoint a later `parse` would use.
-    let (endpoint, _) = crate::agent_config::resolve_endpoint_model(&protocol, endpoint, None);
+    let (mut endpoint, _) = crate::agent_config::resolve_endpoint_model(&protocol, endpoint, None);
     if protocol == "pipeline" {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(0);
-        let mem_mb = available_memory_mb();
-        let advice = match (cores, mem_mb) {
-            (c, Some(m)) if c >= 4 && m >= 4096 => {
-                "table stage's default Local (ort) backend should be fine on this machine; \
-                 layout/ocr/formula remain Remote-only regardless of local resources"
-            }
-            _ => {
-                "this machine looks resource-constrained for local ONNX inference; consider \
-                 --table-backend remote (heuristic suggestion only, not enforced)"
-            }
-        };
-        let report = serde_json::json!({
-            "protocol": "pipeline",
-            "local_cpu_cores": cores,
-            "local_available_memory_mb": mem_mb,
-            "advice": advice,
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).expect("doctor report is serializable")
-        );
-        return EXIT_SUCCESS;
+        let base = endpoint
+            .take()
+            .unwrap_or_else(|| "http://localhost:9001".to_owned());
+        endpoint = Some(format!("{}/health", base.trim_end_matches('/')));
     }
 
     if protocol == "mock" || protocol == "native" || protocol == "tesseract" {

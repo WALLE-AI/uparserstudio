@@ -1,0 +1,1053 @@
+{
+  "device": "cpu",
+  "elapsed_seconds": {
+    "layout": 5.265766881406307,
+    "mfd": 3.642092227935791
+  },
+  "formula_regions": [
+    {
+      "bbox": [
+        370.3395690917969,
+        577.6736450195312,
+        378.1098327636719,
+        598.3184204101562
+      ],
+      "confidence": 0.5475534796714783,
+      "coordinate_space": "render_pixels",
+      "label": "inline_formula",
+      "polygon": {
+        "points": [
+          [
+            370.3395690917969,
+            577.6736450195312
+          ],
+          [
+            378.1098327636719,
+            577.6736450195312
+          ],
+          [
+            378.1098327636719,
+            598.3184204101562
+          ],
+          [
+            370.3395690917969,
+            598.3184204101562
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/mfd-0"
+    }
+  ],
+  "image": "/home/dataset1/gaojing/llm/uparserstudio/benchmark/OmniDocBenchData/images/page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+  "layout_regions": [
+    {
+      "bbox": [
+        83.0,
+        281.0,
+        111.0,
+        458.0
+      ],
+      "confidence": 0.653,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            83.0,
+            281.0
+          ],
+          [
+            111.0,
+            281.0
+          ],
+          [
+            111.0,
+            458.0
+          ],
+          [
+            83.0,
+            458.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-0"
+    },
+    {
+      "bbox": [
+        656.0,
+        134.0,
+        911.0,
+        1502.0
+      ],
+      "confidence": 0.55,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            656.0,
+            134.0
+          ],
+          [
+            911.0,
+            134.0
+          ],
+          [
+            911.0,
+            1502.0
+          ],
+          [
+            656.0,
+            1502.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-1"
+    },
+    {
+      "bbox": [
+        833.0,
+        1610.0,
+        849.0,
+        1630.0
+      ],
+      "confidence": 0.544,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            833.0,
+            1610.0
+          ],
+          [
+            849.0,
+            1610.0
+          ],
+          [
+            849.0,
+            1630.0
+          ],
+          [
+            833.0,
+            1630.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-2"
+    },
+    {
+      "bbox": [
+        213.0,
+        158.0,
+        476.0,
+        1428.0
+      ],
+      "confidence": 0.534,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            213.0,
+            158.0
+          ],
+          [
+            476.0,
+            158.0
+          ],
+          [
+            476.0,
+            1428.0
+          ],
+          [
+            213.0,
+            1428.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-3"
+    },
+    {
+      "bbox": [
+        137.0,
+        1606.0,
+        506.0,
+        1622.0
+      ],
+      "confidence": 0.48,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            137.0,
+            1606.0
+          ],
+          [
+            506.0,
+            1606.0
+          ],
+          [
+            506.0,
+            1622.0
+          ],
+          [
+            137.0,
+            1622.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-4"
+    },
+    {
+      "bbox": [
+        199.0,
+        229.0,
+        241.0,
+        1470.0
+      ],
+      "confidence": 0.209,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            199.0,
+            229.0
+          ],
+          [
+            241.0,
+            229.0
+          ],
+          [
+            241.0,
+            1470.0
+          ],
+          [
+            199.0,
+            1470.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-5"
+    },
+    {
+      "bbox": [
+        237.0,
+        153.0,
+        477.0,
+        1442.0
+      ],
+      "confidence": 0.206,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            237.0,
+            153.0
+          ],
+          [
+            477.0,
+            153.0
+          ],
+          [
+            477.0,
+            1442.0
+          ],
+          [
+            237.0,
+            1442.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-6"
+    },
+    {
+      "bbox": [
+        526.0,
+        146.0,
+        602.0,
+        1482.0
+      ],
+      "confidence": 0.204,
+      "coordinate_space": "render_pixels",
+      "label": "vision_footnote",
+      "polygon": {
+        "points": [
+          [
+            526.0,
+            146.0
+          ],
+          [
+            602.0,
+            146.0
+          ],
+          [
+            602.0,
+            1482.0
+          ],
+          [
+            526.0,
+            1482.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-7"
+    },
+    {
+      "bbox": [
+        518.0,
+        143.0,
+        598.0,
+        1489.0
+      ],
+      "confidence": 0.198,
+      "coordinate_space": "render_pixels",
+      "label": "vision_footnote",
+      "polygon": {
+        "points": [
+          [
+            518.0,
+            143.0
+          ],
+          [
+            598.0,
+            143.0
+          ],
+          [
+            598.0,
+            1489.0
+          ],
+          [
+            518.0,
+            1489.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-8"
+    },
+    {
+      "bbox": [
+        81.0,
+        282.0,
+        115.0,
+        456.0
+      ],
+      "confidence": 0.191,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            81.0,
+            282.0
+          ],
+          [
+            115.0,
+            282.0
+          ],
+          [
+            115.0,
+            456.0
+          ],
+          [
+            81.0,
+            456.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-9"
+    },
+    {
+      "bbox": [
+        877.0,
+        129.0,
+        920.0,
+        1519.0
+      ],
+      "confidence": 0.187,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            877.0,
+            129.0
+          ],
+          [
+            920.0,
+            129.0
+          ],
+          [
+            920.0,
+            1519.0
+          ],
+          [
+            877.0,
+            1519.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-10"
+    },
+    {
+      "bbox": [
+        518.0,
+        143.0,
+        598.0,
+        1489.0
+      ],
+      "confidence": 0.173,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            518.0,
+            143.0
+          ],
+          [
+            598.0,
+            143.0
+          ],
+          [
+            598.0,
+            1489.0
+          ],
+          [
+            518.0,
+            1489.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-11"
+    },
+    {
+      "bbox": [
+        526.0,
+        146.0,
+        602.0,
+        1482.0
+      ],
+      "confidence": 0.167,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            526.0,
+            146.0
+          ],
+          [
+            602.0,
+            146.0
+          ],
+          [
+            602.0,
+            1482.0
+          ],
+          [
+            526.0,
+            1482.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-12"
+    },
+    {
+      "bbox": [
+        656.0,
+        134.0,
+        911.0,
+        1502.0
+      ],
+      "confidence": 0.157,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            656.0,
+            134.0
+          ],
+          [
+            911.0,
+            134.0
+          ],
+          [
+            911.0,
+            1502.0
+          ],
+          [
+            656.0,
+            1502.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-13"
+    },
+    {
+      "bbox": [
+        258.0,
+        149.0,
+        484.0,
+        1449.0
+      ],
+      "confidence": 0.107,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            258.0,
+            149.0
+          ],
+          [
+            484.0,
+            149.0
+          ],
+          [
+            484.0,
+            1449.0
+          ],
+          [
+            258.0,
+            1449.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-14"
+    }
+  ],
+  "merged_regions": [
+    {
+      "bbox": [
+        83.0,
+        281.0,
+        111.0,
+        458.0
+      ],
+      "confidence": 0.653,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            83.0,
+            281.0
+          ],
+          [
+            111.0,
+            281.0
+          ],
+          [
+            111.0,
+            458.0
+          ],
+          [
+            83.0,
+            458.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-0"
+    },
+    {
+      "bbox": [
+        656.0,
+        134.0,
+        911.0,
+        1502.0
+      ],
+      "confidence": 0.55,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            656.0,
+            134.0
+          ],
+          [
+            911.0,
+            134.0
+          ],
+          [
+            911.0,
+            1502.0
+          ],
+          [
+            656.0,
+            1502.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-1"
+    },
+    {
+      "bbox": [
+        833.0,
+        1610.0,
+        849.0,
+        1630.0
+      ],
+      "confidence": 0.544,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            833.0,
+            1610.0
+          ],
+          [
+            849.0,
+            1610.0
+          ],
+          [
+            849.0,
+            1630.0
+          ],
+          [
+            833.0,
+            1630.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-2"
+    },
+    {
+      "bbox": [
+        213.0,
+        158.0,
+        476.0,
+        1428.0
+      ],
+      "confidence": 0.534,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            213.0,
+            158.0
+          ],
+          [
+            476.0,
+            158.0
+          ],
+          [
+            476.0,
+            1428.0
+          ],
+          [
+            213.0,
+            1428.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-3"
+    },
+    {
+      "bbox": [
+        137.0,
+        1606.0,
+        506.0,
+        1622.0
+      ],
+      "confidence": 0.48,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            137.0,
+            1606.0
+          ],
+          [
+            506.0,
+            1606.0
+          ],
+          [
+            506.0,
+            1622.0
+          ],
+          [
+            137.0,
+            1622.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-4"
+    },
+    {
+      "bbox": [
+        199.0,
+        229.0,
+        241.0,
+        1470.0
+      ],
+      "confidence": 0.209,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            199.0,
+            229.0
+          ],
+          [
+            241.0,
+            229.0
+          ],
+          [
+            241.0,
+            1470.0
+          ],
+          [
+            199.0,
+            1470.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-5"
+    },
+    {
+      "bbox": [
+        237.0,
+        153.0,
+        477.0,
+        1442.0
+      ],
+      "confidence": 0.206,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            237.0,
+            153.0
+          ],
+          [
+            477.0,
+            153.0
+          ],
+          [
+            477.0,
+            1442.0
+          ],
+          [
+            237.0,
+            1442.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-6"
+    },
+    {
+      "bbox": [
+        526.0,
+        146.0,
+        602.0,
+        1482.0
+      ],
+      "confidence": 0.204,
+      "coordinate_space": "render_pixels",
+      "label": "vision_footnote",
+      "polygon": {
+        "points": [
+          [
+            526.0,
+            146.0
+          ],
+          [
+            602.0,
+            146.0
+          ],
+          [
+            602.0,
+            1482.0
+          ],
+          [
+            526.0,
+            1482.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-7"
+    },
+    {
+      "bbox": [
+        518.0,
+        143.0,
+        598.0,
+        1489.0
+      ],
+      "confidence": 0.198,
+      "coordinate_space": "render_pixels",
+      "label": "vision_footnote",
+      "polygon": {
+        "points": [
+          [
+            518.0,
+            143.0
+          ],
+          [
+            598.0,
+            143.0
+          ],
+          [
+            598.0,
+            1489.0
+          ],
+          [
+            518.0,
+            1489.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-8"
+    },
+    {
+      "bbox": [
+        81.0,
+        282.0,
+        115.0,
+        456.0
+      ],
+      "confidence": 0.191,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            81.0,
+            282.0
+          ],
+          [
+            115.0,
+            282.0
+          ],
+          [
+            115.0,
+            456.0
+          ],
+          [
+            81.0,
+            456.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-9"
+    },
+    {
+      "bbox": [
+        877.0,
+        129.0,
+        920.0,
+        1519.0
+      ],
+      "confidence": 0.187,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            877.0,
+            129.0
+          ],
+          [
+            920.0,
+            129.0
+          ],
+          [
+            920.0,
+            1519.0
+          ],
+          [
+            877.0,
+            1519.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-10"
+    },
+    {
+      "bbox": [
+        518.0,
+        143.0,
+        598.0,
+        1489.0
+      ],
+      "confidence": 0.173,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            518.0,
+            143.0
+          ],
+          [
+            598.0,
+            143.0
+          ],
+          [
+            598.0,
+            1489.0
+          ],
+          [
+            518.0,
+            1489.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-11"
+    },
+    {
+      "bbox": [
+        526.0,
+        146.0,
+        602.0,
+        1482.0
+      ],
+      "confidence": 0.167,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            526.0,
+            146.0
+          ],
+          [
+            602.0,
+            146.0
+          ],
+          [
+            602.0,
+            1482.0
+          ],
+          [
+            526.0,
+            1482.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-12"
+    },
+    {
+      "bbox": [
+        656.0,
+        134.0,
+        911.0,
+        1502.0
+      ],
+      "confidence": 0.157,
+      "coordinate_space": "render_pixels",
+      "label": "discarded",
+      "polygon": {
+        "points": [
+          [
+            656.0,
+            134.0
+          ],
+          [
+            911.0,
+            134.0
+          ],
+          [
+            911.0,
+            1502.0
+          ],
+          [
+            656.0,
+            1502.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-13"
+    },
+    {
+      "bbox": [
+        258.0,
+        149.0,
+        484.0,
+        1449.0
+      ],
+      "confidence": 0.107,
+      "coordinate_space": "render_pixels",
+      "label": "text",
+      "polygon": {
+        "points": [
+          [
+            258.0,
+            149.0
+          ],
+          [
+            484.0,
+            149.0
+          ],
+          [
+            484.0,
+            1449.0
+          ],
+          [
+            258.0,
+            1449.0
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/layout-14"
+    },
+    {
+      "bbox": [
+        370.3395690917969,
+        577.6736450195312,
+        378.1098327636719,
+        598.3184204101562
+      ],
+      "confidence": 0.5475534796714783,
+      "coordinate_space": "render_pixels",
+      "label": "inline_formula",
+      "polygon": {
+        "points": [
+          [
+            370.3395690917969,
+            577.6736450195312
+          ],
+          [
+            378.1098327636719,
+            577.6736450195312
+          ],
+          [
+            378.1098327636719,
+            598.3184204101562
+          ],
+          [
+            370.3395690917969,
+            598.3184204101562
+          ]
+        ]
+      },
+      "region_id": "page-942ac90d-4704-43f3-9286-719c7be9e655/mfd-0"
+    }
+  ],
+  "models": {
+    "formula_detect": {
+      "name": "yolo_v8_mfd",
+      "revision": "legacy-compatible-current-mineru-labels-v1",
+      "runtime": "magic_pdf",
+      "weight_sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc"
+    },
+    "layout": {
+      "name": "doclayout_yolo",
+      "revision": "legacy-compatible-current-mineru-labels-v1",
+      "runtime": "magic_pdf",
+      "weight_sha256": "1b152460888dc30be6db7f5dfab28bde3dcc999e5202f46187a764a1699c80be"
+    }
+  },
+  "page_id": "page-942ac90d-4704-43f3-9286-719c7be9e655"
+}

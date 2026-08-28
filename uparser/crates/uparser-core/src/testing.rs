@@ -9,6 +9,11 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct MockDispatch {
     responses: Mutex<HashMap<String, Vec<Value>>>,
+    /// Requests seen per key, in dispatch order. Populated only by
+    /// `dispatch_recording`; `dispatch` (used by every pre-existing caller)
+    /// leaves this untouched, so adding this field is additive and doesn't
+    /// change behavior for adapters that don't opt in.
+    requests: Mutex<HashMap<String, Vec<Value>>>,
 }
 
 impl MockDispatch {
@@ -35,6 +40,31 @@ impl MockDispatch {
         } else {
             Some(queue.remove(0))
         }
+    }
+
+    /// Same as `dispatch`, but also records `request` under `key` so a test
+    /// can later assert on what an adapter actually sent — needed to prove
+    /// two dispatches to the same endpoint carried genuinely different
+    /// payloads (e.g. pipeline_v2's page-level vs. table-scoped OCR calls).
+    pub fn dispatch_recording(&self, key: &str, request: Value) -> Option<Value> {
+        self.requests
+            .lock()
+            .expect("mutex not poisoned")
+            .entry(key.to_string())
+            .or_default()
+            .push(request);
+        self.dispatch(key)
+    }
+
+    /// Requests previously recorded via `dispatch_recording`, in dispatch
+    /// order.
+    pub fn recorded_requests(&self, key: &str) -> Vec<Value> {
+        self.requests
+            .lock()
+            .expect("mutex not poisoned")
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

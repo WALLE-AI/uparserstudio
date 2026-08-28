@@ -45,6 +45,10 @@ pub struct ParseOptions {
     /// that default-on behavior was chosen: it mirrors MinerU's own
     /// unconditional `images/` output convention).
     pub no_assets: bool,
+    /// Overrides the PDF rasterization DPI for visual-page protocols.
+    /// `None` uses `runner::DEFAULT_RASTER_DPI` (200). See D7 in
+    /// `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
+    pub raster_dpi: Option<u16>,
     /// Shared across preflight analysis, optional L3 classification,
     /// conversion, page production and model dispatch.
     pub cancellation: crate::frontend::CancellationToken,
@@ -69,6 +73,7 @@ impl Default for ParseOptions {
             pages: None,
             assets_dir: None,
             no_assets: false,
+            raster_dpi: None,
             cancellation: crate::frontend::CancellationToken::default(),
         }
     }
@@ -194,6 +199,7 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         pages: options.pages.clone(),
         assets_dir: options.assets_dir.as_ref().map(std::path::PathBuf::from),
         no_assets: options.no_assets,
+        raster_dpi: options.raster_dpi,
         document_options: uparser_document_engine::ParseOptions::default(),
         cancellation: options.cancellation.clone(),
     };

@@ -1097,14 +1097,22 @@ fn line_semantic_category<'a>(
     struct_roles: Option<&'a HashMap<i64, StructRole>>,
 ) -> Option<(&'static str, &'static str)> {
     const PRIORITIES: &[(fn(&StructRole) -> bool, &str, &str)] = &[
-        (|role| matches!(role, StructRole::Formula), "Formula", "equation"),
+        (
+            |role| matches!(role, StructRole::Formula),
+            "Formula",
+            "equation",
+        ),
         (|role| matches!(role, StructRole::Note), "Note", "footnote"),
         (
             |role| matches!(role, StructRole::Reference | StructRole::BibEntry),
             "Reference",
             "reference",
         ),
-        (|role| matches!(role, StructRole::Caption), "Caption", "caption"),
+        (
+            |role| matches!(role, StructRole::Caption),
+            "Caption",
+            "caption",
+        ),
         (|role| matches!(role, StructRole::Code), "Code", "code"),
         (
             |role| matches!(role, StructRole::LI | StructRole::Lbl | StructRole::LBody),
@@ -1617,9 +1625,11 @@ mod tests {
             &HashMap::from([(1, [300.0, 500.0])]),
         );
         assert_eq!(pages[0].blocks[0].category.as_deref(), Some("equation"));
-        assert!(pages[0].blocks[0]
-            .confidence
-            .is_some_and(|value| value >= 0.8));
+        assert!(
+            pages[0].blocks[0]
+                .confidence
+                .is_some_and(|value| value >= 0.8)
+        );
     }
 
     #[test]
@@ -1663,10 +1673,12 @@ mod tests {
             &HashMap::from([(1, [320.0, 500.0])]),
         );
         assert_eq!(pages[0].blocks.len(), 3);
-        assert!(pages[0]
-            .blocks
-            .iter()
-            .all(|block| block.category.as_deref() == Some("text")));
+        assert!(
+            pages[0]
+                .blocks
+                .iter()
+                .all(|block| block.category.as_deref() == Some("text"))
+        );
 
         let mut math_font_prose = vec![
             text_item("where", 50.0, 200.0, 35.0, 1, ItemType::Text),

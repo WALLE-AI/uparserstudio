@@ -1,0 +1,97 @@
+{
+  "date": "2026-08-25",
+  "engine": "uparser-pipeline-v2",
+  "model_stack": {
+    "layout": "DocLayout-YOLO",
+    "formula_detection": "YOLOv8-MFD",
+    "ocr": "PaddleOCR legacy supplied weights",
+    "formula_recognition": "UniMERNet-small",
+    "table": "SLANet-plus wireless-only",
+    "reading_order": "LayoutReader"
+  },
+  "opendataloader_bench": {
+    "dataset_documents": 200,
+    "success": 200,
+    "failures": 0,
+    "elapsed_per_document_seconds": 0.970611773468554,
+    "pipeline_v2": {
+      "overall": 0.8001216306267581,
+      "nid": 0.8327936450330239,
+      "nid_s": 0.8148412220212277,
+      "teds": 0.8363680660457365,
+      "teds_s": 0.916391134270151,
+      "mhs": 0.7000047960309064,
+      "mhs_s": 0.8742061837614529
+    },
+    "official_mineru_2_7_0": {
+      "overall": 0.8311354224973181,
+      "nid": 0.8573619799638795,
+      "nid_s": 0.8527225280954283,
+      "teds": 0.8729915402457293,
+      "teds_s": 0.9036969993695168,
+      "mhs": 0.7429826268920451,
+      "mhs_s": 0.8536245495082768,
+      "processor": "Apple M4",
+      "elapsed_per_document_seconds": 5.961503773927689
+    },
+    "delta_vs_official": {
+      "overall": -0.03101379187055997,
+      "nid": -0.02456833493085564,
+      "nid_s": -0.037881306074200594,
+      "teds": -0.03662347419999279,
+      "teds_s": 0.012694134900634202,
+      "mhs": -0.04297783086113871,
+      "mhs_s": 0.02058163425317605
+    },
+    "evaluation_sha256": "abed4e0783c7b47551b6ebfc437ae47592ae5022019db366e089d38919ff1673"
+  },
+  "omnidocbench": {
+    "evaluator_version": "1.7",
+    "evaluator_commit": "193627ae9e97d89188468ed1ee3b7a856ff76044",
+    "dataset_pages": 1651,
+    "prediction_success": 1651,
+    "prediction_failures": 0,
+    "whitespace_only_predictions": 60,
+    "generation_wall_seconds": 3866.4179720431566,
+    "generation_seconds_per_page": 2.3424699951805915,
+    "pipeline_v2": {
+      "overall": 75.7789386306146,
+      "text_edit": 0.19080374595461308,
+      "formula_cdm": 73.3099235262825,
+      "table_teds": 73.1072669610226,
+      "table_teds_s": 84.74751659972208,
+      "reading_order_edit": 0.29476961772578947
+    },
+    "official_mineru_pipeline": {
+      "overall": 86.47,
+      "text_edit": 0.055,
+      "formula_cdm": 83.07,
+      "table_teds": 81.88,
+      "table_teds_s": 88.68,
+      "reading_order_edit": 0.153
+    },
+    "delta_vs_official": {
+      "overall_points": -10.6910613693854,
+      "text_edit": 0.13580374595461308,
+      "formula_cdm_points": -9.7600764737175,
+      "table_teds_points": -8.7727330389774,
+      "table_teds_s_points": -3.93248340027792,
+      "reading_order_edit": 0.14176961772578947
+    },
+    "evaluation_health": {
+      "page_match_fallbacks": 2,
+      "formula_samples": 2352,
+      "formula_timeouts": 0,
+      "formula_errors": 0,
+      "formula_exceptions": 0,
+      "table_samples": 665,
+      "table_timeouts": 0,
+      "table_errors": 0,
+      "table_exceptions": 0
+    },
+    "runtime_variation": "Official v1.7 scorer and algorithms; local TeX Live plus pdftocairo was used instead of the official ImageMagick/Ghostscript raster environment.",
+    "metric_result_sha256": "5e5f489ba668baffe77e6f0a8e78ca3279b20aec361ecd5156debf43aa98335b",
+    "run_summary_sha256": "33b3a16edb33c749d0ff20d9d15f6c3a4e37c0a4b887cc9cc9a45bf263ec7aa8"
+  },
+  "verdict": "The current Pipeline V2 stack is complete and reproducible, but its accuracy is below the official MinerU pipeline on both benchmarks."
+}

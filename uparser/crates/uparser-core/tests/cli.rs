@@ -670,7 +670,8 @@ fn mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial() 
         page_errors[0]["message"]
             .as_str()
             .unwrap()
-            .contains("127.0.0.1:1")
+            .contains("127.0.0.1:1"),
+        "unexpected pipeline error: {page_errors:#?}"
     );
 }
 
@@ -816,7 +817,8 @@ fn pipeline_with_overridden_layout_endpoint_surfaces_connection_failure_as_parti
         page_errors[0]["message"]
             .as_str()
             .unwrap()
-            .contains("127.0.0.1:1")
+            .contains("127.0.0.1:1"),
+        "unexpected pipeline error: {page_errors:#?}"
     );
 }
 
@@ -1075,10 +1077,10 @@ fn doctor_unknown_protocol_is_a_structured_usage_error() {
     assert_eq!(parsed["error"]["protocol"], "not-a-protocol");
 }
 
-/// T-9.3: `doctor pipeline` reports a local resource advisory, not an
-/// endpoint reachability probe.
+/// T-9.3: Pipeline V2 has no local model runtime, so doctor probes the
+/// model-service health endpoint.
 #[test]
-fn doctor_pipeline_reports_local_resource_advisory() {
+fn doctor_pipeline_probes_the_model_service() {
     let output = Command::cargo_bin("uparser")
         .unwrap()
         .args(["doctor", "pipeline"])
@@ -1089,8 +1091,8 @@ fn doctor_pipeline_reports_local_resource_advisory() {
         .clone();
     let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(parsed["protocol"], "pipeline");
-    assert!(parsed["local_cpu_cores"].as_u64().unwrap() > 0);
-    assert!(parsed.get("advice").is_some());
+    assert_eq!(parsed["endpoint"], "http://localhost:9001/health");
+    assert!(parsed["reachable"].is_boolean());
 }
 
 /// T-9.3: `doctor` against a refused port reports `reachable: false`

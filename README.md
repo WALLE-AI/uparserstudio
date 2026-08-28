@@ -190,7 +190,7 @@ uparserstudio/
 | (default) | 仅编译 mock 及需外置端点的协议 | 全绿、无需网络 |
 | `native` | 启用零模型 `native` 协议(拉入 `uparser-native-engine` 的 PDF 引擎 + `uparser-document-engine` 的多格式引擎) | 纯 Rust,`uparser-document-engine` 部分无 PDFium 下载 |
 | `pdfium` | 页面光栅化(VLM/OCR 协议所需),经 `liteparse-pdfium` | 首次构建从 GitHub 下载 PDFium 二进制 |
-| `pipeline-local-table` | `pipeline` 协议的本地 ONNX 表格推理(`ort`) | 需 glibc ≥ 2.38 |
+| `pipeline-local-table` | 仅供 legacy V1 adapter 的本地 ONNX 表格实验 | Pipeline V2 生产链不启用；全部模型留在模型服务 |
 
 ### 构建 / 测试 / lint(在 `uparser/` 下)
 

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 pub enum StageKind {
     Preprocess,
     Layout,
+    FormulaDetect,
     Formula,
     Ocr,
     Table,
@@ -22,6 +23,11 @@ pub enum StageKind {
 pub enum StageData {
     PageImage,
     Regions,
+    LayoutRegions,
+    FormulaRegions,
+    OcrSpans,
+    FormulaSpans,
+    TableRegions,
     RecognizedRegions,
     OrderedBlocks,
 }
@@ -276,6 +282,108 @@ pub const PIPELINE_STAGE_GRAPH: StageGraph = StageGraph {
     terminal: StageData::OrderedBlocks,
 };
 
+const PIPELINE_V2_NODES: &[StageNode] = &[
+    StageNode {
+        name: "layout",
+        kind: StageKind::Layout,
+        enabled: true,
+        depends_on: &[],
+        accepts: &[StageData::PageImage],
+        produces: StageData::LayoutRegions,
+        on_failure: FailurePolicy::AbortPage,
+        ocr_input: OcrInput::NotApplicable,
+    },
+    StageNode {
+        name: "formula_detect",
+        kind: StageKind::FormulaDetect,
+        enabled: true,
+        depends_on: &[],
+        accepts: &[StageData::PageImage],
+        produces: StageData::FormulaRegions,
+        on_failure: FailurePolicy::IsolateRegion,
+        ocr_input: OcrInput::NotApplicable,
+    },
+    StageNode {
+        name: "ocr",
+        kind: StageKind::Ocr,
+        enabled: true,
+        depends_on: &["layout", "formula_detect"],
+        accepts: &[StageData::LayoutRegions, StageData::FormulaRegions],
+        produces: StageData::OcrSpans,
+        on_failure: FailurePolicy::IsolateRegion,
+        ocr_input: OcrInput::NotApplicable,
+    },
+    StageNode {
+        name: "formula_recognize",
+        kind: StageKind::Formula,
+        enabled: true,
+        depends_on: &["formula_detect"],
+        accepts: &[StageData::FormulaRegions],
+        produces: StageData::FormulaSpans,
+        on_failure: FailurePolicy::IsolateRegion,
+        ocr_input: OcrInput::NotApplicable,
+    },
+    StageNode {
+        name: "table",
+        kind: StageKind::Table,
+        enabled: true,
+        depends_on: &["layout", "ocr", "formula_recognize"],
+        accepts: &[
+            StageData::LayoutRegions,
+            StageData::OcrSpans,
+            StageData::FormulaSpans,
+        ],
+        produces: StageData::TableRegions,
+        on_failure: FailurePolicy::IsolateRegion,
+        ocr_input: OcrInput::External,
+    },
+    StageNode {
+        name: "assemble",
+        kind: StageKind::Assemble,
+        enabled: true,
+        depends_on: &[
+            "layout",
+            "formula_detect",
+            "ocr",
+            "formula_recognize",
+            "table",
+        ],
+        accepts: &[
+            StageData::LayoutRegions,
+            StageData::FormulaRegions,
+            StageData::OcrSpans,
+            StageData::FormulaSpans,
+            StageData::TableRegions,
+        ],
+        produces: StageData::RecognizedRegions,
+        on_failure: FailurePolicy::AbortPage,
+        ocr_input: OcrInput::NotApplicable,
+    },
+    StageNode {
+        name: "order",
+        kind: StageKind::Order,
+        enabled: true,
+        depends_on: &["assemble"],
+        accepts: &[StageData::RecognizedRegions],
+        produces: StageData::OrderedBlocks,
+        on_failure: FailurePolicy::AbortPage,
+        ocr_input: OcrInput::NotApplicable,
+    },
+];
+
+pub const PIPELINE_V2_STAGE_GRAPH: StageGraph = StageGraph {
+    source: StageData::PageImage,
+    nodes: PIPELINE_V2_NODES,
+    required: &[
+        StageKind::Layout,
+        StageKind::FormulaDetect,
+        StageKind::Ocr,
+        StageKind::Assemble,
+        StageKind::Order,
+    ],
+    terminal: StageData::OrderedBlocks,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +417,19 @@ mod tests {
         assert!(position("formula") < position("assemble"));
         assert!(position("table") < position("assemble"));
         assert!(position("assemble") < position("order"));
+    }
+
+    #[test]
+    fn pipeline_v2_graph_models_formula_detection_and_external_table_ocr() {
+        let resolved = PIPELINE_V2_STAGE_GRAPH.resolve().unwrap();
+        let position = |name| resolved.iter().position(|node| node.name == name).unwrap();
+        assert!(position("formula_detect") < position("ocr"));
+        assert!(position("formula_detect") < position("formula_recognize"));
+        assert!(position("ocr") < position("table"));
+        assert!(position("formula_recognize") < position("table"));
+        assert!(position("table") < position("assemble"));
+        let table = resolved.iter().find(|node| node.name == "table").unwrap();
+        assert_eq!(table.ocr_input, OcrInput::External);
     }
 
     #[test]

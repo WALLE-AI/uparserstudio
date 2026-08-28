@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-08-25",
+  "model": "MinerU2.5-Pro-2605-1.2B",
+  "uparser_version": "0.4.0-rc.1",
+  "comparison_scope": "Accuracy comparison of benchmark outputs. OpenDataLoader official MinerU uses a different product path and hardware; OmniDocBench uses the same named model family but the local CDM runtime is not the official Docker image.",
+  "omnidocbench": {
+    "dataset_pages": 1651,
+    "evaluator_version": "v1.7",
+    "evaluator_commit": "193627ae9e97d89188468ed1ee3b7a856ff76044",
+    "prediction_run": "architecture-v2-20260821",
+    "leaderboard_metrics": {
+      "overall": 91.42508225977524,
+      "text_edit_distance": 0.06995988889004076,
+      "formula_cdm": 88.84330079639543,
+      "table_teds": 92.42793487193435,
+      "table_teds_structure_only": 95.24485130422347,
+      "reading_order_edit_distance": 0.13613147301990428
+    },
+    "sample_aggregate_metrics": {
+      "formula_edit_distance": 0.1025847052424768,
+      "table_teds": 0.9060678709579757,
+      "table_teds_structure_only": 0.937462945702463,
+      "table_edit_distance": 0.06803519201317196
+    },
+    "official_mineru25_pro": {
+      "model_size": "1.2B",
+      "leaderboard_dataset_label": "OmniDocBench v1.6_full",
+      "overall": 95.75,
+      "text_edit_distance": 0.036,
+      "formula_cdm": 97.45,
+      "table_teds": 93.42,
+      "table_teds_structure_only": 95.92,
+      "reading_order_edit_distance": 0.12,
+      "source": "https://github.com/opendatalab/OmniDocBench"
+    },
+    "delta_vs_official_mineru25_pro": {
+      "overall": -4.3249177402247625,
+      "text_edit_distance": 0.033959888890040764,
+      "formula_cdm": -8.606699203604578,
+      "table_teds": -0.9920651280656472,
+      "table_teds_structure_only": -0.675148695776528,
+      "reading_order_edit_distance": 0.01613147301990428
+    },
+    "evaluation_health": {
+      "page_match_workers": 24,
+      "page_timeout_fallbacks": 1,
+      "quick_match_timeout_fallbacks": 0,
+      "formula_samples": 2352,
+      "formula_timeouts": 0,
+      "formula_errors": 0,
+      "formula_exceptions": 0,
+      "table_samples": 665,
+      "table_timeouts": 0,
+      "table_errors": 0,
+      "table_exceptions": 0
+    },
+    "runtime_caveat": "The public leaderboard labels its dataset v1.6_full, while the local 1,651-page data is evaluated with the v1.7 code at the recorded commit. CDM uses the official algorithm with a local TeX Live 2022 and pdftocairo compatibility path. Missing Euler bitmap-font warnings were emitted, although CDM completed with zero timeout, error, and exception cases.",
+    "artifacts": {
+      "metric_result": "benchmark/OmniDocBench/result/architecture-v2-20260821_quick_match_metric_result.json",
+      "metric_result_sha256": "028e4a3edffeaa40844a261c5cb28b34383f8810d32bf19b458a0647fe1d728e",
+      "run_summary": "benchmark/OmniDocBench/result/architecture-v2-20260821_quick_match_run_summary.json",
+      "run_summary_sha256": "60eb815075ae957edcb5e595f23a387fa18917d54380f44355f5522e1eee50c2"
+    }
+  },
+  "opendataloader_bench": {
+    "dataset_documents": 200,
+    "prediction_run": "uparser-mineru-vlm-v2",
+    "metrics": {
+      "overall_mean": 0.9239777374183431,
+      "nid_mean": 0.9433099491384414,
+      "nid_s_mean": 0.9442791644092523,
+      "teds_mean": 0.9682281233189359,
+      "teds_s_mean": 0.9739579712174097,
+      "mhs_mean": 0.8672139565731531,
+      "mhs_s_mean": 0.923655186972944
+    },
+    "official_mineru_270": {
+      "overall_mean": 0.8311354224973181,
+      "nid_mean": 0.8573619799638795,
+      "nid_s_mean": 0.8527225280954283,
+      "teds_mean": 0.8729915402457293,
+      "teds_s_mean": 0.9036969993695168,
+      "mhs_mean": 0.7429826268920451,
+      "mhs_s_mean": 0.8536245495082768,
+      "elapsed_per_doc": 5.961503773927689,
+      "processor": "Apple M4",
+      "source": "https://github.com/opendataloader-project/opendataloader-bench"
+    },
+    "delta_vs_official_mineru_270": {
+      "overall_mean": 0.09284231492102502,
+      "nid_mean": 0.08594796917456182,
+      "nid_s_mean": 0.09155663631382405,
+      "teds_mean": 0.0952365830732066,
+      "teds_s_mean": 0.07026097184789293,
+      "mhs_mean": 0.12423132968110806,
+      "mhs_s_mean": 0.0700306374646672
+    },
+    "local_elapsed_per_doc": 0.6208099973201752,
+    "comparison_caveat": "The local result uses uparser plus MinerU2.5-Pro-2605-1.2B on an A100 service, while the published MinerU 2.7 result is a pipeline run on Apple M4. Accuracy scores are comparable benchmark outputs; wall-clock speed and framework uplift are not directly attributable.",
+    "artifacts": {
+      "local_evaluation": "opensource/opendataloader-bench/prediction/uparser-mineru-vlm-v2/evaluation.json",
+      "local_evaluation_sha256": "b9905a08b1cff0c040dd68d562036d51ce1c7fab3f7953778d134bc6703ac56f",
+      "official_evaluation": "opensource/opendataloader-bench/prediction/mineru/evaluation.json",
+      "official_evaluation_sha256": "b164486126889ee333e28d1f7a611891fe40bc944b9efc4fa7a7efeb3dbd2c27"
+    }
+  },
+  "release_conclusion": "uparser MinerU-VLM exceeds the published MinerU 2.7 pipeline result on all OpenDataLoader accuracy aggregates, but trails the official MinerU2.5-Pro OmniDocBench result. The largest OmniDocBench gap is formula CDM, so V2 cannot be described as an overall accuracy improvement over the official model result."
+}

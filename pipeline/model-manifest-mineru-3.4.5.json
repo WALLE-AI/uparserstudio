@@ -1,0 +1,60 @@
+{
+  "profile": "mineru-3.4.5",
+  "reference_pipeline": {
+    "root": "/home/dataset1/gaojing/llm/uparserstudio/opensource/MinerU",
+    "version": "3.4.5",
+    "git_commit": "4fe4bde114a23ee5dd637eae99b767f4669bf58c"
+  },
+  "config": "/home/dataset1/gaojing/mineru.json",
+  "models_root": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models",
+  "assets": [
+    {
+      "logical_model": "layout",
+      "name": "PP-DocLayoutV2",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/Layout/PP-DocLayoutV2/model.safetensors",
+      "sha256": "e60f3725aeedc88fd319416ef166bda79171a41516a301c27cab9132dc2739d2"
+    },
+    {
+      "logical_model": "formula_recognition_comparison",
+      "name": "UniMERNet-small-2503",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/MFR/unimernet_hf_small_2503/model.safetensors",
+      "sha256": "9244e2565585c0f89bc3a6eeeea080ef3c588375fc0d536074fe88e80b917cda"
+    },
+    {
+      "logical_model": "formula_recognition_default",
+      "name": "PP-FormulaNet-plus-M",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/MFR/pp_formulanet_plus_m/PP-FormulaNet_plus-M.pth",
+      "sha256": "034efee70ef56d8ab7cf3b9b945865cdaf22461ad03b0f6e68bf9234f167f035"
+    },
+    {
+      "logical_model": "ocr_detection",
+      "name": "PP-OCRv6-small-det",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/OCR/paddleocr_torch/ch_PP-OCRv6_small_det_infer.safetensors",
+      "sha256": "89a96a8adc4e9cd0c994098edc76022e496d35844392562b4694c8fbc583f2da"
+    },
+    {
+      "logical_model": "ocr_recognition",
+      "name": "PP-OCRv6-small-rec",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/OCR/paddleocr_torch/ch_PP-OCRv6_small_rec_infer.safetensors",
+      "sha256": "f65a332afe5aa663f0b9d5706f4ae8457b5b4058a842d5c1eb22df505c27d642"
+    },
+    {
+      "logical_model": "table_classifier",
+      "name": "PP-LCNet-table-cls",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/TabCls/paddle_table_cls/PP-LCNet_x1_0_table_cls.onnx",
+      "sha256": "c84bf1d79c1c74d534b5b12adb14dd12151c42f7ae3e4be4f1042b830f80b949"
+    },
+    {
+      "logical_model": "table_wireless",
+      "name": "SLANet-plus",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/TabRec/SlanetPlus/slanet-plus.onnx",
+      "sha256": "d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b"
+    },
+    {
+      "logical_model": "table_wired",
+      "name": "UnetStructure",
+      "path": "/home/dataset1/gaojing/.cache/modelscope/hub/models/OpenDataLab/PDF-Extract-Kit-1___0/models/TabRec/UnetStructure/unet.onnx",
+      "sha256": "0ea48d3a17e35ef5c2e498a5e799566073234d39b1079ca21d9f4fafe73c6d20"
+    }
+  ]
+}

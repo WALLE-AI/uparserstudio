@@ -16,6 +16,13 @@ use tokio::sync::Semaphore;
 
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Default PDF rasterization DPI for visual-page protocols, matching
+/// MinerU's own `DEFAULT_PDF_IMAGE_DPI` (`opensource/MinerU/mineru/utils/pdf_image_tools.py`).
+/// Previously hardcoded to `150` here — a 25% lower linear resolution
+/// than what OCR/table/formula models are tuned against — with no way to
+/// override it. See D7 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
+pub const DEFAULT_RASTER_DPI: u16 = 200;
+
 pub enum AnalysisArtifacts {
     None,
     Structured(uparser_document_engine::CanonicalDocument),
@@ -89,6 +96,12 @@ pub struct ExecutionOptions {
     pub pages: Option<Vec<u32>>,
     pub assets_dir: Option<PathBuf>,
     pub no_assets: bool,
+    /// Overrides `PreprocessPlan::raster_dpi` for visual-page protocols
+    /// when set. `None` (the default) uses the plan's own DPI, which for
+    /// PDF/converted-structured inputs is `DEFAULT_RASTER_DPI`. Has no
+    /// effect on `native`/already-image inputs, which don't rasterize at
+    /// all. See D7 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
+    pub raster_dpi: Option<u16>,
     pub document_options: uparser_document_engine::ParseOptions,
     pub cancellation: crate::frontend::CancellationToken,
 }
@@ -106,6 +119,7 @@ impl Default for ExecutionOptions {
             pages: None,
             assets_dir: None,
             no_assets: false,
+            raster_dpi: None,
             document_options: uparser_document_engine::ParseOptions::default(),
             cancellation: crate::frontend::CancellationToken::default(),
         }
@@ -346,7 +360,10 @@ pub async fn execute_with_hooks(
     }
     let mut page_source = materialize_page_source(
         &source,
-        plan.preprocess.raster_dpi.unwrap_or(150),
+        options
+            .raster_dpi
+            .or(plan.preprocess.raster_dpi)
+            .unwrap_or(DEFAULT_RASTER_DPI),
         options.pages.as_deref(),
         options.cancellation.clone(),
     )
@@ -1376,7 +1393,7 @@ pub fn preprocess_plan(
         (
             InputChannel::VisualPages,
             ConversionPlan::None,
-            Some(150),
+            Some(DEFAULT_RASTER_DPI),
             vec!["sampled_pages".to_owned()],
         )
     } else if matches!(format, DocumentFormat::Png | DocumentFormat::Jpeg) {
@@ -1390,7 +1407,7 @@ pub fn preprocess_plan(
         (
             InputChannel::VisualPages,
             ConversionPlan::LibreOfficeToPdf,
-            Some(150),
+            Some(DEFAULT_RASTER_DPI),
             vec!["canonical_source_document".to_owned()],
         )
     } else {
@@ -1683,6 +1700,46 @@ mod tests {
         let plan = preprocess_plan(DocumentFormat::Docx, &profile, "mineru-vlm").unwrap();
         assert_eq!(plan.conversion, ConversionPlan::LibreOfficeToPdf);
         assert_eq!(plan.input_channel, InputChannel::VisualPages);
+    }
+
+    /// D7: PDF and converted-structured-document plans default to
+    /// `DEFAULT_RASTER_DPI` (200, matching MinerU's own
+    /// `DEFAULT_PDF_IMAGE_DPI`), not the previous hardcoded 150 — a 25%
+    /// lower linear resolution than what OCR/table/formula models are
+    /// tuned against. See `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
+    #[test]
+    fn visual_page_plans_default_to_200_dpi_matching_mineru() {
+        let pdf_profile = crate::profiler::profile_l1(DocumentFormat::Pdf);
+        let pdf_plan = preprocess_plan(DocumentFormat::Pdf, &pdf_profile, "mineru-vlm").unwrap();
+        assert_eq!(pdf_plan.raster_dpi, Some(DEFAULT_RASTER_DPI));
+        assert_eq!(DEFAULT_RASTER_DPI, 200);
+
+        let docx_profile = crate::profiler::profile_l1(DocumentFormat::Docx);
+        let docx_plan = preprocess_plan(DocumentFormat::Docx, &docx_profile, "mineru-vlm").unwrap();
+        assert_eq!(docx_plan.raster_dpi, Some(DEFAULT_RASTER_DPI));
+    }
+
+    /// D7: `execute`'s DPI precedence is `options.raster_dpi` (an
+    /// explicit `--raster-dpi`/`ParseOptions::raster_dpi` override) first,
+    /// then the plan's own `raster_dpi`, then `DEFAULT_RASTER_DPI` as a
+    /// last-resort fallback. This test exercises the exact expression
+    /// `execute` uses (`options.raster_dpi.or(plan.preprocess.raster_dpi)
+    /// .unwrap_or(DEFAULT_RASTER_DPI)`) directly, since driving it through
+    /// a full `execute()` call would require a real PDF fixture and the
+    /// `pdfium` feature (not available offline here) just to observe a
+    /// DPI difference in the rasterized output.
+    #[test]
+    fn raster_dpi_precedence_prefers_override_then_plan_then_default() {
+        fn effective(override_dpi: Option<u16>, plan_dpi: Option<u16>) -> u16 {
+            override_dpi.or(plan_dpi).unwrap_or(DEFAULT_RASTER_DPI)
+        }
+
+        assert_eq!(effective(Some(96), Some(DEFAULT_RASTER_DPI)), 96);
+        assert_eq!(
+            effective(None, Some(DEFAULT_RASTER_DPI)),
+            DEFAULT_RASTER_DPI
+        );
+        assert_eq!(effective(None, None), DEFAULT_RASTER_DPI);
     }
 
     #[tokio::test]
