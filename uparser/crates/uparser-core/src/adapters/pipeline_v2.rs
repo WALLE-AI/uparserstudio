@@ -13,11 +13,14 @@ use crate::ingest::RenderedPage;
 use crate::types::{
     Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, PageError,
 };
+use crate::{pipeline_formula, pipeline_layout, pipeline_ocr, pipeline_table, tensor_wire};
 use async_trait::async_trait;
 use base64::Engine as _;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub const PIPELINE_V2_SCHEMA_VERSION: &str = "uparser.pipeline.v2";
@@ -438,10 +441,18 @@ impl<T> BatchResponse<T> {
 pub struct PipelineV2Adapter {
     pub endpoint_base: String,
     pub layout_endpoint: String,
+    pub bare_layout_endpoint: Option<String>,
     pub formula_detection_endpoint: String,
     pub ocr_endpoint: String,
+    pub bare_ocr_endpoint_base: Option<String>,
+    pub ocr_dictionary_path: Option<String>,
+    ocr_dictionary: OnceLock<Result<pipeline_ocr::CtcDictionary, String>>,
     pub formula_recognition_endpoint: String,
+    pub bare_formula_endpoint: Option<String>,
+    pub formula_tokenizer_path: Option<String>,
+    formula_decoder: OnceLock<Result<pipeline_formula::FormulaDecoder, String>>,
     pub table_endpoint: String,
+    pub bare_table_endpoint_base: Option<String>,
     pub language: String,
     pub timeout: Duration,
     pub max_retries: u32,
@@ -460,10 +471,18 @@ impl PipelineV2Adapter {
         Self {
             endpoint_base: base.clone(),
             layout_endpoint: format!("{base}/v2/pipeline/layout:batch"),
+            bare_layout_endpoint: None,
             formula_detection_endpoint: format!("{base}/v2/pipeline/mfd:batch"),
             ocr_endpoint: format!("{base}/v2/pipeline/ocr:batch"),
+            bare_ocr_endpoint_base: None,
+            ocr_dictionary_path: None,
+            ocr_dictionary: OnceLock::new(),
             formula_recognition_endpoint: format!("{base}/v2/pipeline/mfr:batch"),
+            bare_formula_endpoint: None,
+            formula_tokenizer_path: None,
+            formula_decoder: OnceLock::new(),
             table_endpoint: format!("{base}/v2/pipeline/table:batch"),
+            bare_table_endpoint_base: None,
             language: "ch".to_owned(),
             timeout: Duration::from_secs(180),
             max_retries: 2,
@@ -474,15 +493,26 @@ impl PipelineV2Adapter {
         let replacement = Self::from_endpoint_base(endpoint_base);
         self.endpoint_base = replacement.endpoint_base;
         self.layout_endpoint = replacement.layout_endpoint;
+        self.bare_layout_endpoint = replacement.bare_layout_endpoint;
         self.formula_detection_endpoint = replacement.formula_detection_endpoint;
         self.ocr_endpoint = replacement.ocr_endpoint;
+        self.bare_ocr_endpoint_base = replacement.bare_ocr_endpoint_base;
+        self.ocr_dictionary_path = replacement.ocr_dictionary_path;
+        self.ocr_dictionary = OnceLock::new();
         self.formula_recognition_endpoint = replacement.formula_recognition_endpoint;
+        self.bare_formula_endpoint = replacement.bare_formula_endpoint;
+        self.formula_tokenizer_path = replacement.formula_tokenizer_path;
+        self.formula_decoder = OnceLock::new();
         self.table_endpoint = replacement.table_endpoint;
+        self.bare_table_endpoint_base = replacement.bare_table_endpoint_base;
     }
 
     pub fn apply_config(&mut self, config: &PipelineConfig) {
         if let Some(endpoint) = &config.layout_endpoint {
             self.layout_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.bare_layout_endpoint {
+            self.bare_layout_endpoint = Some(endpoint.clone());
         }
         if let Some(endpoint) = &config.formula_detection_endpoint {
             self.formula_detection_endpoint = endpoint.clone();
@@ -490,11 +520,28 @@ impl PipelineV2Adapter {
         if let Some(endpoint) = &config.ocr_endpoint {
             self.ocr_endpoint = endpoint.clone();
         }
+        if let Some(endpoint) = &config.bare_ocr_endpoint_base {
+            self.bare_ocr_endpoint_base = Some(endpoint.trim_end_matches('/').to_owned());
+        }
+        if let Some(path) = &config.ocr_dictionary_path {
+            self.ocr_dictionary_path = Some(path.clone());
+            self.ocr_dictionary = OnceLock::new();
+        }
         if let Some(endpoint) = &config.formula_endpoint {
             self.formula_recognition_endpoint = endpoint.clone();
         }
+        if let Some(endpoint) = &config.bare_formula_endpoint {
+            self.bare_formula_endpoint = Some(endpoint.clone());
+        }
+        if let Some(path) = &config.formula_tokenizer_path {
+            self.formula_tokenizer_path = Some(path.clone());
+            self.formula_decoder = OnceLock::new();
+        }
         if let Some(endpoint) = &config.table_endpoint {
             self.table_endpoint = endpoint.clone();
+        }
+        if let Some(endpoint) = &config.bare_table_endpoint_base {
+            self.bare_table_endpoint_base = Some(endpoint.trim_end_matches('/').to_owned());
         }
         if let Some(language) = &config.language {
             self.language = language.clone();
@@ -555,6 +602,464 @@ impl PipelineV2Adapter {
         Ok(result)
     }
 
+    async fn dispatch_bare_layout(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint: &str,
+    ) -> Result<(LayoutResult, FormulaDetectionResult), PageError> {
+        let (inputs, original) = pipeline_layout::preprocess(&page.png_bytes, 800, 800)
+            .map_err(|error| page_error(page, "layout_preprocess", error.to_string()))?;
+        if original != (page.width, page.height) {
+            return Err(page_error(
+                page,
+                "layout_preprocess",
+                format!(
+                    "decoded image dimensions {original:?} differ from rendered page {}x{}",
+                    page.width, page.height
+                ),
+            ));
+        }
+        let body = tensor_wire::encode(&inputs)
+            .map_err(|error| page_error(page, "layout_preprocess", error.to_string()))?;
+        let _permit = ctx.acquire_permit().await;
+        let response = ctx
+            .dispatch_binary(endpoint, body, self.timeout, self.max_retries)
+            .await
+            .map_err(|error| page_error(page, "layout_forward", error.to_string()))?;
+        let outputs = tensor_wire::decode(&response)
+            .map_err(|error| page_error(page, "layout_decode", error.to_string()))?;
+        let detections = pipeline_layout::decode(&outputs, page.width, page.height, 0.45)
+            .map_err(|error| page_error(page, "layout_decode", error.to_string()))?;
+
+        let page_id = format!("page-{}", page.page_num);
+        let regions: Vec<Region> = detections
+            .into_iter()
+            .enumerate()
+            .map(|(index, detection)| Region {
+                region_id: format!("{page_id}/layout-{index}"),
+                label: detection.label.to_owned(),
+                bbox: detection.bbox,
+                polygon: None,
+                confidence: Some(detection.score.clamp(0.0, 1.0)),
+                coordinate_space: CoordinateSpace::RenderPixels,
+            })
+            .collect();
+        let formulas = regions
+            .iter()
+            .filter(|region| matches!(region.label.as_str(), "inline_formula" | "display_formula"))
+            .cloned()
+            .collect();
+        Ok((
+            LayoutResult { regions },
+            FormulaDetectionResult { regions: formulas },
+        ))
+    }
+
+    async fn dispatch_bare_formula(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint: &str,
+        regions: &[Region],
+    ) -> Result<FormulaRecognitionResult, PageError> {
+        if regions.is_empty() {
+            return Ok(FormulaRecognitionResult { spans: vec![] });
+        }
+        let tokenizer_path = self.formula_tokenizer_path.as_deref().ok_or_else(|| {
+            page_error(
+                page,
+                "formula_config",
+                "bare formula inference requires a formula tokenizer YAML path".to_owned(),
+            )
+        })?;
+        let decoder = self
+            .formula_decoder
+            .get_or_init(|| {
+                pipeline_formula::FormulaDecoder::from_inference_yaml(tokenizer_path)
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| page_error(page, "formula_config", error.clone()))?;
+
+        let image = image::load_from_memory(&page.png_bytes)
+            .map_err(|error| page_error(page, "formula_preprocess", error.to_string()))?
+            .to_rgb8();
+        let mut batch_data = Vec::with_capacity(regions.len() * 384 * 384 * 4);
+        for region in regions {
+            let [left, top, right, bottom] = region.bbox;
+            let left = left.floor().clamp(0.0, page.width as f32) as u32;
+            let top = top.floor().clamp(0.0, page.height as f32) as u32;
+            let right = right.ceil().clamp(0.0, page.width as f32) as u32;
+            let bottom = bottom.ceil().clamp(0.0, page.height as f32) as u32;
+            if right <= left || bottom <= top {
+                return Err(page_error(
+                    page,
+                    "formula_preprocess",
+                    format!("formula region {} has an empty crop", region.region_id),
+                ));
+            }
+            let crop =
+                image::imageops::crop_imm(&image, left, top, right - left, bottom - top).to_image();
+            let mut encoded = Vec::new();
+            image::DynamicImage::ImageRgb8(crop)
+                .write_to(&mut Cursor::new(&mut encoded), image::ImageFormat::Png)
+                .map_err(|error| page_error(page, "formula_preprocess", error.to_string()))?;
+            let input = pipeline_formula::preprocess(&encoded)
+                .map_err(|error| page_error(page, "formula_preprocess", error.to_string()))?;
+            batch_data.extend_from_slice(&input.tensors[0].data);
+        }
+        let inputs = tensor_wire::TensorBundle {
+            metadata: Default::default(),
+            tensors: vec![tensor_wire::Tensor {
+                name: "pixel_values".to_owned(),
+                dtype: tensor_wire::TensorDType::F32,
+                shape: vec![regions.len(), 1, 384, 384],
+                data: batch_data,
+            }],
+        };
+        let body = tensor_wire::encode(&inputs)
+            .map_err(|error| page_error(page, "formula_preprocess", error.to_string()))?;
+        let _permit = ctx.acquire_permit().await;
+        let response = ctx
+            .dispatch_binary(endpoint, body, self.timeout, self.max_retries)
+            .await
+            .map_err(|error| page_error(page, "formula_forward", error.to_string()))?;
+        let outputs = tensor_wire::decode(&response)
+            .map_err(|error| page_error(page, "formula_decode", error.to_string()))?;
+        let latex = decoder
+            .decode(&outputs)
+            .map_err(|error| page_error(page, "formula_decode", error.to_string()))?;
+        if latex.len() != regions.len() {
+            return Err(page_error(
+                page,
+                "formula_decode",
+                format!(
+                    "model returned {} formulas for {} regions",
+                    latex.len(),
+                    regions.len()
+                ),
+            ));
+        }
+        Ok(FormulaRecognitionResult {
+            spans: regions
+                .iter()
+                .zip(latex)
+                .map(|(region, latex)| FormulaSpan {
+                    region_id: region.region_id.clone(),
+                    latex,
+                    confidence: None,
+                    bbox: Some(region.bbox),
+                })
+                .collect(),
+        })
+    }
+
+    async fn dispatch_bare_ocr(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint_base: &str,
+        regions: &[Region],
+        formula_regions: &[Region],
+    ) -> Result<OcrResult, PageError> {
+        let dictionary_path = self.ocr_dictionary_path.as_deref().ok_or_else(|| {
+            page_error(
+                page,
+                "ocr_config",
+                "bare OCR requires a character dictionary path".to_owned(),
+            )
+        })?;
+        let dictionary = self
+            .ocr_dictionary
+            .get_or_init(|| {
+                pipeline_ocr::CtcDictionary::from_path(dictionary_path)
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| page_error(page, "ocr_config", error.clone()))?;
+        let image = image::load_from_memory(&page.png_bytes)
+            .map_err(|error| page_error(page, "ocr_preprocess", error.to_string()))?
+            .to_rgb8();
+        let detector_endpoint = format!("{endpoint_base}/v1/models/pp_ocrv6_det:infer");
+        let recognizer_endpoint = format!("{endpoint_base}/v1/models/pp_ocrv6_rec:infer");
+        let mut spans = Vec::new();
+        for region in regions.iter().filter(|region| {
+            !matches!(
+                region.label.as_str(),
+                "image" | "chart" | "table" | "inline_formula" | "display_formula"
+            )
+        }) {
+            let [left, top, right, bottom] = region.bbox;
+            let crop_left = left.floor().clamp(0.0, page.width as f32) as u32;
+            let crop_top = top.floor().clamp(0.0, page.height as f32) as u32;
+            let crop_right = right.ceil().clamp(0.0, page.width as f32) as u32;
+            let crop_bottom = bottom.ceil().clamp(0.0, page.height as f32) as u32;
+            if crop_right <= crop_left || crop_bottom <= crop_top {
+                continue;
+            }
+            let crop = image::imageops::crop_imm(
+                &image,
+                crop_left,
+                crop_top,
+                crop_right - crop_left,
+                crop_bottom - crop_top,
+            )
+            .to_image();
+            let detection_input = pipeline_ocr::preprocess_detection(&crop)
+                .map_err(|error| page_error(page, "ocr_preprocess", error.to_string()))?;
+            let detection_output = self
+                .dispatch_bare_tensor(
+                    page,
+                    ctx,
+                    &detector_endpoint,
+                    "ocr_detect_forward",
+                    &detection_input.tensors,
+                )
+                .await?;
+            let detections =
+                pipeline_ocr::decode_detection(&detection_output, crop.dimensions(), 0.3, 0.6, 1.5)
+                    .map_err(|error| page_error(page, "ocr_detect_decode", error.to_string()))?;
+            let mut kept = Vec::new();
+            let mut recognition_crops = Vec::new();
+            for detection in detections {
+                let page_points = detection
+                    .points
+                    .map(|point| [point[0] + crop_left as f32, point[1] + crop_top as f32]);
+                let center = [
+                    page_points.iter().map(|point| point[0]).sum::<f32>() / 4.0,
+                    page_points.iter().map(|point| point[1]).sum::<f32>() / 4.0,
+                ];
+                if formula_regions.iter().any(|formula| {
+                    center[0] >= formula.bbox[0]
+                        && center[0] <= formula.bbox[2]
+                        && center[1] >= formula.bbox[1]
+                        && center[1] <= formula.bbox[3]
+                }) {
+                    continue;
+                }
+                recognition_crops.push(
+                    pipeline_ocr::crop_detection(&crop, &detection)
+                        .map_err(|error| page_error(page, "ocr_crop", error.to_string()))?,
+                );
+                kept.push((detection, page_points));
+            }
+            if recognition_crops.is_empty() {
+                continue;
+            }
+            let recognition_input = pipeline_ocr::preprocess_recognition(&recognition_crops)
+                .map_err(|error| page_error(page, "ocr_preprocess", error.to_string()))?;
+            let recognition_output = self
+                .dispatch_bare_tensor(
+                    page,
+                    ctx,
+                    &recognizer_endpoint,
+                    "ocr_recognize_forward",
+                    &recognition_input,
+                )
+                .await?;
+            let recognized = pipeline_ocr::decode_ctc(&recognition_output, dictionary)
+                .map_err(|error| page_error(page, "ocr_recognize_decode", error.to_string()))?;
+            if recognized.len() != kept.len() {
+                return Err(page_error(
+                    page,
+                    "ocr_recognize_decode",
+                    format!(
+                        "recognizer returned {} rows for {} crops",
+                        recognized.len(),
+                        kept.len()
+                    ),
+                ));
+            }
+            for ((detection, points), recognition) in kept.into_iter().zip(recognized) {
+                if recognition.text.trim().is_empty() {
+                    continue;
+                }
+                spans.push(OcrSpan {
+                    span_id: format!("{}/ocr-{}", region.region_id, spans.len()),
+                    parent_region_id: Some(region.region_id.clone()),
+                    polygon: Polygon {
+                        points: points.to_vec(),
+                    },
+                    text: recognition.text,
+                    language: Some(self.language.clone()),
+                    confidence: Some(
+                        (detection.confidence * recognition.confidence).clamp(0.0, 1.0),
+                    ),
+                    coordinate_space: CoordinateSpace::RenderPixels,
+                });
+            }
+        }
+        Ok(OcrResult { spans })
+    }
+
+    async fn dispatch_bare_tensor(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint: &str,
+        stage: &str,
+        inputs: &tensor_wire::TensorBundle,
+    ) -> Result<tensor_wire::TensorBundle, PageError> {
+        let body = tensor_wire::encode(inputs)
+            .map_err(|error| page_error(page, stage, error.to_string()))?;
+        let _permit = ctx.acquire_permit().await;
+        let response = ctx
+            .dispatch_binary(endpoint, body, self.timeout, self.max_retries)
+            .await
+            .map_err(|error| page_error(page, stage, error.to_string()))?;
+        tensor_wire::decode(&response).map_err(|error| page_error(page, stage, error.to_string()))
+    }
+
+    async fn dispatch_bare_tables(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint_base: &str,
+        regions: &[Region],
+        ocr_spans: &[OcrSpan],
+    ) -> Result<TableRecognitionResult, PageError> {
+        let page_image = image::load_from_memory(&page.png_bytes)
+            .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?
+            .to_rgb8();
+        let mut tables = Vec::with_capacity(regions.len());
+        for region in regions {
+            let [left, top, right, bottom] = region.bbox;
+            let crop_left = left.floor().clamp(0.0, page.width as f32) as u32;
+            let crop_top = top.floor().clamp(0.0, page.height as f32) as u32;
+            let crop_right = right.ceil().clamp(0.0, page.width as f32) as u32;
+            let crop_bottom = bottom.ceil().clamp(0.0, page.height as f32) as u32;
+            if crop_right <= crop_left || crop_bottom <= crop_top {
+                return Err(page_error(
+                    page,
+                    "table_preprocess",
+                    format!("table region {} has an empty crop", region.region_id),
+                ));
+            }
+            let crop = image::imageops::crop_imm(
+                &page_image,
+                crop_left,
+                crop_top,
+                crop_right - crop_left,
+                crop_bottom - crop_top,
+            )
+            .to_image();
+            let classifier_input = pipeline_table::preprocess_classifier(&crop)
+                .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?;
+            let slanet_input = pipeline_table::preprocess_slanet(&crop)
+                .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?;
+            let unet_input = pipeline_table::preprocess_unet(&crop)
+                .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?;
+            let classifier_endpoint = format!("{endpoint_base}/v1/models/paddle_table_cls:infer");
+            let slanet_endpoint = format!("{endpoint_base}/v1/models/slanet_plus:infer");
+            let unet_endpoint = format!("{endpoint_base}/v1/models/unet_table_structure:infer");
+            let classifier = self.dispatch_bare_tensor(
+                page,
+                ctx,
+                &classifier_endpoint,
+                "table_classifier_forward",
+                &classifier_input,
+            );
+            let slanet = self.dispatch_bare_tensor(
+                page,
+                ctx,
+                &slanet_endpoint,
+                "table_slanet_forward",
+                &slanet_input,
+            );
+            let unet = self.dispatch_bare_tensor(
+                page,
+                ctx,
+                &unet_endpoint,
+                "table_unet_forward",
+                &unet_input,
+            );
+            let (classifier, slanet, unet) = tokio::join!(classifier, slanet, unet);
+            let classification = pipeline_table::decode_classifier(&classifier?)
+                .map_err(|error| page_error(page, "table_classifier_decode", error.to_string()))?;
+            let slanet = pipeline_table::decode_slanet(&slanet?, crop.dimensions())
+                .map_err(|error| page_error(page, "table_slanet_decode", error.to_string()))?;
+            let wired = pipeline_table::decode_unet(&unet?, crop.dimensions())
+                .map_err(|error| page_error(page, "table_unet_decode", error.to_string()))?;
+
+            let local_spans: Vec<pipeline_table::TableTextSpan> = ocr_spans
+                .iter()
+                .map(|span| pipeline_table::TableTextSpan {
+                    id: span.span_id.clone(),
+                    polygon: span
+                        .polygon
+                        .points
+                        .iter()
+                        .map(|point| [point[0] - crop_left as f32, point[1] - crop_top as f32])
+                        .collect(),
+                    text: span.text.clone(),
+                })
+                .collect();
+            let mut wired_cells = wired.cells;
+            pipeline_table::bind_spans_to_cells(&mut wired_cells, &local_spans);
+            let wired_candidate = pipeline_table::TableCandidate {
+                html: pipeline_table::render_wired_html(&wired_cells),
+                cells: wired_cells,
+            };
+            let mut wireless_cells = slanet.cells;
+            pipeline_table::bind_spans_to_cells(&mut wireless_cells, &local_spans);
+            let wireless_candidate = pipeline_table::TableCandidate {
+                html: pipeline_table::render_slanet_html(&slanet.tokens, &wireless_cells),
+                cells: wireless_cells,
+            };
+            let ocr_texts: Vec<String> = ocr_spans.iter().map(|span| span.text.clone()).collect();
+            let selection =
+                pipeline_table::select_candidate(&wired_candidate, &wireless_candidate, &ocr_texts);
+            let selected = match selection.model {
+                pipeline_table::SelectedTableModel::Wired => &wired_candidate,
+                pipeline_table::SelectedTableModel::Wireless => &wireless_candidate,
+            };
+            let cells = selected
+                .cells
+                .iter()
+                .enumerate()
+                .map(|(index, cell)| {
+                    let bbox = cell.bbox.map(|bbox| {
+                        let xs = [bbox[0], bbox[2], bbox[4], bbox[6]];
+                        let ys = [bbox[1], bbox[3], bbox[5], bbox[7]];
+                        [
+                            xs.into_iter().fold(f32::INFINITY, f32::min) + crop_left as f32,
+                            ys.into_iter().fold(f32::INFINITY, f32::min) + crop_top as f32,
+                            xs.into_iter().fold(f32::NEG_INFINITY, f32::max) + crop_left as f32,
+                            ys.into_iter().fold(f32::NEG_INFINITY, f32::max) + crop_top as f32,
+                        ]
+                    });
+                    TableCell {
+                        cell_id: format!("{}/cell-{index}", region.region_id),
+                        row: cell.row,
+                        column: cell.column,
+                        row_span: cell.row_span,
+                        column_span: cell.column_span,
+                        bbox,
+                        text: cell.text.clone(),
+                        confidence: None,
+                    }
+                })
+                .collect();
+            tables.push(RecognizedTable {
+                region_id: region.region_id.clone(),
+                html: selected.html.clone(),
+                structure_tokens: vec![],
+                cells,
+                classifier_label: Some(
+                    match classification.model {
+                        pipeline_table::SelectedTableModel::Wired => "wired",
+                        pipeline_table::SelectedTableModel::Wireless => "wireless",
+                    }
+                    .to_owned(),
+                ),
+                rotation_degrees: 0,
+                confidence: Some(classification.confidence),
+            });
+        }
+        Ok(TableRecognitionResult { tables })
+    }
+
     async fn run_workflow(
         &self,
         page: &RenderedPage,
@@ -568,23 +1073,26 @@ impl PipelineV2Adapter {
             .validate()
             .map_err(|error| page_error(page, "input", error.to_string()))?;
 
-        let layout = self.dispatch_stage::<_, LayoutResult>(
-            page,
-            ctx,
-            &self.layout_endpoint,
-            "layout",
-            encoded.clone(),
-        );
-        let formulas = self.dispatch_stage::<_, FormulaDetectionResult>(
-            page,
-            ctx,
-            &self.formula_detection_endpoint,
-            "formula_detect",
-            encoded.clone(),
-        );
-        let (layout, formulas) = tokio::join!(layout, formulas);
-        let layout = layout?;
-        let formulas = formulas?;
+        let (layout, formulas) = if let Some(endpoint) = &self.bare_layout_endpoint {
+            self.dispatch_bare_layout(page, ctx, endpoint).await?
+        } else {
+            let layout = self.dispatch_stage::<_, LayoutResult>(
+                page,
+                ctx,
+                &self.layout_endpoint,
+                "layout",
+                encoded.clone(),
+            );
+            let formulas = self.dispatch_stage::<_, FormulaDetectionResult>(
+                page,
+                ctx,
+                &self.formula_detection_endpoint,
+                "formula_detect",
+                encoded.clone(),
+            );
+            let (layout, formulas) = tokio::join!(layout, formulas);
+            (layout?, formulas?)
+        };
         validate_regions(page, "layout", &layout.regions)?;
         validate_regions(page, "formula_detect", &formulas.regions)?;
 
@@ -614,45 +1122,72 @@ impl PipelineV2Adapter {
             })
             .collect::<Vec<_>>();
 
-        let ocr = self.dispatch_stage::<_, OcrResult>(
-            page,
-            ctx,
-            &self.ocr_endpoint,
-            "ocr",
-            OcrPageInput {
-                page: encoded.clone(),
-                layout_regions: layout.regions.clone(),
-                formula_regions: formulas.regions.clone(),
-                language: self.language.clone(),
-            },
-        );
-        let recognized_formulas = self.dispatch_stage::<_, FormulaRecognitionResult>(
-            page,
-            ctx,
-            &self.formula_recognition_endpoint,
-            "formula_recognize",
-            FormulaRecognitionInput {
-                page: encoded.clone(),
-                formula_regions: formulas.regions.clone(),
-            },
-        );
+        let ocr = async {
+            if let Some(endpoint_base) = &self.bare_ocr_endpoint_base {
+                self.dispatch_bare_ocr(page, ctx, endpoint_base, &layout.regions, &formulas.regions)
+                    .await
+            } else {
+                self.dispatch_stage::<_, OcrResult>(
+                    page,
+                    ctx,
+                    &self.ocr_endpoint,
+                    "ocr",
+                    OcrPageInput {
+                        page: encoded.clone(),
+                        layout_regions: layout.regions.clone(),
+                        formula_regions: formulas.regions.clone(),
+                        language: self.language.clone(),
+                    },
+                )
+                .await
+            }
+        };
+        let recognized_formulas = async {
+            if let Some(endpoint) = &self.bare_formula_endpoint {
+                self.dispatch_bare_formula(page, ctx, endpoint, &formulas.regions)
+                    .await
+            } else {
+                self.dispatch_stage::<_, FormulaRecognitionResult>(
+                    page,
+                    ctx,
+                    &self.formula_recognition_endpoint,
+                    "formula_recognize",
+                    FormulaRecognitionInput {
+                        page: encoded.clone(),
+                        formula_regions: formulas.regions.clone(),
+                    },
+                )
+                .await
+            }
+        };
         let table_ocr = async {
             if table_ocr_regions.is_empty() {
                 return Ok(OcrResult { spans: vec![] });
             }
-            self.dispatch_stage::<_, OcrResult>(
-                page,
-                ctx,
-                &self.ocr_endpoint,
-                "table_ocr",
-                OcrPageInput {
-                    page: encoded.clone(),
-                    layout_regions: table_ocr_regions,
-                    formula_regions: formulas.regions.clone(),
-                    language: self.language.clone(),
-                },
-            )
-            .await
+            if let Some(endpoint_base) = &self.bare_ocr_endpoint_base {
+                self.dispatch_bare_ocr(
+                    page,
+                    ctx,
+                    endpoint_base,
+                    &table_ocr_regions,
+                    &formulas.regions,
+                )
+                .await
+            } else {
+                self.dispatch_stage::<_, OcrResult>(
+                    page,
+                    ctx,
+                    &self.ocr_endpoint,
+                    "table_ocr",
+                    OcrPageInput {
+                        page: encoded.clone(),
+                        layout_regions: table_ocr_regions,
+                        formula_regions: formulas.regions.clone(),
+                        language: self.language.clone(),
+                    },
+                )
+                .await
+            }
         };
         let (ocr, recognized_formulas, table_ocr) =
             tokio::join!(ocr, recognized_formulas, table_ocr);
@@ -662,6 +1197,9 @@ impl PipelineV2Adapter {
 
         let tables = if table_regions.is_empty() {
             TableRecognitionResult { tables: vec![] }
+        } else if let Some(endpoint_base) = &self.bare_table_endpoint_base {
+            self.dispatch_bare_tables(page, ctx, endpoint_base, &table_regions, &table_ocr.spans)
+                .await?
         } else {
             self.dispatch_stage::<_, TableRecognitionResult>(
                 page,

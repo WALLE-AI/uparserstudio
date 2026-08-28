@@ -18,7 +18,9 @@ pub mod pipeline_v2;
 
 use crate::ingest::RenderedPage;
 use crate::testing::MockDispatch;
-use crate::transport::{ChatCompletionRequest, RestRequest, Transport, TransportError};
+use crate::transport::{
+    BinaryRequest, ChatCompletionRequest, RestRequest, Transport, TransportError,
+};
 use crate::types::{Block, PageError};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -89,6 +91,8 @@ pub enum DispatchError {
     Transport(#[from] TransportError),
     #[error("no mock response seeded for key {0:?}")]
     MockKeyMissing(String),
+    #[error("binary tensor dispatch is unavailable in JSON mock mode")]
+    BinaryMockUnsupported,
     #[error("request cancelled")]
     Cancelled,
 }
@@ -252,6 +256,30 @@ impl ParseCtx {
         }
     }
 
+    pub async fn dispatch_binary(
+        &self,
+        endpoint: &str,
+        body: Vec<u8>,
+        timeout: std::time::Duration,
+        max_retries: u32,
+    ) -> Result<Vec<u8>, DispatchError> {
+        if self.cancellation.is_cancelled() {
+            return Err(DispatchError::Cancelled);
+        }
+        match &self.dispatcher {
+            Dispatcher::Real(transport) => tokio::select! {
+                result = transport.dispatch_binary(BinaryRequest {
+                    endpoint: endpoint.to_string(),
+                    body,
+                    timeout,
+                    max_retries,
+                }) => Ok(result?),
+                _ = self.cancellation.cancelled() => Err(DispatchError::Cancelled),
+            },
+            Dispatcher::Mock(_) => Err(DispatchError::BinaryMockUnsupported),
+        }
+    }
+
     /// Decode a page's PNG bytes and crop to `bbox_px`, returning an RGB
     /// buffer ready for `imaging::resize_by_need`/re-encoding.
     pub fn crop(&self, page: &RenderedPage, bbox_px: [i32; 4]) -> Result<image::RgbImage, String> {
@@ -298,13 +326,19 @@ pub enum StageBackendChoice {
 pub struct PipelineConfig {
     pub layout_backend: Option<StageBackendChoice>,
     pub layout_endpoint: Option<String>,
+    pub bare_layout_endpoint: Option<String>,
     pub formula_detection_endpoint: Option<String>,
     pub ocr_backend: Option<StageBackendChoice>,
     pub ocr_endpoint: Option<String>,
+    pub bare_ocr_endpoint_base: Option<String>,
+    pub ocr_dictionary_path: Option<String>,
     pub formula_backend: Option<StageBackendChoice>,
     pub formula_endpoint: Option<String>,
+    pub bare_formula_endpoint: Option<String>,
+    pub formula_tokenizer_path: Option<String>,
     pub table_backend: Option<StageBackendChoice>,
     pub table_endpoint: Option<String>,
+    pub bare_table_endpoint_base: Option<String>,
     pub table_model_path: Option<String>,
     pub language: Option<String>,
 }

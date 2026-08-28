@@ -105,6 +105,11 @@ pub enum Command {
         layout_backend: Option<StageBackendChoice>,
         #[arg(long)]
         layout_endpoint: Option<String>,
+        /// Bare PP-DocLayoutV2 tensor endpoint. When set, Rust owns image
+        /// preprocessing, detection decoding, filtering and formula-region
+        /// extraction; the service performs model forward only.
+        #[arg(long)]
+        bare_layout_endpoint: Option<String>,
         /// Pipeline V2 formula-detection (MFD) batch endpoint.
         #[arg(long)]
         formula_detection_endpoint: Option<String>,
@@ -112,10 +117,25 @@ pub enum Command {
         ocr_backend: Option<StageBackendChoice>,
         #[arg(long)]
         ocr_endpoint: Option<String>,
+        /// Base URL of the bare OCR detector/recognizer tensor service.
+        #[arg(long)]
+        bare_ocr_endpoint_base: Option<String>,
+        /// PP-OCR recognition character dictionary. Required together with
+        /// --bare-ocr-endpoint-base.
+        #[arg(long)]
+        ocr_dictionary_path: Option<String>,
         #[arg(long, value_enum)]
         formula_backend: Option<StageBackendChoice>,
         #[arg(long)]
         formula_endpoint: Option<String>,
+        /// Bare PP-FormulaNet-plus-M tensor endpoint. Rust owns crop,
+        /// preprocessing, tokenizer decoding and LaTeX repair.
+        #[arg(long)]
+        bare_formula_endpoint: Option<String>,
+        /// PP-FormulaNet inference YAML containing the tokenizer JSON.
+        /// Required together with --bare-formula-endpoint.
+        #[arg(long)]
+        formula_tokenizer_path: Option<String>,
         /// Pipeline V2 model stages are service-only. `remote` is accepted
         /// for compatibility; `local` is rejected.
         #[arg(long, value_enum)]
@@ -123,6 +143,10 @@ pub enum Command {
         /// Pipeline V2 table-recognition batch endpoint.
         #[arg(long)]
         table_endpoint: Option<String>,
+        /// Base URL of the bare tensor service. Rust invokes table classifier,
+        /// SLANet and UNet forwards and owns all table postprocessing.
+        #[arg(long)]
+        bare_table_endpoint_base: Option<String>,
         #[arg(long)]
         table_model_path: Option<String>,
         /// OCR language forwarded to the model service (default: ch).
@@ -279,13 +303,19 @@ pub fn run(cli: Cli) -> i32 {
             max_concurrency,
             layout_backend,
             layout_endpoint,
+            bare_layout_endpoint,
             formula_detection_endpoint,
             ocr_backend,
             ocr_endpoint,
+            bare_ocr_endpoint_base,
+            ocr_dictionary_path,
             formula_backend,
             formula_endpoint,
+            bare_formula_endpoint,
+            formula_tokenizer_path,
             table_backend,
             table_endpoint,
+            bare_table_endpoint_base,
             table_model_path,
             pipeline_language,
             no_cache,
@@ -361,16 +391,43 @@ pub fn run(cli: Cli) -> i32 {
                 );
             }
 
+            if bare_formula_endpoint.is_some() != formula_tokenizer_path.is_some() {
+                return emit_error(
+                    format,
+                    EXIT_USAGE,
+                    "invalid_pipeline_config",
+                    "--bare-formula-endpoint and --formula-tokenizer-path must be provided together",
+                    &protocol,
+                    Some("formula"),
+                );
+            }
+            if bare_ocr_endpoint_base.is_some() != ocr_dictionary_path.is_some() {
+                return emit_error(
+                    format,
+                    EXIT_USAGE,
+                    "invalid_pipeline_config",
+                    "--bare-ocr-endpoint-base and --ocr-dictionary-path must be provided together",
+                    &protocol,
+                    Some("ocr"),
+                );
+            }
+
             let pipeline_config = PipelineConfig {
                 layout_backend: None,
                 layout_endpoint,
+                bare_layout_endpoint,
                 formula_detection_endpoint,
                 ocr_backend: None,
                 ocr_endpoint,
+                bare_ocr_endpoint_base,
+                ocr_dictionary_path,
                 formula_backend: None,
                 formula_endpoint,
+                bare_formula_endpoint,
+                formula_tokenizer_path,
                 table_backend,
                 table_endpoint,
+                bare_table_endpoint_base,
                 table_model_path,
                 language: pipeline_language,
             };
@@ -866,9 +923,21 @@ fn run_parse(
     }
 
     if has_errors {
+        emit_page_error_diagnostics(&outcome.result.page_errors);
         EXIT_PARTIAL
     } else {
         EXIT_SUCCESS
+    }
+}
+
+fn emit_page_error_diagnostics(errors: &[crate::types::PageError]) {
+    for error in errors {
+        eprintln!(
+            "error: page={} stage={} message={}",
+            error.page_num,
+            error.stage.as_deref().unwrap_or("unknown"),
+            error.message
+        );
     }
 }
 

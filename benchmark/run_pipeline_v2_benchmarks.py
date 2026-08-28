@@ -230,6 +230,24 @@ def _run_cli(args, path: Path) -> str:
         "--no-assets",
         str(path),
     ]
+    if args.bare_endpoint_base:
+        base = args.bare_endpoint_base.rstrip("/")
+        command.extend(
+            [
+                "--bare-layout-endpoint",
+                f"{base}/v1/models/pp_doclayout_v2:infer",
+                "--bare-ocr-endpoint-base",
+                base,
+                "--ocr-dictionary-path",
+                str(args.ocr_dictionary_path),
+                "--bare-formula-endpoint",
+                f"{base}/v1/models/pp_formulanet_plus_m:infer",
+                "--formula-tokenizer-path",
+                str(args.formula_tokenizer_path),
+                "--bare-table-endpoint-base",
+                base,
+            ]
+        )
     completed = subprocess.run(
         command,
         cwd=ROOT,
@@ -399,7 +417,21 @@ def parse_args():
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--language", default="ch")
     parser.add_argument("--cli-max-concurrency", type=int, default=1)
-    return parser.parse_args()
+    parser.add_argument(
+        "--bare-endpoint-base",
+        help="bare tensor service base URL; valid only with --runner cli",
+    )
+    parser.add_argument("--ocr-dictionary-path", type=Path)
+    parser.add_argument("--formula-tokenizer-path", type=Path)
+    args = parser.parse_args()
+    if args.bare_endpoint_base:
+        if args.runner != "cli":
+            parser.error("--bare-endpoint-base requires --runner cli")
+        if not args.ocr_dictionary_path or not args.formula_tokenizer_path:
+            parser.error(
+                "--bare-endpoint-base requires --ocr-dictionary-path and --formula-tokenizer-path"
+            )
+    return args
 
 
 def main() -> int:
@@ -421,9 +453,14 @@ def main() -> int:
             "engine_name": "uparser-pipeline-v2",
             "engine_version": "0.1.0",
             "processor": (
-                "uparser CLI -> Rust PipelineV2Adapter -> staged model service"
+                "uparser CLI -> Rust PipelineV2Adapter -> bare tensor model service"
+                if args.runner == "cli" and args.bare_endpoint_base
+                else "uparser CLI -> Rust PipelineV2Adapter -> staged model service"
                 if args.runner == "cli"
                 else "Pipeline V2 HTTP service"
+            ),
+            "model_service_contract": (
+                "bare_tensor" if args.bare_endpoint_base else "structured_or_http"
             ),
             "document_count": summary["count"],
             "total_elapsed": summary["wall_seconds"],

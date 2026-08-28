@@ -87,6 +87,16 @@ pub struct RestRequest {
     pub max_retries: u32,
 }
 
+/// Binary tensor request used by bare model endpoints. The body and response
+/// both use `tensor_wire`; this transport deliberately knows nothing about
+/// pages, regions, OCR, tables, or Markdown.
+pub struct BinaryRequest {
+    pub endpoint: String,
+    pub body: Vec<u8>,
+    pub timeout: Duration,
+    pub max_retries: u32,
+}
+
 pub struct ChatCompletionRequest {
     pub endpoint: String,
     pub model: String,
@@ -162,6 +172,92 @@ impl Transport {
 
         self.post_with_retry(&req.endpoint, req.body, req.timeout, req.max_retries)
             .await
+    }
+
+    pub async fn dispatch_binary(&self, req: BinaryRequest) -> Result<Vec<u8>, TransportError> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .expect("semaphore never closed");
+
+        match tokio::time::timeout(
+            OVERALL_DISPATCH_TIMEOUT,
+            self.post_binary_with_retry_inner(
+                &req.endpoint,
+                req.body,
+                req.timeout,
+                req.max_retries,
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(TransportError::OverallTimeout {
+                limit: OVERALL_DISPATCH_TIMEOUT,
+            }),
+        }
+    }
+
+    async fn post_binary_with_retry_inner(
+        &self,
+        endpoint: &str,
+        body: Vec<u8>,
+        timeout: Duration,
+        max_retries: u32,
+    ) -> Result<Vec<u8>, TransportError> {
+        let mut attempt = 0;
+        let mut last_message: String;
+        loop {
+            attempt += 1;
+            let result = self
+                .client
+                .post(endpoint)
+                .timeout(timeout)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/vnd.uparser.tensor",
+                )
+                .body(body.clone())
+                .send()
+                .await;
+            match result {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        return response
+                            .bytes()
+                            .await
+                            .map(|bytes| bytes.to_vec())
+                            .map_err(TransportError::Request);
+                    }
+                    let retryable = status.is_server_error() || status.as_u16() == 429;
+                    if retryable && attempt <= max_retries {
+                        let backoff = retry_after_from_headers(response.headers())
+                            .unwrap_or_else(|| jittered_backoff(attempt));
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    let text = response.text().await.unwrap_or_default();
+                    return Err(TransportError::ServerError {
+                        status: status.as_u16(),
+                        body: text,
+                    });
+                }
+                Err(error) => {
+                    last_message = error.to_string();
+                    if attempt <= max_retries {
+                        tokio::time::sleep(jittered_backoff(attempt)).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Err(TransportError::Exhausted {
+            attempts: attempt,
+            message: last_message,
+        })
     }
 
     async fn post_with_retry(
@@ -537,6 +633,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["boxes"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_binary_preserves_tensor_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/infer"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![4, 3, 2, 1]))
+            .mount(&server)
+            .await;
+
+        let transport = Transport::new();
+        let result = transport
+            .dispatch_binary(BinaryRequest {
+                endpoint: format!("{}/infer", server.uri()),
+                body: vec![1, 2, 3, 4],
+                timeout: Duration::from_secs(2),
+                max_retries: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result, vec![4, 3, 2, 1]);
     }
 
     /// Indirect check: with concurrency capped to 2 and each request taking

@@ -645,6 +645,8 @@ fn mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial() 
     let output = Command::cargo_bin("uparser")
         .unwrap()
         .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
         .args([
             "parse",
             file.path().to_str().unwrap(),
@@ -659,10 +661,10 @@ fn mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial() 
         .failure()
         .code(3)
         .get_output()
-        .stdout
         .clone();
 
-    let parsed: serde_json::Value = serde_json::from_slice(&output).expect("stdout is valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is valid JSON");
     assert_eq!(parsed["protocol"], "mineru-vlm");
     let page_errors = parsed["page_errors"].as_array().unwrap();
     assert_eq!(page_errors.len(), 1);
@@ -673,6 +675,10 @@ fn mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial() 
             .contains("127.0.0.1:1"),
         "unexpected pipeline error: {page_errors:#?}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: page=1"), "stderr was: {stderr}");
+    assert!(stderr.contains("stage=layout"), "stderr was: {stderr}");
+    assert!(stderr.contains("127.0.0.1:1"), "stderr was: {stderr}");
 }
 
 /// Without the `native` feature compiled in, `--protocol native` must
@@ -792,6 +798,8 @@ fn pipeline_with_overridden_layout_endpoint_surfaces_connection_failure_as_parti
     let output = Command::cargo_bin("uparser")
         .unwrap()
         .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
         .args([
             "parse",
             file.path().to_str().unwrap(),
@@ -806,10 +814,10 @@ fn pipeline_with_overridden_layout_endpoint_surfaces_connection_failure_as_parti
         .failure()
         .code(3)
         .get_output()
-        .stdout
         .clone();
 
-    let parsed: serde_json::Value = serde_json::from_slice(&output).expect("stdout is valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is valid JSON");
     assert_eq!(parsed["protocol"], "pipeline");
     let page_errors = parsed["page_errors"].as_array().unwrap();
     assert_eq!(page_errors.len(), 1);
@@ -820,6 +828,10 @@ fn pipeline_with_overridden_layout_endpoint_surfaces_connection_failure_as_parti
             .contains("127.0.0.1:1"),
         "unexpected pipeline error: {page_errors:#?}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: page=1"), "stderr was: {stderr}");
+    assert!(stderr.contains("stage=layout"), "stderr was: {stderr}");
+    assert!(stderr.contains("127.0.0.1:1"), "stderr was: {stderr}");
 }
 
 /// `--protocol paddleocr --endpoint ...` proves the override reaches
@@ -893,6 +905,50 @@ fn pipeline_local_backend_for_layout_stage_is_usage_error() {
         .assert()
         .failure()
         .code(1);
+}
+
+#[test]
+fn bare_formula_requires_tokenizer_config() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "pipeline",
+            "--bare-formula-endpoint",
+            "http://127.0.0.1:1/formula",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("invalid_pipeline_config"));
+}
+
+#[test]
+fn bare_ocr_requires_character_dictionary() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    Command::cargo_bin("uparser")
+        .unwrap()
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "pipeline",
+            "--bare-ocr-endpoint-base",
+            "http://127.0.0.1:1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("invalid_pipeline_config"));
 }
 
 /// T-9.2: `--stream` emits one NDJSON line per completed window instead

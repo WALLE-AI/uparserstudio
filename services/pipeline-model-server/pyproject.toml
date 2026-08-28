@@ -22,6 +22,7 @@ legacy = ["magic-pdf==1.3.5"]
 
 [project.scripts]
 uparser-pipeline-server = "uparser_pipeline_server.app:main"
+uparser-bare-model-server = "uparser_pipeline_server.bare_app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/uparser_pipeline_server"]
