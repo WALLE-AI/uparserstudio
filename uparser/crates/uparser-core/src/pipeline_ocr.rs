@@ -394,9 +394,17 @@ fn bilinear_sample(image: &image::RgbImage, x: f32, y: f32, channel: usize) -> u
     (top * (1.0 - wy) + bottom * wy).round().clamp(0.0, 255.0) as u8
 }
 
-pub fn crop_detection(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalCropRotation {
+    None,
+    CounterClockwise,
+    Clockwise,
+}
+
+pub fn crop_detection_with_rotation(
     image: &image::RgbImage,
     detection: &OcrDetection,
+    vertical_rotation: VerticalCropRotation,
 ) -> Result<image::RgbImage, OcrError> {
     let points = detection.points;
     let top_width = (points[1][0] - points[0][0]).hypot(points[1][1] - points[0][1]);
@@ -439,11 +447,212 @@ pub fn crop_detection(
             );
         }
     }
-    if height as f32 / width as f32 >= 1.5 {
-        Ok(image::imageops::rotate90(&crop))
-    } else {
-        Ok(crop)
+    if height as f32 / (width as f32) < 1.5 {
+        return Ok(crop);
     }
+    Ok(match vertical_rotation {
+        VerticalCropRotation::None => crop,
+        // NumPy's `rot90`, used by MinerU/PaddleOCR, rotates counter-clockwise.
+        VerticalCropRotation::CounterClockwise => image::imageops::rotate270(&crop),
+        VerticalCropRotation::Clockwise => image::imageops::rotate90(&crop),
+    })
+}
+
+pub fn crop_detection(
+    image: &image::RgbImage,
+    detection: &OcrDetection,
+) -> Result<image::RgbImage, OcrError> {
+    crop_detection_with_rotation(image, detection, VerticalCropRotation::CounterClockwise)
+}
+
+fn axis_aligned_bbox(detection: &OcrDetection) -> [f32; 4] {
+    [
+        detection.points[0][0],
+        detection.points[0][1],
+        detection.points[2][0],
+        detection.points[2][1],
+    ]
+}
+
+fn is_angle_detection(detection: &OcrDetection) -> bool {
+    let [p1, p2, p3, p4] = detection.points;
+    let height = ((p4[1] - p1[1]) + (p3[1] - p2[1])) * 0.5;
+    !(0.8 * height <= p3[1] - p1[1] && p3[1] - p1[1] <= 1.2 * height)
+}
+
+fn vertical_overlap_exceeds(left: [f32; 4], right: [f32; 4], threshold: f32) -> bool {
+    let overlap = (left[3].min(right[3]) - left[1].max(right[1])).max(0.0);
+    let min_height = (left[3] - left[1]).min(right[3] - right[1]);
+    min_height > 0.0 && overlap / min_height > threshold
+}
+
+/// Match MinerU's page-text `merge_det_boxes`: group axis-aligned boxes into
+/// lines, then merge horizontally overlapping fragments on sufficiently wide
+/// lines. Table OCR deliberately leaves detector boxes unchanged.
+pub fn merge_detections(detections: &[OcrDetection]) -> Vec<OcrDetection> {
+    let mut straight = detections
+        .iter()
+        .filter(|detection| !is_angle_detection(detection))
+        .cloned()
+        .collect::<Vec<_>>();
+    let angled = detections
+        .iter()
+        .filter(|detection| is_angle_detection(detection))
+        .cloned();
+    straight
+        .sort_by(|left, right| axis_aligned_bbox(left)[1].total_cmp(&axis_aligned_bbox(right)[1]));
+    let mut lines: Vec<Vec<OcrDetection>> = Vec::new();
+    for detection in straight {
+        let belongs = lines
+            .last()
+            .and_then(|line| line.last())
+            .is_some_and(|prior| {
+                vertical_overlap_exceeds(
+                    axis_aligned_bbox(&detection),
+                    axis_aligned_bbox(prior),
+                    0.6,
+                )
+            });
+        if belongs {
+            lines.last_mut().unwrap().push(detection);
+        } else {
+            lines.push(vec![detection]);
+        }
+    }
+
+    let mut merged = Vec::new();
+    for line in lines {
+        let min_x = line
+            .iter()
+            .map(|item| axis_aligned_bbox(item)[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = line
+            .iter()
+            .map(|item| axis_aligned_bbox(item)[2])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = line
+            .iter()
+            .map(|item| axis_aligned_bbox(item)[1])
+            .fold(f32::INFINITY, f32::min);
+        let max_y = line
+            .iter()
+            .map(|item| axis_aligned_bbox(item)[3])
+            .fold(f32::NEG_INFINITY, f32::max);
+        if max_x - min_x <= (max_y - min_y) * 4.0 {
+            merged.extend(line);
+            continue;
+        }
+        let mut spans = line;
+        spans.sort_by(|left, right| {
+            axis_aligned_bbox(left)[0].total_cmp(&axis_aligned_bbox(right)[0])
+        });
+        let mut merged_line: Vec<OcrDetection> = Vec::new();
+        for detection in spans {
+            let bbox = axis_aligned_bbox(&detection);
+            if let Some(previous) = merged_line.last_mut() {
+                let prior = axis_aligned_bbox(previous);
+                if prior[2] >= bbox[0] {
+                    let combined = [
+                        prior[0].min(bbox[0]),
+                        prior[1].min(bbox[1]),
+                        prior[2].max(bbox[2]),
+                        prior[3].max(bbox[3]),
+                    ];
+                    previous.points = [
+                        [combined[0], combined[1]],
+                        [combined[2], combined[1]],
+                        [combined[2], combined[3]],
+                        [combined[0], combined[3]],
+                    ];
+                    previous.confidence = previous.confidence.max(detection.confidence);
+                    continue;
+                }
+            }
+            merged_line.push(detection);
+        }
+        merged.extend(merged_line);
+    }
+    merged.extend(angled);
+    merged
+}
+
+pub fn split_detection_around_formulas(
+    detection: &OcrDetection,
+    formula_boxes: &[[f32; 4]],
+) -> Vec<OcrDetection> {
+    let min_x = detection
+        .points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::INFINITY, f32::min);
+    let max_x = detection
+        .points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = detection
+        .points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::INFINITY, f32::min);
+    let max_y = detection
+        .points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mut formulas: Vec<[f32; 4]> = formula_boxes
+        .iter()
+        .copied()
+        .filter(|formula| {
+            let overlap_y = (max_y.min(formula[3]) - min_y.max(formula[1])).max(0.0);
+            let formula_height = (formula[3] - formula[1]).max(1.0);
+            overlap_y / formula_height >= 0.5 && formula[2] > min_x && formula[0] < max_x
+        })
+        .collect();
+    formulas.sort_by(|left, right| left[0].total_cmp(&right[0]));
+    if formulas.is_empty() {
+        return vec![detection.clone()];
+    }
+    let mut segments = Vec::new();
+    let mut cursor = min_x;
+    for formula in formulas {
+        let right = (formula[0] - 1.0).min(max_x);
+        if right - cursor >= 4.0 {
+            segments.push([cursor, min_y, right, max_y]);
+        }
+        cursor = cursor.max(formula[2] + 1.0);
+    }
+    if max_x - cursor >= 4.0 {
+        segments.push([cursor, min_y, max_x, max_y]);
+    }
+    segments
+        .into_iter()
+        .map(|[left, top, right, bottom]| OcrDetection {
+            points: [[left, top], [right, top], [right, bottom], [left, bottom]],
+            confidence: detection.confidence,
+        })
+        .collect()
+}
+
+/// Mask formula regions before page-text detection, matching MinerU's OCR
+/// pipeline. Recognition still crops from the unmasked image.
+pub fn mask_detection_regions(image: &image::RgbImage, regions: &[[f32; 4]]) -> image::RgbImage {
+    let mut masked = image.clone();
+    for region in regions {
+        let left = region[0].floor().clamp(0.0, masked.width() as f32) as u32;
+        let top = region[1].floor().clamp(0.0, masked.height() as f32) as u32;
+        let right = region[2].ceil().clamp(0.0, masked.width() as f32) as u32;
+        let bottom = region[3].ceil().clamp(0.0, masked.height() as f32) as u32;
+        if right <= left || bottom <= top {
+            continue;
+        }
+        for y in top..bottom {
+            for x in left..right {
+                masked.put_pixel(x, y, image::Rgb([255, 255, 255]));
+            }
+        }
+    }
+    masked
 }
 
 /// PP-OCRv6 DB detector preprocessing for an RGB crop. The tensor is BGR,
@@ -695,5 +904,53 @@ mod tests {
         };
         let crop = crop_detection(&image, &detection).unwrap();
         assert!(crop.width() > crop.height());
+        let top_left = crop.get_pixel(0, 0);
+        assert!(
+            top_left[0] > 20,
+            "counter-clockwise rotation starts at top-right"
+        );
+        assert!(
+            top_left[1] < 10,
+            "counter-clockwise rotation preserves the top edge"
+        );
+    }
+
+    #[test]
+    fn formula_boxes_split_long_ocr_lines_without_duplicate_formula_text() {
+        let detection = OcrDetection {
+            points: [[0.0, 10.0], [100.0, 10.0], [100.0, 30.0], [0.0, 30.0]],
+            confidence: 0.9,
+        };
+        let segments = split_detection_around_formulas(&detection, &[[40.0, 8.0, 60.0, 32.0]]);
+        assert_eq!(segments.len(), 2);
+        assert!(segments[0].points[1][0] < 40.0);
+        assert!(segments[1].points[0][0] > 60.0);
+    }
+
+    #[test]
+    fn formula_regions_are_white_only_in_detector_input() {
+        let image = image::RgbImage::from_pixel(5, 4, image::Rgb([10, 20, 30]));
+        let masked = mask_detection_regions(&image, &[[1.2, 0.8, 3.1, 2.2]]);
+
+        assert_eq!(masked.get_pixel(0, 0), &image::Rgb([10, 20, 30]));
+        assert_eq!(masked.get_pixel(1, 0), &image::Rgb([255, 255, 255]));
+        assert_eq!(masked.get_pixel(1, 1), &image::Rgb([255, 255, 255]));
+        assert_eq!(masked.get_pixel(3, 2), &image::Rgb([255, 255, 255]));
+        assert_eq!(masked.get_pixel(4, 3), &image::Rgb([10, 20, 30]));
+        assert_eq!(image.get_pixel(1, 1), &image::Rgb([10, 20, 30]));
+    }
+
+    #[test]
+    fn page_text_merges_overlapping_fragments_but_preserves_table_style_boxes() {
+        let detection = |left: f32, right: f32| OcrDetection {
+            points: [[left, 10.0], [right, 10.0], [right, 30.0], [left, 30.0]],
+            confidence: 0.9,
+        };
+        let input = [detection(0.0, 80.0), detection(70.0, 160.0)];
+        let merged = merge_detections(&input);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].points[0][0], 0.0);
+        assert_eq!(merged[0].points[2][0], 160.0);
+        assert_eq!(input.len(), 2, "callers can retain unmerged table boxes");
     }
 }

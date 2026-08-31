@@ -1457,9 +1457,7 @@ mod vector_grid_tests {
     #[test]
     #[ignore = "requires local external PDF fixtures"]
     fn accessory_building_rejects_prose_in_frame() {
-        let tables = detect_rect_tables_in_fixture(
-            "accessory_building_permit_prose_frame.pdf",
-        );
+        let tables = detect_rect_tables_in_fixture("accessory_building_permit_prose_frame.pdf");
         // Real form data table (TYPE / SIZE / SETBACKS) must still be detected.
         let data_table = tables.iter().find(|t| t.columns.len() == 3);
         assert!(
@@ -1569,10 +1567,7 @@ mod vector_grid_tests {
     #[test]
     #[ignore = "requires local external PDF fixtures"]
     fn multiline_indent_cell_rect_grid_fixture_detects_table() {
-        let tables = detect_rect_tables_in_fixture_page(
-            "multiline_indent_cell_rect_grid.pdf",
-            30,
-        );
+        let tables = detect_rect_tables_in_fixture_page("multiline_indent_cell_rect_grid.pdf", 30);
         let table = tables
             .iter()
             .max_by_key(|t| t.rows.len() * t.columns.len())
@@ -3632,9 +3627,7 @@ fn process_document(
     let page_sizes: HashMap<u32, [f32; 2]> = doc
         .get_pages()
         .into_iter()
-        .filter_map(|(page_num, page_id)| {
-            get_page_size(&doc, page_id).map(|size| (page_num, size))
-        })
+        .filter_map(|(page_num, page_id)| get_page_size(&doc, page_id).map(|size| (page_num, size)))
         .collect();
     // Step 1 — Detection (cheap: scans content streams for text operators)
     let detection = detector::detect_from_document(&doc, page_count, &options.detection)?;
@@ -3737,10 +3730,8 @@ fn process_document(
     // Collect painted vector geometry independently from text extraction.
     // This sees cubic curves and nested Form XObjects without coupling path
     // state to the mature text/table extractor.
-    let painted_paths = extractor::painted_paths::extract_painted_paths(
-        &doc,
-        options.page_filter.as_ref(),
-    );
+    let painted_paths =
+        extractor::painted_paths::extract_painted_paths(&doc, options.page_filter.as_ref());
 
     // For Mixed PDFs, extraction failure is non-fatal
     let extracted = if pdf_type == PdfType::Mixed {
@@ -3884,26 +3875,20 @@ fn process_document(
             let chart_regions: HashMap<u32, Vec<[f32; 4]>> = chart_pages
                 .into_iter()
                 .filter_map(|page| {
-                    let mut regions: Vec<[f32; 4]> = tables::detect_chart_regions(
-                        &items,
-                        &rects,
-                        page,
-                    )
-                        .into_iter()
-                        .map(|(x0, y0, x1, y1)| [x0, y0, x1, y1])
-                        .collect();
+                    let mut regions: Vec<[f32; 4]> =
+                        tables::detect_chart_regions(&items, &rects, page)
+                            .into_iter()
+                            .map(|(x0, y0, x1, y1)| [x0, y0, x1, y1])
+                            .collect();
                     if let Some(page_size) = page_sizes.get(&page) {
-                        regions.extend(
-                            extractor::painted_paths::detect_vector_figure_regions(
-                                &painted_paths,
-                                &items,
-                                page,
-                                *page_size,
-                            ),
-                        );
+                        regions.extend(extractor::painted_paths::detect_vector_figure_regions(
+                            &painted_paths,
+                            &items,
+                            page,
+                            *page_size,
+                        ));
                     }
-                    let regions =
-                        extractor::painted_paths::merge_figure_regions(regions);
+                    let regions = extractor::painted_paths::merge_figure_regions(regions);
                     (!regions.is_empty()).then_some((page, regions))
                 })
                 .collect();

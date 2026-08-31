@@ -663,8 +663,8 @@ fn annotate_technical_standard_ir(result: &mut ParseResult) {
 }
 
 fn declared_mandatory_clause_ids(text: &str) -> BTreeSet<String> {
-    let clause_pattern = regex::Regex::new(r"\b\d+(?:\.\d+){2,}\b")
-        .expect("static normative clause regex is valid");
+    let clause_pattern =
+        regex::Regex::new(r"\b\d+(?:\.\d+){2,}\b").expect("static normative clause regex is valid");
     let mut identifiers = BTreeSet::new();
     for (phrase_start, _) in text.match_indices("强制性条文") {
         let prefix_start = text[..phrase_start]
@@ -693,7 +693,10 @@ fn leading_normative_clause_id(text: &str) -> Option<&str> {
     let mut components = candidate.split('.');
     let valid = components.clone().count() >= 3
         && components.all(|component| {
-            !component.is_empty() && component.chars().all(|character| character.is_ascii_digit())
+            !component.is_empty()
+                && component
+                    .chars()
+                    .all(|character| character.is_ascii_digit())
         });
     valid.then_some(candidate)
 }
@@ -945,7 +948,11 @@ fn reconcile_ocr_toc_with_native(
 
     for (index, identifier, title, body_page, ocr_page) in &matches {
         let printed_page = ocr_page
-            .filter(|page| body_page.checked_sub(*page).is_some_and(|offset| offset <= 3))
+            .filter(|page| {
+                body_page
+                    .checked_sub(*page)
+                    .is_some_and(|offset| offset <= 3)
+            })
             .unwrap_or_else(|| body_page.saturating_sub(page_offset));
         let repaired = format!("{identifier} {title} {printed_page}");
         let block = &mut blocks[*index];
@@ -1182,8 +1189,7 @@ fn clear_materialized_asset_warning(result: &mut ParseResult) {
 
 #[cfg(all(feature = "native", feature = "pdfium"))]
 fn is_materializable_native_image(block: &crate::types::Block) -> bool {
-    if !matches!(block.category.as_deref(), Some("image" | "chart"))
-        || block.asset_bytes.is_some()
+    if !matches!(block.category.as_deref(), Some("image" | "chart")) || block.asset_bytes.is_some()
     {
         return false;
     }

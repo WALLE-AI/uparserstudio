@@ -558,8 +558,7 @@ fn clean_table_cells(cells: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<String>) {
                     && row.len() >= 3
                     && prev_first_cell_empty
                     && alpha_word_count(first_non_empty_cell) >= 2));
-        let looks_like_rowspanned_scored_record =
-            is_rowspanned_scored_record(row, &cleaned);
+        let looks_like_rowspanned_scored_record = is_rowspanned_scored_record(row, &cleaned);
         let looks_like_new_first_column_entry = !first_cell.is_empty()
             && (starts_with_numbered_label(first_cell) || starts_with_uppercase_alpha(first_cell))
             && filled_cells >= 2

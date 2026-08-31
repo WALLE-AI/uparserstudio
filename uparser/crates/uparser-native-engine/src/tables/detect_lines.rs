@@ -1290,12 +1290,15 @@ fn extend_with_adjacent_borderless_row(table: &mut Table, items: &[TextItem], pa
 
     for cell in &mut cell_items {
         cell.sort_by(|left, right| {
-            let same_visual_line = (left.y - right.y).abs()
-                <= left.font_size.max(right.font_size) * 0.5;
+            let same_visual_line =
+                (left.y - right.y).abs() <= left.font_size.max(right.font_size) * 0.5;
             if same_visual_line {
                 left.x.total_cmp(&right.x)
             } else {
-                right.y.total_cmp(&left.y).then_with(|| left.x.total_cmp(&right.x))
+                right
+                    .y
+                    .total_cmp(&left.y)
+                    .then_with(|| left.x.total_cmp(&right.x))
             }
         });
     }
@@ -1303,7 +1306,13 @@ fn extend_with_adjacent_borderless_row(table: &mut Table, items: &[TextItem], pa
         .iter()
         .map(|cell| super::grid::join_cell_items(cell))
         .collect();
-    if row.iter().skip(1).filter(|cell| cell.chars().count() >= 12).count() < 2 {
+    if row
+        .iter()
+        .skip(1)
+        .filter(|cell| cell.chars().count() >= 12)
+        .count()
+        < 2
+    {
         return;
     }
 

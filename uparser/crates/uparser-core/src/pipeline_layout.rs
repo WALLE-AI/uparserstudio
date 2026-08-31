@@ -43,10 +43,11 @@ pub struct LayoutDetection {
 fn cubic_weight(distance: f32) -> f32 {
     // PyTorch bicubic interpolation uses a = -0.75 when antialias is disabled.
     let distance = distance.abs();
+    let a = -0.75f32;
     if distance <= 1.0 {
-        1.25 * distance * distance * distance - 2.25 * distance * distance + 1.0
+        ((a + 2.0) * distance - (a + 3.0)) * distance * distance + 1.0
     } else if distance < 2.0 {
-        -0.75 * distance * distance * distance + 3.75 * distance * distance - 6.0 * distance + 3.0
+        ((a * distance - 5.0 * a) * distance + 8.0 * a) * distance - 4.0 * a
     } else {
         0.0
     }
@@ -54,9 +55,11 @@ fn cubic_weight(distance: f32) -> f32 {
 
 fn resize_bicubic_torchvision(source: &image::RgbImage, width: u32, height: u32) -> Vec<u8> {
     let (source_width, source_height) = source.dimensions();
+    let x_scale = source_width as f32 / width as f32;
+    let y_scale = source_height as f32 / height as f32;
     let x_weights: Vec<[(usize, f32); 4]> = (0..width)
         .map(|x| {
-            let source = ((x as f32 + 0.5) * source_width as f32 / width as f32) - 0.5;
+            let source = x_scale * (x as f32 + 0.5) - 0.5;
             let base = source.floor() as i64;
             std::array::from_fn(|offset| {
                 let index = base + offset as i64 - 1;
@@ -69,7 +72,7 @@ fn resize_bicubic_torchvision(source: &image::RgbImage, width: u32, height: u32)
         .collect();
     let y_weights: Vec<[(usize, f32); 4]> = (0..height)
         .map(|y| {
-            let source = ((y as f32 + 0.5) * source_height as f32 / height as f32) - 0.5;
+            let source = y_scale * (y as f32 + 0.5) - 0.5;
             let base = source.floor() as i64;
             std::array::from_fn(|offset| {
                 let index = base + offset as i64 - 1;
@@ -96,7 +99,7 @@ fn resize_bicubic_torchvision(source: &image::RgbImage, width: u32, height: u32)
                     value += row * y_weight;
                 }
                 output[(y * width as usize + x) * 3 + channel] =
-                    value.round().clamp(0.0, 255.0) as u8;
+                    value.round_ties_even().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -638,19 +641,14 @@ mod tests {
             vec![0, 10, 20, 64, 70, 80, 128, 130, 140, 255, 245, 235],
         )
         .unwrap();
-        // Produced by torch.nn.functional.interpolate on a uint8 BCHW tensor.
+        // Produced by torchvision 0.21 / PyTorch 2.6 tensor resize with
+        // bicubic interpolation and antialias disabled.
         let torchvision: [u8; 27] = [
-            0, 0, 5, 18, 27, 38, 54, 59, 71, 59, 63, 74, 112, 114, 119, 163, 165, 164, 127, 130,
-            142, 206, 201, 200, 255, 255, 255,
+            0, 0, 5, 18, 27, 38, 53, 60, 71, 56, 62, 73, 112, 114, 119, 168, 165, 164, 128, 130,
+            142, 205, 200, 199, 255, 255, 255,
         ];
         let rust = resize_bicubic_torchvision(&source, 3, 3);
-        let max_error = rust
-            .iter()
-            .zip(torchvision)
-            .map(|(left, right)| i16::from(*left).abs_diff(i16::from(right)))
-            .max()
-            .unwrap();
-        assert!(max_error <= 5, "maximum uint8 difference was {max_error}");
+        assert_eq!(rust, torchvision);
     }
 
     #[test]
@@ -704,5 +702,6 @@ mod tests {
         assert_eq!(decoded[0].label, "text");
         assert_eq!(decoded[0].bbox, [250.0, 125.0, 750.0, 375.0]);
         assert_eq!(decoded[1].label, "table");
+        assert_eq!(decoded[1].bbox, [150.0, 75.0, 350.0, 175.0]);
     }
 }

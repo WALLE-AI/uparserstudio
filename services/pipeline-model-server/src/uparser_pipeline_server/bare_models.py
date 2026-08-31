@@ -14,6 +14,13 @@ import numpy as np
 from .tensor_wire import TensorBundle
 
 
+def _writable_array(value: np.ndarray) -> np.ndarray:
+    array = np.asarray(value)
+    if array.flags.writeable and array.flags.c_contiguous:
+        return array
+    return np.array(array, copy=True, order="C")
+
+
 def _raw_tensors(value, prefix: str = "output") -> dict[str, np.ndarray]:
     """Flatten a model return value without interpreting any tensor."""
     import torch
@@ -103,7 +110,7 @@ class LayoutForward:
             raise ValueError("pixel_values must be f32 [batch,3,height,width]")
         # Tensor-wire decoding yields a read-only view over the request body.
         # PyTorch requires writable NumPy storage even for inference-only tensors.
-        tensor = torch.from_numpy(np.asarray(pixels).copy()).to(self.device)
+        tensor = torch.from_numpy(_writable_array(pixels)).to(self.device)
         with self.lock, torch.no_grad():
             outputs = self.model(pixel_values=tensor)
         raw = {
@@ -145,7 +152,7 @@ class OcrForward:
         if pixels.dtype != np.dtype("<f4") or pixels.ndim != 4 or pixels.shape[1] != 3:
             raise ValueError("pixel_values must be f32 [batch,3,height,width]")
         dtype = next(model.parameters()).dtype
-        tensor = torch.from_numpy(np.asarray(pixels).copy()).to(self.device, dtype=dtype)
+        tensor = torch.from_numpy(_writable_array(pixels)).to(self.device, dtype=dtype)
         with self.lock, torch.inference_mode():
             outputs = model(tensor)
         return TensorBundle(
@@ -188,7 +195,7 @@ class FormulaForward:
         pixels = bundle.tensors["pixel_values"]
         if pixels.dtype != np.dtype("<f4") or pixels.ndim != 4 or pixels.shape[1] != 1:
             raise ValueError("pixel_values must be f32 [batch,1,height,width]")
-        tensor = torch.from_numpy(np.asarray(pixels).copy()).to(self.device)
+        tensor = torch.from_numpy(_writable_array(pixels)).to(self.device)
         with self.lock, torch.inference_mode():
             outputs = self.model(tensor)
         return TensorBundle(
@@ -215,7 +222,7 @@ class OnnxForward:
         if value.dtype != np.dtype("<f4"):
             raise ValueError(f"{self.input_name} must be f32")
         with self.lock:
-            outputs = self.session.run(None, {self.input_name: value.copy()})
+            outputs = self.session.run(None, {self.input_name: _writable_array(value)})
         if len(outputs) != len(self.output_names):
             raise ValueError("ONNX output count differs from the registered tensor schema")
         return TensorBundle(

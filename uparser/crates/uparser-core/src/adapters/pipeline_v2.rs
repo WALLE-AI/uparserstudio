@@ -762,6 +762,7 @@ impl PipelineV2Adapter {
         endpoint_base: &str,
         regions: &[Region],
         formula_regions: &[Region],
+        crop_padding: u32,
     ) -> Result<OcrResult, PageError> {
         let dictionary_path = self.ocr_dictionary_path.as_deref().ok_or_else(|| {
             page_error(
@@ -798,7 +799,7 @@ impl PipelineV2Adapter {
             if crop_right <= crop_left || crop_bottom <= crop_top {
                 continue;
             }
-            let crop = image::imageops::crop_imm(
+            let source_crop = image::imageops::crop_imm(
                 &image,
                 crop_left,
                 crop_top,
@@ -806,7 +807,35 @@ impl PipelineV2Adapter {
                 crop_bottom - crop_top,
             )
             .to_image();
-            let detection_input = pipeline_ocr::preprocess_detection(&crop)
+            let crop = if crop_padding == 0 {
+                source_crop
+            } else {
+                let mut padded = image::RgbImage::from_pixel(
+                    source_crop.width() + crop_padding * 2,
+                    source_crop.height() + crop_padding * 2,
+                    image::Rgb([255, 255, 255]),
+                );
+                image::imageops::replace(
+                    &mut padded,
+                    &source_crop,
+                    i64::from(crop_padding),
+                    i64::from(crop_padding),
+                );
+                padded
+            };
+            let formula_boxes: Vec<[f32; 4]> = formula_regions
+                .iter()
+                .map(|formula| {
+                    [
+                        formula.bbox[0] - crop_left as f32 + crop_padding as f32,
+                        formula.bbox[1] - crop_top as f32 + crop_padding as f32,
+                        formula.bbox[2] - crop_left as f32 + crop_padding as f32,
+                        formula.bbox[3] - crop_top as f32 + crop_padding as f32,
+                    ]
+                })
+                .collect();
+            let detection_crop = pipeline_ocr::mask_detection_regions(&crop, &formula_boxes);
+            let detection_input = pipeline_ocr::preprocess_detection(&detection_crop)
                 .map_err(|error| page_error(page, "ocr_preprocess", error.to_string()))?;
             let detection_output = self
                 .dispatch_bare_tensor(
@@ -820,24 +849,22 @@ impl PipelineV2Adapter {
             let detections =
                 pipeline_ocr::decode_detection(&detection_output, crop.dimensions(), 0.3, 0.6, 1.5)
                     .map_err(|error| page_error(page, "ocr_detect_decode", error.to_string()))?;
+            let detections = if crop_padding > 0 {
+                pipeline_ocr::merge_detections(&detections)
+            } else {
+                detections
+            };
             let mut kept = Vec::new();
             let mut recognition_crops = Vec::new();
-            for detection in detections {
-                let page_points = detection
-                    .points
-                    .map(|point| [point[0] + crop_left as f32, point[1] + crop_top as f32]);
-                let center = [
-                    page_points.iter().map(|point| point[0]).sum::<f32>() / 4.0,
-                    page_points.iter().map(|point| point[1]).sum::<f32>() / 4.0,
-                ];
-                if formula_regions.iter().any(|formula| {
-                    center[0] >= formula.bbox[0]
-                        && center[0] <= formula.bbox[2]
-                        && center[1] >= formula.bbox[1]
-                        && center[1] <= formula.bbox[3]
-                }) {
-                    continue;
-                }
+            for detection in detections.iter().flat_map(|detection| {
+                pipeline_ocr::split_detection_around_formulas(detection, &formula_boxes)
+            }) {
+                let page_points = detection.points.map(|point| {
+                    [
+                        point[0] - crop_padding as f32 + crop_left as f32,
+                        point[1] - crop_padding as f32 + crop_top as f32,
+                    ]
+                });
                 recognition_crops.push(
                     pipeline_ocr::crop_detection(&crop, &detection)
                         .map_err(|error| page_error(page, "ocr_crop", error.to_string()))?,
@@ -911,6 +938,28 @@ impl PipelineV2Adapter {
         tensor_wire::decode(&response).map_err(|error| page_error(page, stage, error.to_string()))
     }
 
+    async fn recognize_bare_ocr_crops(
+        &self,
+        page: &RenderedPage,
+        ctx: &ParseCtx,
+        endpoint_base: &str,
+        dictionary: &pipeline_ocr::CtcDictionary,
+        crops: &[image::RgbImage],
+        stage: &str,
+    ) -> Result<Vec<pipeline_ocr::CtcRecognition>, PageError> {
+        if crops.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input = pipeline_ocr::preprocess_recognition(crops)
+            .map_err(|error| page_error(page, "table_orientation_preprocess", error.to_string()))?;
+        let endpoint = format!("{endpoint_base}/v1/models/pp_ocrv6_rec:infer");
+        let output = self
+            .dispatch_bare_tensor(page, ctx, &endpoint, stage, &input)
+            .await?;
+        pipeline_ocr::decode_ctc(&output, dictionary)
+            .map_err(|error| page_error(page, "table_orientation_decode", error.to_string()))
+    }
+
     async fn dispatch_bare_tables(
         &self,
         page: &RenderedPage,
@@ -918,6 +967,7 @@ impl PipelineV2Adapter {
         endpoint_base: &str,
         regions: &[Region],
         ocr_spans: &[OcrSpan],
+        formula_spans: &[FormulaSpan],
     ) -> Result<TableRecognitionResult, PageError> {
         let page_image = image::load_from_memory(&page.png_bytes)
             .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?
@@ -936,7 +986,7 @@ impl PipelineV2Adapter {
                     format!("table region {} has an empty crop", region.region_id),
                 ));
             }
-            let crop = image::imageops::crop_imm(
+            let original_crop = image::imageops::crop_imm(
                 &page_image,
                 crop_left,
                 crop_top,
@@ -944,6 +994,139 @@ impl PipelineV2Adapter {
                 crop_bottom - crop_top,
             )
             .to_image();
+            let source_spans = ocr_spans
+                .iter()
+                .filter(|span| span.parent_region_id.as_deref() == Some(region.region_id.as_str()))
+                .collect::<Vec<_>>();
+            let mut rotation = 0;
+            let mut local_spans = source_spans
+                .iter()
+                .map(|span| pipeline_table::TableTextSpan {
+                    id: span.span_id.clone(),
+                    polygon: span
+                        .polygon
+                        .points
+                        .iter()
+                        .map(|point| [point[0] - crop_left as f32, point[1] - crop_top as f32])
+                        .collect(),
+                    text: span.text.clone(),
+                })
+                .collect::<Vec<_>>();
+
+            if is_table_rotation_candidate(&source_spans) {
+                let dictionary_path = self.ocr_dictionary_path.as_deref().ok_or_else(|| {
+                    page_error(
+                        page,
+                        "table_orientation_config",
+                        "bare table orientation requires a character dictionary path".to_owned(),
+                    )
+                })?;
+                let dictionary = self
+                    .ocr_dictionary
+                    .get_or_init(|| {
+                        pipeline_ocr::CtcDictionary::from_path(dictionary_path)
+                            .map_err(|error| error.to_string())
+                    })
+                    .as_ref()
+                    .map_err(|error| page_error(page, "table_orientation_config", error.clone()))?;
+                let sampled = orientation_sample_indices(local_spans.len());
+                let raw_crops = sampled
+                    .iter()
+                    .filter_map(|&index| {
+                        crop_table_text_span(&original_crop, &local_spans[index].polygon)
+                    })
+                    .collect::<Vec<_>>();
+                if raw_crops.len() >= 5 {
+                    let ccw_crops = raw_crops
+                        .iter()
+                        .map(image::imageops::rotate270)
+                        .collect::<Vec<_>>();
+                    let cw_crops = raw_crops
+                        .iter()
+                        .map(image::imageops::rotate90)
+                        .collect::<Vec<_>>();
+                    let zero = self.recognize_bare_ocr_crops(
+                        page,
+                        ctx,
+                        endpoint_base,
+                        dictionary,
+                        &raw_crops,
+                        "table_orientation_recognize_0",
+                    );
+                    let ccw = self.recognize_bare_ocr_crops(
+                        page,
+                        ctx,
+                        endpoint_base,
+                        dictionary,
+                        &ccw_crops,
+                        "table_orientation_recognize_90",
+                    );
+                    let cw = self.recognize_bare_ocr_crops(
+                        page,
+                        ctx,
+                        endpoint_base,
+                        dictionary,
+                        &cw_crops,
+                        "table_orientation_recognize_270",
+                    );
+                    let (zero, ccw, cw) = tokio::join!(zero, ccw, cw);
+                    let zero = zero?;
+                    let ccw = ccw?;
+                    let cw = cw?;
+                    rotation = select_table_rotation([
+                        orientation_score(&zero),
+                        orientation_score(&ccw),
+                        orientation_score(&cw),
+                    ]);
+
+                    if rotation != 0 {
+                        let rotated_crops = local_spans
+                            .iter()
+                            .filter_map(|span| {
+                                crop_table_text_span(&original_crop, &span.polygon).map(|crop| {
+                                    if rotation == 90 {
+                                        image::imageops::rotate270(&crop)
+                                    } else {
+                                        image::imageops::rotate90(&crop)
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let recognized = self
+                            .recognize_bare_ocr_crops(
+                                page,
+                                ctx,
+                                endpoint_base,
+                                dictionary,
+                                &rotated_crops,
+                                "table_rotated_ocr_recognize",
+                            )
+                            .await?;
+                        if recognized.len() == local_spans.len() {
+                            for (span, recognition) in local_spans.iter_mut().zip(recognized) {
+                                span.text = recognition.text;
+                            }
+                        }
+                        let (width, height) = original_crop.dimensions();
+                        for span in &mut local_spans {
+                            for point in &mut span.polygon {
+                                *point = rotate_table_point(
+                                    *point,
+                                    width as f32,
+                                    height as f32,
+                                    rotation,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            let crop = match rotation {
+                90 => image::imageops::rotate270(&original_crop),
+                270 => image::imageops::rotate90(&original_crop),
+                _ => original_crop.clone(),
+            };
             let classifier_input = pipeline_table::preprocess_classifier(&crop)
                 .map_err(|error| page_error(page, "table_preprocess", error.to_string()))?;
             let slanet_input = pipeline_table::preprocess_slanet(&crop)
@@ -982,19 +1165,31 @@ impl PipelineV2Adapter {
             let wired = pipeline_table::decode_unet(&unet?, crop.dimensions())
                 .map_err(|error| page_error(page, "table_unet_decode", error.to_string()))?;
 
-            let local_spans: Vec<pipeline_table::TableTextSpan> = ocr_spans
-                .iter()
-                .map(|span| pipeline_table::TableTextSpan {
-                    id: span.span_id.clone(),
-                    polygon: span
-                        .polygon
-                        .points
-                        .iter()
-                        .map(|point| [point[0] - crop_left as f32, point[1] - crop_top as f32])
-                        .collect(),
-                    text: span.text.clone(),
-                })
-                .collect();
+            if rotation == 0 {
+                local_spans.extend(formula_spans.iter().filter_map(|span| {
+                    let bbox = span.bbox?;
+                    let latex = span.latex.trim();
+                    let center = [(bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5];
+                    if latex.is_empty()
+                        || center[0] < region.bbox[0]
+                        || center[0] > region.bbox[2]
+                        || center[1] < region.bbox[1]
+                        || center[1] > region.bbox[3]
+                    {
+                        return None;
+                    }
+                    Some(pipeline_table::TableTextSpan {
+                        id: format!("{}/table-formula", span.region_id),
+                        polygon: vec![
+                            [bbox[0] - crop_left as f32, bbox[1] - crop_top as f32],
+                            [bbox[2] - crop_left as f32, bbox[1] - crop_top as f32],
+                            [bbox[2] - crop_left as f32, bbox[3] - crop_top as f32],
+                            [bbox[0] - crop_left as f32, bbox[3] - crop_top as f32],
+                        ],
+                        text: format!("${latex}$"),
+                    })
+                }));
+            }
             let mut wired_cells = wired.cells;
             pipeline_table::bind_spans_to_cells(&mut wired_cells, &local_spans);
             let wired_candidate = pipeline_table::TableCandidate {
@@ -1007,9 +1202,35 @@ impl PipelineV2Adapter {
                 html: pipeline_table::render_slanet_html(&slanet.tokens, &wireless_cells),
                 cells: wireless_cells,
             };
-            let ocr_texts: Vec<String> = ocr_spans.iter().map(|span| span.text.clone()).collect();
-            let selection =
-                pipeline_table::select_candidate(&wired_candidate, &wireless_candidate, &ocr_texts);
+            let ocr_texts: Vec<String> = local_spans.iter().map(|span| span.text.clone()).collect();
+            let selection = if classification.model == pipeline_table::SelectedTableModel::Wireless
+                && classification.confidence >= 0.9
+            {
+                pipeline_table::TableSelection {
+                    model: pipeline_table::SelectedTableModel::Wireless,
+                    reason: "high_confidence_wireless_classifier",
+                }
+            } else {
+                pipeline_table::select_candidate(&wired_candidate, &wireless_candidate, &ocr_texts)
+            };
+            if std::env::var_os("UPARSER_PIPELINE_TABLE_DEBUG").is_some() {
+                eprintln!(
+                    "table-debug page={} region={} crop={}x{} rotation={} class={:?} class_confidence={} selection={:?} reason={} wired_cells={} wireless_cells={} wired_html={} wireless_html={}",
+                    page.page_num,
+                    region.region_id,
+                    crop.width(),
+                    crop.height(),
+                    rotation,
+                    classification.model,
+                    classification.confidence,
+                    selection.model,
+                    selection.reason,
+                    wired_candidate.cells.len(),
+                    wireless_candidate.cells.len(),
+                    wired_candidate.html,
+                    wireless_candidate.html,
+                );
+            }
             let selected = match selection.model {
                 pipeline_table::SelectedTableModel::Wired => &wired_candidate,
                 pipeline_table::SelectedTableModel::Wireless => &wireless_candidate,
@@ -1020,8 +1241,22 @@ impl PipelineV2Adapter {
                 .enumerate()
                 .map(|(index, cell)| {
                     let bbox = cell.bbox.map(|bbox| {
-                        let xs = [bbox[0], bbox[2], bbox[4], bbox[6]];
-                        let ys = [bbox[1], bbox[3], bbox[5], bbox[7]];
+                        let points = [
+                            [bbox[0], bbox[1]],
+                            [bbox[2], bbox[3]],
+                            [bbox[4], bbox[5]],
+                            [bbox[6], bbox[7]],
+                        ]
+                        .map(|point| {
+                            inverse_rotate_table_point(
+                                point,
+                                original_crop.width() as f32,
+                                original_crop.height() as f32,
+                                rotation,
+                            )
+                        });
+                        let xs = points.map(|point| point[0]);
+                        let ys = points.map(|point| point[1]);
                         [
                             xs.into_iter().fold(f32::INFINITY, f32::min) + crop_left as f32,
                             ys.into_iter().fold(f32::INFINITY, f32::min) + crop_top as f32,
@@ -1053,7 +1288,7 @@ impl PipelineV2Adapter {
                     }
                     .to_owned(),
                 ),
-                rotation_degrees: 0,
+                rotation_degrees: rotation,
                 confidence: Some(classification.confidence),
             });
         }
@@ -1124,8 +1359,15 @@ impl PipelineV2Adapter {
 
         let ocr = async {
             if let Some(endpoint_base) = &self.bare_ocr_endpoint_base {
-                self.dispatch_bare_ocr(page, ctx, endpoint_base, &layout.regions, &formulas.regions)
-                    .await
+                self.dispatch_bare_ocr(
+                    page,
+                    ctx,
+                    endpoint_base,
+                    &layout.regions,
+                    &formulas.regions,
+                    50,
+                )
+                .await
             } else {
                 self.dispatch_stage::<_, OcrResult>(
                     page,
@@ -1171,6 +1413,7 @@ impl PipelineV2Adapter {
                     endpoint_base,
                     &table_ocr_regions,
                     &formulas.regions,
+                    0,
                 )
                 .await
             } else {
@@ -1198,8 +1441,15 @@ impl PipelineV2Adapter {
         let tables = if table_regions.is_empty() {
             TableRecognitionResult { tables: vec![] }
         } else if let Some(endpoint_base) = &self.bare_table_endpoint_base {
-            self.dispatch_bare_tables(page, ctx, endpoint_base, &table_regions, &table_ocr.spans)
-                .await?
+            self.dispatch_bare_tables(
+                page,
+                ctx,
+                endpoint_base,
+                &table_regions,
+                &table_ocr.spans,
+                &recognized_formulas.spans,
+            )
+            .await?
         } else {
             self.dispatch_stage::<_, TableRecognitionResult>(
                 page,
@@ -1333,6 +1583,120 @@ fn page_error(page: &RenderedPage, stage: &str, message: String) -> PageError {
     }
 }
 
+fn polygon_bounds(points: &[[f32; 2]]) -> Option<[f32; 4]> {
+    if points.is_empty() {
+        return None;
+    }
+    Some(points.iter().fold(
+        [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ],
+        |result, point| {
+            [
+                result[0].min(point[0]),
+                result[1].min(point[1]),
+                result[2].max(point[0]),
+                result[3].max(point[1]),
+            ]
+        },
+    ))
+}
+
+fn crop_table_text_span(image: &image::RgbImage, points: &[[f32; 2]]) -> Option<image::RgbImage> {
+    let [left, top, right, bottom] = polygon_bounds(points)?;
+    let left = left.floor().clamp(0.0, image.width() as f32) as u32;
+    let top = top.floor().clamp(0.0, image.height() as f32) as u32;
+    let right = right.ceil().clamp(0.0, image.width() as f32) as u32;
+    let bottom = bottom.ceil().clamp(0.0, image.height() as f32) as u32;
+    (right > left && bottom > top)
+        .then(|| image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image())
+}
+
+fn is_table_rotation_candidate(spans: &[&OcrSpan]) -> bool {
+    let vertical = spans
+        .iter()
+        .filter_map(|span| polygon_bounds(&span.polygon.points))
+        .filter(|bbox| {
+            let width = bbox[2] - bbox[0];
+            let height = bbox[3] - bbox[1];
+            height > 0.0 && width / height < 0.8
+        })
+        .count();
+    vertical >= 3 && vertical as f32 >= spans.len() as f32 * 0.28
+}
+
+fn orientation_sample_indices(length: usize) -> Vec<usize> {
+    const LIMIT: usize = 18;
+    if length <= LIMIT {
+        return (0..length).collect();
+    }
+    (0..LIMIT)
+        .map(|index| ((index as f32 * (length - 1) as f32) / (LIMIT - 1) as f32).round() as usize)
+        .collect()
+}
+
+fn orientation_score(recognitions: &[pipeline_ocr::CtcRecognition]) -> (f32, usize, usize) {
+    let valid = recognitions
+        .iter()
+        .filter(|recognition| !recognition.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    let characters = valid
+        .iter()
+        .map(|recognition| recognition.text.chars().count())
+        .sum();
+    if valid.len() < 5 {
+        return (0.0, valid.len(), characters);
+    }
+    (
+        valid
+            .iter()
+            .map(|recognition| recognition.confidence)
+            .sum::<f32>()
+            / valid.len() as f32,
+        valid.len(),
+        characters,
+    )
+}
+
+fn select_table_rotation(scores: [(f32, usize, usize); 3]) -> u16 {
+    if scores[0].0 >= 0.9 {
+        return 0;
+    }
+    let best = (0..scores.len())
+        .max_by(|left, right| {
+            scores[*left]
+                .0
+                .total_cmp(&scores[*right].0)
+                .then_with(|| scores[*left].1.cmp(&scores[*right].1))
+                .then_with(|| scores[*left].2.cmp(&scores[*right].2))
+        })
+        .unwrap_or(0);
+    if best != 0 && scores[best].0 - scores[0].0 < 0.08 {
+        0
+    } else {
+        [0, 90, 270][best]
+    }
+}
+
+fn rotate_table_point(point: [f32; 2], width: f32, height: f32, rotation: u16) -> [f32; 2] {
+    match rotation {
+        90 => [point[1], width - point[0]],
+        270 => [height - point[1], point[0]],
+        _ => point,
+    }
+}
+
+fn inverse_rotate_table_point(point: [f32; 2], width: f32, height: f32, rotation: u16) -> [f32; 2] {
+    match rotation {
+        90 => [width - point[1], point[0]],
+        270 => [point[1], height - point[0]],
+        _ => point,
+    }
+}
+
 fn validate_regions(page: &RenderedPage, stage: &str, regions: &[Region]) -> Result<(), PageError> {
     for region in regions {
         region
@@ -1371,7 +1735,13 @@ fn region_reading_order(page: &RenderedPage, regions: &[Region]) -> Result<Vec<S
         .collect::<Result<Vec<_>, _>>()?;
     let ranks = crate::reading_order::assign_reading_order(&boxes);
     let mut indices = (0..regions.len()).collect::<Vec<_>>();
-    indices.sort_by_key(|index| ranks[*index]);
+    indices.sort_by_key(|index| {
+        let native = regions[*index]
+            .region_id
+            .rsplit_once("/layout-")
+            .and_then(|(_, suffix)| suffix.parse::<usize>().ok());
+        native.unwrap_or(regions.len() + ranks[*index] as usize)
+    });
     Ok(indices
         .into_iter()
         .map(|index| regions[index].region_id.clone())
@@ -1424,6 +1794,29 @@ fn build_blocks(
     ctx: &ParseCtx,
     result: PageAnalyzeResult,
 ) -> Result<Vec<Block>, PageError> {
+    let inline_parents: HashMap<String, String> = result
+        .regions
+        .iter()
+        .filter(|region| region.label == "inline_formula")
+        .filter_map(|formula| {
+            result
+                .regions
+                .iter()
+                .filter(|candidate| {
+                    !matches!(
+                        candidate.label.as_str(),
+                        "inline_formula" | "display_formula" | "table" | "image" | "chart"
+                    ) && bbox_contains_center(candidate.bbox, formula.bbox)
+                })
+                .min_by(|left, right| {
+                    let area = |region: &Region| {
+                        (region.bbox[2] - region.bbox[0]) * (region.bbox[3] - region.bbox[1])
+                    };
+                    area(left).total_cmp(&area(right))
+                })
+                .map(|parent| (formula.region_id.clone(), parent.region_id.clone()))
+        })
+        .collect();
     let mut spans_by_region: HashMap<String, Vec<OcrSpan>> = HashMap::new();
     for span in result.ocr_spans {
         if let Some(parent) = &span.parent_region_id {
@@ -1438,6 +1831,15 @@ fn build_blocks(
         .into_iter()
         .map(|span| (span.region_id.clone(), span))
         .collect::<HashMap<_, _>>();
+    let mut inline_by_parent: HashMap<String, Vec<&FormulaSpan>> = HashMap::new();
+    for (formula_id, parent_id) in &inline_parents {
+        if let Some(formula) = formulas.get(formula_id) {
+            inline_by_parent
+                .entry(parent_id.clone())
+                .or_default()
+                .push(formula);
+        }
+    }
     let tables = result
         .tables
         .into_iter()
@@ -1452,6 +1854,9 @@ fn build_blocks(
 
     let mut blocks = Vec::with_capacity(result.regions.len());
     for region in result.regions {
+        if region.label == "inline_formula" && inline_parents.contains_key(&region.region_id) {
+            continue;
+        }
         let (category, warning) = category_map::map_pipeline_category(&region.label);
         if let Some(warning) = warning {
             ctx.warn(format!("pipeline-v2 page {}: {warning}", page.page_num));
@@ -1460,15 +1865,131 @@ fn build_blocks(
         let mut spans = spans_by_region
             .remove(&region.region_id)
             .unwrap_or_default();
-        spans.sort_by_key(span_sort_key);
-        let mut text = (!spans.is_empty()).then(|| {
+        let vertical_span_count = spans
+            .iter()
+            .filter(|span| {
+                let bbox = span.polygon.points.iter().fold(
+                    [
+                        f32::INFINITY,
+                        f32::INFINITY,
+                        f32::NEG_INFINITY,
+                        f32::NEG_INFINITY,
+                    ],
+                    |result, point| {
+                        [
+                            result[0].min(point[0]),
+                            result[1].min(point[1]),
+                            result[2].max(point[0]),
+                            result[3].max(point[1]),
+                        ]
+                    },
+                );
+                let width = bbox[2] - bbox[0];
+                let height = bbox[3] - bbox[1];
+                width > 0.0 && height / width > 2.0
+            })
+            .count();
+        let is_vertical = region.label == "vertical_text"
+            || (!spans.is_empty() && vertical_span_count as f32 / spans.len() as f32 > 0.8);
+        if is_vertical {
+            spans.sort_by(|left, right| {
+                let anchor = |span: &OcrSpan| {
+                    span.polygon
+                        .points
+                        .iter()
+                        .fold([f32::NEG_INFINITY, f32::INFINITY], |result, point| {
+                            [result[0].max(point[0]), result[1].min(point[1])]
+                        })
+                };
+                let left = anchor(left);
+                let right = anchor(right);
+                right[0]
+                    .total_cmp(&left[0])
+                    .then_with(|| left[1].total_cmp(&right[1]))
+            });
+        } else {
+            spans.sort_by_key(span_sort_key);
+        }
+        let inline_formulas = inline_by_parent
+            .remove(&region.region_id)
+            .unwrap_or_default();
+        let assembled = if is_vertical {
             spans
                 .iter()
                 .map(|span| span.text.trim())
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n")
-        });
+        } else {
+            let mut text_events: Vec<(f32, f32, f32, String)> = spans
+                .iter()
+                .filter_map(|span| {
+                    let text = span.text.trim();
+                    if text.is_empty() {
+                        return None;
+                    }
+                    let min_x = span
+                        .polygon
+                        .points
+                        .iter()
+                        .map(|point| point[0])
+                        .fold(f32::INFINITY, f32::min);
+                    let min_y = span
+                        .polygon
+                        .points
+                        .iter()
+                        .map(|point| point[1])
+                        .fold(f32::INFINITY, f32::min);
+                    let max_y = span
+                        .polygon
+                        .points
+                        .iter()
+                        .map(|point| point[1])
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    Some((min_y, min_x, (max_y - min_y).max(1.0), text.to_owned()))
+                })
+                .collect();
+            text_events.extend(inline_formulas.into_iter().filter_map(|formula| {
+                let bbox = formula.bbox?;
+                (!formula.latex.trim().is_empty()).then(|| {
+                    (
+                        bbox[1],
+                        bbox[0],
+                        (bbox[3] - bbox[1]).max(1.0),
+                        format!("${}$", formula.latex.trim()),
+                    )
+                })
+            }));
+            text_events.sort_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.total_cmp(&right.1))
+            });
+            let mut lines: Vec<Vec<(f32, f32, f32, String)>> = Vec::new();
+            for event in text_events {
+                if let Some(line) = lines.last_mut() {
+                    let mean_top = line.iter().map(|item| item.0).sum::<f32>() / line.len() as f32;
+                    let max_height = line.iter().map(|item| item.2).fold(event.2, f32::max);
+                    if (event.0 - mean_top).abs() <= max_height * 0.5 {
+                        line.push(event);
+                        continue;
+                    }
+                }
+                lines.push(vec![event]);
+            }
+            lines
+                .into_iter()
+                .map(|mut line| {
+                    line.sort_by(|left, right| left.1.total_cmp(&right.1));
+                    line.into_iter()
+                        .map(|event| event.3)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut text = (!assembled.is_empty()).then_some(assembled);
         let latex = formulas
             .get(&region.region_id)
             .map(|formula| formula.latex.clone());
@@ -1611,6 +2132,71 @@ mod tests {
             height: 200,
             png_bytes: imaging::to_png_bytes(&image).unwrap(),
         }
+    }
+
+    #[test]
+    fn table_orientation_gate_and_score_match_mineru_thresholds() {
+        let make_span = |index: usize, width: f32, height: f32| OcrSpan {
+            span_id: format!("span-{index}"),
+            parent_region_id: Some("table-1".into()),
+            polygon: Polygon {
+                points: vec![[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]],
+            },
+            text: "字".into(),
+            language: Some("ch".into()),
+            confidence: Some(0.9),
+            coordinate_space: CoordinateSpace::RenderPixels,
+        };
+        let spans = (0..10)
+            .map(|index| make_span(index, if index < 3 { 7.0 } else { 20.0 }, 10.0))
+            .collect::<Vec<_>>();
+        assert!(is_table_rotation_candidate(
+            &spans.iter().collect::<Vec<_>>()
+        ));
+
+        let recognitions = (0..5)
+            .map(|_| pipeline_ocr::CtcRecognition {
+                text: "中文".into(),
+                confidence: 0.8,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(orientation_score(&recognitions), (0.8, 5, 10));
+        assert_eq!(orientation_sample_indices(100).len(), 18);
+        assert_eq!(
+            select_table_rotation([(0.70, 5, 10), (0.79, 5, 10), (0.60, 6, 12)]),
+            90
+        );
+        assert_eq!(
+            select_table_rotation([(0.70, 5, 10), (0.77, 6, 12), (0.60, 5, 10)]),
+            0
+        );
+    }
+
+    #[test]
+    fn table_rotation_coordinate_transform_roundtrips() {
+        let point = [23.0, 17.0];
+        for rotation in [0, 90, 270] {
+            let rotated = rotate_table_point(point, 100.0, 60.0, rotation);
+            assert_eq!(
+                inverse_rotate_table_point(rotated, 100.0, 60.0, rotation),
+                point
+            );
+        }
+    }
+
+    #[test]
+    fn bare_layout_native_order_precedes_geometric_fallback() {
+        let page = rendered_page();
+        let mut right = region();
+        right.region_id = "page-1/layout-0".into();
+        right.bbox = [140.0, 10.0, 180.0, 190.0];
+        let mut left = region();
+        left.region_id = "page-1/layout-1".into();
+        left.bbox = [20.0, 10.0, 60.0, 190.0];
+
+        let order = region_reading_order(&page, &[right, left]).unwrap();
+
+        assert_eq!(order, ["page-1/layout-0", "page-1/layout-1"]);
     }
 
     #[test]
@@ -1992,6 +2578,71 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(formula_blocks.len(), 1);
         assert_eq!(formula_blocks[0].latex.as_deref(), Some("x^2 + y^2"));
+    }
+
+    #[test]
+    fn inline_formula_is_embedded_between_neighboring_ocr_spans() {
+        let page = rendered_page();
+        let ctx = ParseCtx::with_mock(Arc::new(MockDispatch::new()), Arc::new(Semaphore::new(1)));
+        let result = PageAnalyzeResult {
+            regions: vec![
+                Region {
+                    region_id: "text-1".into(),
+                    label: "text".into(),
+                    bbox: [10.0, 10.0, 190.0, 50.0],
+                    polygon: None,
+                    confidence: Some(0.99),
+                    coordinate_space: CoordinateSpace::RenderPixels,
+                },
+                Region {
+                    region_id: "formula-1".into(),
+                    label: "inline_formula".into(),
+                    bbox: [80.0, 12.0, 105.0, 32.0],
+                    polygon: None,
+                    confidence: Some(0.98),
+                    coordinate_space: CoordinateSpace::RenderPixels,
+                },
+            ],
+            ocr_spans: vec![
+                OcrSpan {
+                    span_id: "left".into(),
+                    parent_region_id: Some("text-1".into()),
+                    polygon: Polygon {
+                        points: vec![[10.0, 10.0], [70.0, 10.0], [70.0, 30.0], [10.0, 30.0]],
+                    },
+                    text: "left".into(),
+                    language: Some("en".into()),
+                    confidence: Some(0.99),
+                    coordinate_space: CoordinateSpace::RenderPixels,
+                },
+                OcrSpan {
+                    span_id: "right".into(),
+                    parent_region_id: Some("text-1".into()),
+                    polygon: Polygon {
+                        points: vec![[110.0, 10.0], [190.0, 10.0], [190.0, 30.0], [110.0, 30.0]],
+                    },
+                    text: "right".into(),
+                    language: Some("en".into()),
+                    confidence: Some(0.99),
+                    coordinate_space: CoordinateSpace::RenderPixels,
+                },
+            ],
+            formula_spans: vec![FormulaSpan {
+                region_id: "formula-1".into(),
+                latex: "x^2".into(),
+                confidence: Some(0.98),
+                bbox: Some([80.0, 12.0, 105.0, 32.0]),
+            }],
+            tables: vec![],
+            reading_order: vec!["text-1".into(), "formula-1".into()],
+            markdown: None,
+            assets: vec![],
+        };
+
+        let blocks = build_blocks(&page, &ctx, result).unwrap();
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text.as_deref(), Some("left $x^2$ right"));
     }
 
     /// D8: a page whose layout stage returns zero regions previously

@@ -209,6 +209,49 @@ pub fn preprocess_classifier(image: &image::RgbImage) -> Result<TensorBundle, Ta
     })
 }
 
+fn area_resize_rgb(image: &image::RgbImage, width: usize, height: usize) -> Vec<[f32; 3]> {
+    let source_width = image.width() as usize;
+    let source_height = image.height() as usize;
+    let horizontal_scale = source_width as f32 / width as f32;
+    let vertical_scale = source_height as f32 / height as f32;
+    let mut horizontal = vec![[0.0; 3]; source_height * width];
+    for y in 0..source_height {
+        for target_x in 0..width {
+            let start = target_x as f32 * horizontal_scale;
+            let end = (target_x + 1) as f32 * horizontal_scale;
+            for source_x in start.floor() as usize..end.ceil() as usize {
+                if source_x >= source_width {
+                    continue;
+                }
+                let weight = (end.min(source_x as f32 + 1.0) - start.max(source_x as f32)).max(0.0);
+                let pixel = image.get_pixel(source_x as u32, y as u32);
+                for channel in 0..3 {
+                    horizontal[y * width + target_x][channel] +=
+                        f32::from(pixel[channel]) * weight / horizontal_scale;
+                }
+            }
+        }
+    }
+    let mut output = vec![[0.0; 3]; height * width];
+    for target_y in 0..height {
+        let start = target_y as f32 * vertical_scale;
+        let end = (target_y + 1) as f32 * vertical_scale;
+        for source_y in start.floor() as usize..end.ceil() as usize {
+            if source_y >= source_height {
+                continue;
+            }
+            let weight = (end.min(source_y as f32 + 1.0) - start.max(source_y as f32)).max(0.0);
+            for x in 0..width {
+                for channel in 0..3 {
+                    output[target_y * width + x][channel] +=
+                        horizontal[source_y * width + x][channel] * weight / vertical_scale;
+                }
+            }
+        }
+    }
+    output
+}
+
 pub fn preprocess_unet(image: &image::RgbImage) -> Result<TensorBundle, TableError> {
     if image.width() == 0 || image.height() == 0 {
         return Err(TableError::EmptyCrop);
@@ -221,14 +264,26 @@ pub fn preprocess_unet(image: &image::RgbImage) -> Result<TensorBundle, TableErr
     let mut values = vec![0.0f32; plane * 3];
     let mean = [123.675f32, 116.28, 103.53];
     let std = [58.395f32, 57.12, 57.375];
-    for y in 0..height {
-        let source_y = (y as f32 + 0.5) * image.height() as f32 / height as f32 - 0.5;
-        for x in 0..width {
-            let source_x = (x as f32 + 0.5) * image.width() as f32 / width as f32 - 0.5;
-            for channel in 0..3 {
-                let pixel = bilinear(image, source_x, source_y, channel);
-                values[channel * plane + y * width + x] =
-                    (f32::from(pixel) - mean[channel]) / std[channel];
+    if image.width() > 1024 && image.height() > 1024 {
+        let resized = area_resize_rgb(image, width, height);
+        for y in 0..height {
+            for x in 0..width {
+                for channel in 0..3 {
+                    values[channel * plane + y * width + x] =
+                        (resized[y * width + x][channel] - mean[channel]) / std[channel];
+                }
+            }
+        }
+    } else {
+        for y in 0..height {
+            let source_y = (y as f32 + 0.5) * image.height() as f32 / height as f32 - 0.5;
+            for x in 0..width {
+                let source_x = (x as f32 + 0.5) * image.width() as f32 / width as f32 - 0.5;
+                for channel in 0..3 {
+                    values[channel * plane + y * width + x] =
+                        (f32::from(bilinear(image, source_x, source_y, channel)) - mean[channel])
+                            / std[channel];
+                }
             }
         }
     }
@@ -350,6 +405,210 @@ fn morph_close(
     pass(&dilated, width, height, radius, horizontal, false)
 }
 
+fn line_distance(left: [f32; 2], right: [f32; 2]) -> f32 {
+    (left[0] - right[0]).hypot(left[1] - right[1])
+}
+
+fn adjust_lines(
+    lines: &[[f32; 4]],
+    distance_threshold: f32,
+    angle_threshold: f32,
+) -> Vec<[f32; 4]> {
+    let mut additions = Vec::new();
+    for (left_index, left) in lines.iter().enumerate() {
+        let left_center = [(left[0] + left[2]) * 0.5, (left[1] + left[3]) * 0.5];
+        for (right_index, right) in lines.iter().enumerate() {
+            if left_index == right_index {
+                continue;
+            }
+            let right_center = [(right[0] + right[2]) * 0.5, (right[1] + right[3]) * 0.5];
+            if (right[0] < left_center[0] && left_center[0] < right[2])
+                || (right[1] < left_center[1] && left_center[1] < right[3])
+                || (left[0] < right_center[0] && right_center[0] < left[2])
+                || (left[1] < right_center[1] && right_center[1] < left[3])
+            {
+                continue;
+            }
+            for start in [[left[0], left[1]], [left[2], left[3]]] {
+                for end in [[right[0], right[1]], [right[2], right[3]]] {
+                    let dx = end[0] - start[0];
+                    let angle = ((end[1] - start[1]).abs() / (dx.abs() + 1e-10))
+                        .atan()
+                        .to_degrees();
+                    if line_distance(start, end) < distance_threshold && angle < angle_threshold {
+                        additions.push([start[0], start[1], end[0], end[1]]);
+                    }
+                }
+            }
+        }
+    }
+    additions
+}
+
+fn extend_line_to_crossing(line: [f32; 4], other: [f32; 4]) -> [f32; 4] {
+    let [x1, y1, x2, y2] = line;
+    let [ox1, oy1, ox2, oy2] = other;
+    let a1 = y2 - y1;
+    let b1 = x1 - x2;
+    let c1 = x2 * y1 - x1 * y2;
+    let a2 = oy2 - oy1;
+    let b2 = ox1 - ox2;
+    let c2 = ox2 * oy1 - ox1 * oy2;
+    let side1 = a2 * x1 + b2 * y1 + c2;
+    let side2 = a2 * x2 + b2 * y2 + c2;
+    if side1 * side2 <= 0.0 {
+        return line;
+    }
+    let denominator = a1 * b2 - a2 * b1;
+    if denominator.abs() <= f32::EPSILON {
+        return line;
+    }
+    let crossing = [
+        (b1 * c2 - b2 * c1) / denominator,
+        (a2 * c1 - a1 * c2) / denominator,
+    ];
+    let first_distance = line_distance(crossing, [x1, y1]);
+    let second_distance = line_distance(crossing, [x2, y2]);
+    if first_distance.min(second_distance) >= 20.0 {
+        return line;
+    }
+    let anchor = if first_distance < second_distance {
+        [x2, y2]
+    } else {
+        [x1, y1]
+    };
+    let angle = ((anchor[1] - crossing[1]).abs() / ((anchor[0] - crossing[0]).abs() + 1e-10))
+        .atan()
+        .to_degrees();
+    if angle >= 30.0 && (90.0 - angle).abs() >= 30.0 {
+        return line;
+    }
+    if first_distance < second_distance {
+        [crossing[0], crossing[1], x2, y2]
+    } else {
+        [x1, y1, crossing[0], crossing[1]]
+    }
+}
+
+fn recover_logical_cells(boxes: &[ComponentBox]) -> Vec<(u32, u32, u32, u32)> {
+    if boxes.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = vec![vec![0usize]];
+    for index in 1..boxes.len() {
+        if (boxes[index].top as i32 - boxes[index - 1].top as i32).unsigned_abs() > 10 {
+            rows.push(Vec::new());
+        }
+        rows.last_mut().unwrap().push(index);
+    }
+    let longest = rows.iter().max_by_key(|row| row.len()).unwrap();
+    let mut column_starts = longest
+        .iter()
+        .map(|&index| boxes[index].left as f32)
+        .collect::<Vec<_>>();
+    let mut min_x = column_starts[0];
+    let mut max_x = boxes[*longest.last().unwrap()].right as f32;
+    for row in &rows {
+        for &index in row {
+            for (value, insert_last) in [
+                (boxes[index].left as f32, true),
+                (boxes[index].right as f32, false),
+            ] {
+                if column_starts
+                    .iter()
+                    .any(|existing| (value - existing).abs() <= 15.0)
+                {
+                    continue;
+                }
+                if value < min_x {
+                    column_starts.insert(0, value);
+                    min_x = value;
+                } else if value > max_x {
+                    if insert_last {
+                        column_starts.push(value);
+                    }
+                    max_x = value;
+                } else if let Some(position) = column_starts.iter().position(|&item| value < item) {
+                    column_starts.insert(position, value);
+                }
+            }
+        }
+    }
+    let mut column_widths = column_starts
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .collect::<Vec<_>>();
+    column_widths.push(max_x - column_starts.last().copied().unwrap_or(max_x));
+    let row_starts = rows
+        .iter()
+        .map(|row| boxes[row[0]].top as f32)
+        .collect::<Vec<_>>();
+    let mut row_heights = row_starts
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .collect::<Vec<_>>();
+    row_heights.push(
+        rows.last()
+            .unwrap()
+            .iter()
+            .map(|&index| (boxes[index].bottom - boxes[index].top) as f32)
+            .fold(0.0, f32::max),
+    );
+
+    let mut logical = vec![(0, 0, 1, 1); boxes.len()];
+    for (row_index, row) in rows.iter().enumerate() {
+        let mut prior_column_spans = 0usize;
+        for &box_index in row {
+            let box_width = (boxes[box_index].right - boxes[box_index].left) as f32;
+            let nearest = column_starts
+                .iter()
+                .enumerate()
+                .min_by(|left, right| {
+                    (left.1 - boxes[box_index].left as f32)
+                        .abs()
+                        .total_cmp(&(right.1 - boxes[box_index].left as f32).abs())
+                })
+                .map_or(0, |(index, _)| index);
+            let column = prior_column_spans.max(nearest);
+            let column_span = closest_span(&column_widths, column, box_width);
+            prior_column_spans += column_span;
+            let box_height = (boxes[box_index].bottom - boxes[box_index].top) as f32;
+            let row_span = closest_span(&row_heights, row_index, box_height);
+            logical[box_index] = (
+                row_index as u32,
+                column as u32,
+                row_span as u32,
+                column_span as u32,
+            );
+        }
+    }
+    logical
+}
+
+fn closest_span(axis_sizes: &[f32], start: usize, target: f32) -> usize {
+    let mut cumulative = 0.0;
+    let mut previous_difference = f32::INFINITY;
+    for (offset, &size) in axis_sizes.iter().skip(start).enumerate() {
+        cumulative += size;
+        let difference = (cumulative - target).abs();
+        if offset == 0 && cumulative > target {
+            return 1;
+        }
+        if difference <= 10.0 {
+            return offset + 1;
+        }
+        if cumulative > target {
+            return if difference < previous_difference {
+                offset + 1
+            } else {
+                offset.max(1)
+            };
+        }
+        previous_difference = difference;
+    }
+    axis_sizes.len().saturating_sub(start).max(1)
+}
+
 fn cluster_coordinates(mut values: Vec<f32>, threshold: f32) -> Vec<f32> {
     values.sort_by(f32::total_cmp);
     let mut clusters: Vec<(f32, usize)> = Vec::new();
@@ -429,7 +688,8 @@ pub fn decode_unet(
         ((source_height as f32).sqrt() * 1.2) as usize,
         false,
     );
-    let rows: Vec<[f32; 4]> = component_boxes(&horizontal, width, height)
+    let enhanced_recovery = width > 1024 && height > 1024;
+    let mut rows: Vec<[f32; 4]> = component_boxes(&horizontal, width, height)
         .into_iter()
         .filter(|bbox| bbox.right - bbox.left + 1 > 50)
         .map(|bbox| {
@@ -437,7 +697,7 @@ pub fn decode_unet(
             [bbox.left as f32, y, bbox.right as f32, y]
         })
         .collect();
-    let columns: Vec<[f32; 4]> = component_boxes(&vertical, width, height)
+    let mut columns: Vec<[f32; 4]> = component_boxes(&vertical, width, height)
         .into_iter()
         .filter(|bbox| bbox.bottom - bbox.top + 1 > 30)
         .map(|bbox| {
@@ -445,6 +705,16 @@ pub fn decode_unet(
             [x, bbox.top as f32, x, bbox.bottom as f32]
         })
         .collect();
+    if enhanced_recovery {
+        rows.extend(adjust_lines(&rows, 100.0, 50.0));
+        columns.extend(adjust_lines(&columns, 15.0, 50.0));
+        for row in &mut rows {
+            for column in &mut columns {
+                *row = extend_line_to_crossing(*row, *column);
+                *column = extend_line_to_crossing(*column, *row);
+            }
+        }
+    }
     let mut line_mask = vec![false; width * height];
     for row in &rows {
         let y = row[1].round().clamp(0.0, height.saturating_sub(1) as f32) as usize;
@@ -467,7 +737,7 @@ pub fn decode_unet(
         }
     }
     let inverse: Vec<bool> = line_mask.iter().map(|value| !value).collect();
-    let physical: Vec<ComponentBox> = component_boxes(&inverse, width, height)
+    let mut physical: Vec<ComponentBox> = component_boxes(&inverse, width, height)
         .into_iter()
         .filter(|bbox| {
             let box_width = bbox.right - bbox.left + 1;
@@ -479,33 +749,50 @@ pub fn decode_unet(
                 && box_height >= 15
         })
         .collect();
-    let x_boundaries = cluster_coordinates(
+    physical.sort_by_key(|bbox| (bbox.top, bbox.left));
+    let logical = if enhanced_recovery {
+        recover_logical_cells(&physical)
+    } else {
+        let x_boundaries = cluster_coordinates(
+            physical
+                .iter()
+                .flat_map(|bbox| [bbox.left as f32, (bbox.right + 1) as f32])
+                .collect(),
+            15.0,
+        );
+        let y_boundaries = cluster_coordinates(
+            physical
+                .iter()
+                .flat_map(|bbox| [bbox.top as f32, (bbox.bottom + 1) as f32])
+                .collect(),
+            10.0,
+        );
         physical
             .iter()
-            .flat_map(|bbox| [bbox.left as f32, (bbox.right + 1) as f32])
-            .collect(),
-        15.0,
-    );
-    let y_boundaries = cluster_coordinates(
-        physical
-            .iter()
-            .flat_map(|bbox| [bbox.top as f32, (bbox.bottom + 1) as f32])
-            .collect(),
-        10.0,
-    );
+            .map(|bbox| {
+                let column = nearest_boundary(&x_boundaries, bbox.left as f32);
+                let column_end = nearest_boundary(&x_boundaries, (bbox.right + 1) as f32);
+                let row = nearest_boundary(&y_boundaries, bbox.top as f32);
+                let row_end = nearest_boundary(&y_boundaries, (bbox.bottom + 1) as f32);
+                (
+                    row as u32,
+                    column as u32,
+                    row_end.saturating_sub(row).max(1) as u32,
+                    column_end.saturating_sub(column).max(1) as u32,
+                )
+            })
+            .collect()
+    };
     let mut cells: Vec<TableCellCandidate> = physical
         .into_iter()
-        .map(|bbox| {
-            let column = nearest_boundary(&x_boundaries, bbox.left as f32);
-            let column_end = nearest_boundary(&x_boundaries, (bbox.right + 1) as f32);
-            let row = nearest_boundary(&y_boundaries, bbox.top as f32);
-            let row_end = nearest_boundary(&y_boundaries, (bbox.bottom + 1) as f32);
-            TableCellCandidate {
+        .zip(logical)
+        .map(
+            |(bbox, (row, column, row_span, column_span))| TableCellCandidate {
                 text: String::new(),
-                row: row as u32,
-                column: column as u32,
-                row_span: row_end.saturating_sub(row).max(1) as u32,
-                column_span: column_end.saturating_sub(column).max(1) as u32,
+                row,
+                column,
+                row_span,
+                column_span,
                 bbox: Some([
                     bbox.left as f32,
                     bbox.top as f32,
@@ -516,8 +803,8 @@ pub fn decode_unet(
                     bbox.left as f32,
                     bbox.bottom as f32,
                 ]),
-            }
-        })
+            },
+        )
         .collect();
     cells.sort_by_key(|cell| (cell.row, cell.column));
     Ok(WiredDecoded { cells })
@@ -869,43 +1156,223 @@ pub fn render_wired_html(cells: &[TableCellCandidate]) -> String {
         .map(|cell| cell.column + cell.column_span)
         .max()
         .unwrap_or(0);
-    let mut occupied = HashSet::new();
+    let table_width = cells
+        .iter()
+        .filter_map(|cell| cell.bbox.map(|bbox| bbox[4]))
+        .fold(0.0f32, f32::max);
+    let table_height = cells
+        .iter()
+        .filter_map(|cell| cell.bbox.map(|bbox| bbox[5]))
+        .fold(0.0f32, f32::max);
+    let (row_start, row_end, column_start, column_end) =
+        if table_width > 1024.0 && table_height > 1024.0 {
+            trim_wired_bounds(cells, row_count, column_count)
+        } else {
+            (0, row_count, 0, column_count)
+        };
     let mut html = String::from("<html><body><table><tbody>");
-    for row in 0..row_count {
+    for row in row_start..row_end {
         html.push_str("<tr>");
-        for column in 0..column_count {
-            if occupied.contains(&(row, column)) {
-                continue;
-            }
-            let Some(cell) = cells
-                .iter()
-                .find(|cell| cell.row == row && cell.column == column)
-            else {
+        for column in column_start..column_end {
+            let Some(cell) = cells.iter().rev().find(|cell| {
+                cell.row <= row
+                    && row < cell.row + cell.row_span
+                    && cell.column <= column
+                    && column < cell.column + cell.column_span
+            }) else {
                 html.push_str("<td></td>");
                 continue;
             };
-            html.push_str("<td");
-            if cell.row_span > 1 {
-                html.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
+            let clipped_row = cell.row.max(row_start);
+            let clipped_column = cell.column.max(column_start);
+            if row != clipped_row || column != clipped_column {
+                continue;
             }
-            if cell.column_span > 1 {
-                html.push_str(&format!(" colspan=\"{}\"", cell.column_span));
+            let row_span = (cell.row + cell.row_span).min(row_end) - clipped_row;
+            let column_span = (cell.column + cell.column_span).min(column_end) - clipped_column;
+            html.push_str("<td");
+            if row_span > 1 {
+                html.push_str(&format!(" rowspan=\"{row_span}\""));
+            }
+            if column_span > 1 {
+                html.push_str(&format!(" colspan=\"{column_span}\""));
             }
             html.push('>');
             html.push_str(&escape_html(&cell.text));
             html.push_str("</td>");
-            for occupied_row in row..row + cell.row_span {
-                for occupied_column in column..column + cell.column_span {
-                    if occupied_row != row || occupied_column != column {
-                        occupied.insert((occupied_row, occupied_column));
-                    }
-                }
-            }
         }
         html.push_str("</tr>");
     }
     html.push_str("</tbody></table></body></html>");
     html
+}
+
+fn trim_wired_bounds(
+    cells: &[TableCellCandidate],
+    row_count: u32,
+    column_count: u32,
+) -> (u32, u32, u32, u32) {
+    let axis_sizes = |rows: bool, count: u32| {
+        (0..count)
+            .map(|axis| {
+                let mut sizes = cells
+                    .iter()
+                    .filter_map(|cell| {
+                        let (start, span, size) = if rows {
+                            (
+                                cell.row,
+                                cell.row_span,
+                                cell.bbox.map(|bbox| bbox[5] - bbox[1]),
+                            )
+                        } else {
+                            (
+                                cell.column,
+                                cell.column_span,
+                                cell.bbox.map(|bbox| bbox[4] - bbox[0]),
+                            )
+                        };
+                        (start <= axis && axis < start + span).then_some(size? / span.max(1) as f32)
+                    })
+                    .filter(|size| *size > 0.0)
+                    .collect::<Vec<_>>();
+                median(&mut sizes)
+            })
+            .collect::<Vec<_>>()
+    };
+    let row_sizes = axis_sizes(true, row_count);
+    let column_sizes = axis_sizes(false, column_count);
+    let mut row_start = 0;
+    let mut row_end = row_count;
+    let mut column_start = 0;
+    let mut column_end = column_count;
+    while row_start < row_end
+        && wired_edge_is_noise(
+            cells,
+            true,
+            row_start,
+            row_start,
+            row_end,
+            column_start,
+            column_end,
+            &row_sizes,
+        )
+    {
+        row_start += 1;
+    }
+    while row_start < row_end
+        && wired_edge_is_noise(
+            cells,
+            true,
+            row_end - 1,
+            row_start,
+            row_end,
+            column_start,
+            column_end,
+            &row_sizes,
+        )
+    {
+        row_end -= 1;
+    }
+    while column_start < column_end
+        && wired_edge_is_noise(
+            cells,
+            false,
+            column_start,
+            row_start,
+            row_end,
+            column_start,
+            column_end,
+            &column_sizes,
+        )
+    {
+        column_start += 1;
+    }
+    while column_start < column_end
+        && wired_edge_is_noise(
+            cells,
+            false,
+            column_end - 1,
+            row_start,
+            row_end,
+            column_start,
+            column_end,
+            &column_sizes,
+        )
+    {
+        column_end -= 1;
+    }
+    (row_start, row_end, column_start, column_end)
+}
+
+fn median(values: &mut [f32]) -> Option<f32> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f32::total_cmp);
+    let middle = values.len() / 2;
+    Some(if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) * 0.5
+    } else {
+        values[middle]
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wired_edge_is_noise(
+    cells: &[TableCellCandidate],
+    rows: bool,
+    axis: u32,
+    row_start: u32,
+    row_end: u32,
+    column_start: u32,
+    column_end: u32,
+    axis_sizes: &[Option<f32>],
+) -> bool {
+    let covers = |cell: &TableCellCandidate, row: u32, column: u32| {
+        cell.row <= row
+            && row < cell.row + cell.row_span
+            && cell.column <= column
+            && column < cell.column + cell.column_span
+    };
+    let positions = if rows {
+        (column_start..column_end)
+            .map(|column| (axis, column))
+            .collect::<Vec<_>>()
+    } else {
+        (row_start..row_end)
+            .map(|row| (row, axis))
+            .collect::<Vec<_>>()
+    };
+    if positions.iter().any(|&(row, column)| {
+        cells
+            .iter()
+            .rev()
+            .find(|cell| covers(cell, row, column))
+            .is_some_and(|cell| !cell.text.trim().is_empty())
+    }) {
+        return false;
+    }
+    let covered = positions
+        .iter()
+        .filter(|&&(row, column)| cells.iter().any(|cell| covers(cell, row, column)))
+        .count();
+    if covered == 0 || covered < positions.len() {
+        return true;
+    }
+    let Some(size) = axis_sizes.get(axis as usize).copied().flatten() else {
+        return false;
+    };
+    let mut references = axis_sizes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (index != axis as usize).then_some((*value)?))
+        .filter(|value| *value > 0.0)
+        .collect::<Vec<_>>();
+    let Some(reference) = median(&mut references) else {
+        return false;
+    };
+    let ratio = size / reference;
+    !(0.35..=2.5).contains(&ratio)
 }
 
 fn matched_text_count(candidate: &TableCandidate, ocr_texts: &[String]) -> usize {
@@ -1003,6 +1470,44 @@ mod tests {
     }
 
     #[test]
+    fn wired_render_trims_only_abnormal_empty_edge_rows() {
+        let cell = |row: u32, top: f32, bottom: f32, text: &str| TableCellCandidate {
+            text: text.into(),
+            row,
+            column: 0,
+            row_span: 1,
+            column_span: 1,
+            bbox: Some([0.0, top, 2000.0, top, 2000.0, bottom, 0.0, bottom]),
+        };
+        let html = render_wired_html(&[
+            cell(0, 0.0, 20.0, ""),
+            cell(1, 20.0, 1120.0, "header"),
+            cell(2, 1120.0, 2220.0, "value"),
+        ]);
+        assert!(!html.contains("<tr><td></td></tr>"));
+        assert_eq!(html.matches("<tr>").count(), 2);
+
+        let html = render_wired_html(&[
+            cell(0, 0.0, 1100.0, ""),
+            cell(1, 1100.0, 2200.0, "header"),
+            cell(2, 2200.0, 3300.0, "value"),
+        ]);
+        assert_eq!(html.matches("<tr>").count(), 3);
+
+        let html = render_wired_html(&[
+            TableCellCandidate {
+                bbox: Some([0.0, 0.0, 100.0, 0.0, 100.0, 2.0, 0.0, 2.0]),
+                ..cell(0, 0.0, 2.0, "")
+            },
+            TableCellCandidate {
+                bbox: Some([0.0, 2.0, 100.0, 2.0, 100.0, 42.0, 0.0, 42.0]),
+                ..cell(1, 2.0, 42.0, "header")
+            },
+        ]);
+        assert_eq!(html.matches("<tr>").count(), 2);
+    }
+
+    #[test]
     fn materially_richer_wireless_structure_wins() {
         let selection =
             select_candidate(&candidate(4, 0, "wired"), &candidate(9, 0, "wireless"), &[]);
@@ -1060,12 +1565,13 @@ mod tests {
 
     #[test]
     fn slanet_preprocess_resizes_to_488_and_zero_pads_normalized_image() {
-        let image = image::RgbImage::from_pixel(200, 100, image::Rgb([255, 255, 255]));
+        let image = image::RgbImage::from_pixel(200, 100, image::Rgb([255, 0, 0]));
         let bundle = preprocess_slanet(&image).unwrap();
         let tensor = &bundle.tensors[0];
         assert_eq!(tensor.shape, [1, 3, 488, 488]);
         let values = tensor.to_f32().unwrap();
         assert!(values[0] > 2.0);
+        assert!(values[2 * 488 * 488] < -1.5);
         assert_eq!(values[487 * 488], 0.0);
     }
 
@@ -1132,6 +1638,18 @@ mod tests {
         let input = preprocess_unet(&image).unwrap();
         assert_eq!(input.tensors[0].shape, [1, 3, 512, 1024]);
         assert_eq!(input.tensors[0].name, "input");
+    }
+
+    #[test]
+    fn unet_area_resize_averages_downsampled_pixels() {
+        let image = image::RgbImage::from_fn(2, 2, |x, y| match (x, y) {
+            (0, 0) => image::Rgb([0, 0, 0]),
+            (1, 0) => image::Rgb([100, 20, 0]),
+            (0, 1) => image::Rgb([0, 60, 200]),
+            _ => image::Rgb([100, 120, 200]),
+        });
+        let resized = area_resize_rgb(&image, 1, 1);
+        assert_eq!(resized, [[50.0, 50.0, 100.0]]);
     }
 
     #[test]

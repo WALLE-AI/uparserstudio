@@ -1433,7 +1433,6 @@ impl<'a> BinaryCMapStream<'a> {
         String::from_utf8(buf).map_err(|e| e.to_string())
     }
 
-
     fn skip_non_unicode_records(
         &mut self,
         typ: u8,
@@ -3304,7 +3303,10 @@ endbfrange
         cmap.code_byte_length = 1;
         cmap.char_map.insert(0x41, "A".to_string());
         cmap.char_map.insert(0x42, "\u{fffd}".to_string());
-        assert_eq!(cmap.lookup_bytes(&[0x41, 0x42]), vec![(0x41, Some("A".into())), (0x42, None)]);
+        assert_eq!(
+            cmap.lookup_bytes(&[0x41, 0x42]),
+            vec![(0x41, Some("A".into())), (0x42, None)]
+        );
         assert_eq!(cmap.decode_cids(&[0x41, 0x20]), "A ");
         assert!(cmap.decode_cids(&[0x01, 0x02, 0x03]).is_empty());
 
@@ -3325,7 +3327,10 @@ endbfrange
 
         let incomplete = b"1 beginbfchar\n<41> garbage\n<42> <0042>\nendbfchar";
         assert!(ToUnicodeCMap::parse(incomplete).is_none());
-        assert_eq!(find_usecmap_name("/Adobe-Japan1-UCS2 usecmap"), Some("Adobe-Japan1-UCS2".into()));
+        assert_eq!(
+            find_usecmap_name("/Adobe-Japan1-UCS2 usecmap"),
+            Some("Adobe-Japan1-UCS2".into())
+        );
         assert_eq!(find_usecmap_name("usecmap"), None);
     }
 
@@ -3407,8 +3412,14 @@ endcidrange
     #[test]
     fn descendant_width_and_cid_to_gid_references_are_resolved() {
         let mut doc = Document::new();
-        let widths_id = doc.add_object(Object::Array(vec![Object::Integer(2), Object::Array(vec![Object::Integer(500)])]));
-        let gid_stream_id = doc.add_object(lopdf::Stream::new(lopdf::Dictionary::new(), vec![0, 0, 0, 7, 1]));
+        let widths_id = doc.add_object(Object::Array(vec![
+            Object::Integer(2),
+            Object::Array(vec![Object::Integer(500)]),
+        ]));
+        let gid_stream_id = doc.add_object(lopdf::Stream::new(
+            lopdf::Dictionary::new(),
+            vec![0, 0, 0, 7, 1],
+        ));
         let integer_id = doc.add_object(Object::Integer(2));
         let mut cid_font = lopdf::Dictionary::new();
         cid_font.set("W", Object::Reference(widths_id));
@@ -3424,7 +3435,13 @@ endcidrange
         assert_eq!(get_cid_to_gid_map(descendant, &doc).unwrap(), vec![0, 7]);
 
         let mut referenced_width = lopdf::Dictionary::new();
-        referenced_width.set("W", Object::Array(vec![Object::Reference(integer_id), Object::Array(vec![Object::Integer(1)])]));
+        referenced_width.set(
+            "W",
+            Object::Array(vec![
+                Object::Reference(integer_id),
+                Object::Array(vec![Object::Integer(1)]),
+            ]),
+        );
         assert_eq!(get_w_array_start_cid(&referenced_width, &doc), Some(2));
         assert!(parse_cid_to_gid_stream(&[0]).is_none());
     }
@@ -3450,12 +3467,18 @@ endcidrange
         cid_font.set("CIDSystemInfo", Object::Dictionary(csi));
         let mut font = lopdf::Dictionary::new();
         font.set("Encoding", Object::Name(b"Identity-H".to_vec()));
-        font.set("DescendantFonts", Object::Array(vec![Object::Dictionary(cid_font.clone())]));
+        font.set(
+            "DescendantFonts",
+            Object::Array(vec![Object::Dictionary(cid_font.clone())]),
+        );
 
         let encoding = build_encoding_cmap_from_font(&font, &doc).unwrap();
         assert!(encoding.is_identity);
         assert_eq!(encoding.code_byte_length, 2);
-        assert_eq!(get_cid_system_info_ordering(&font, &doc), Some("Korea1".into()));
+        assert_eq!(
+            get_cid_system_info_ordering(&font, &doc),
+            Some("Korea1".into())
+        );
         let cmap = build_cmap_from_cid_system_info(&cid_font, &doc).unwrap();
         assert_eq!(cmap.lookup(1), Some(" ".into()));
         assert!(build_fallback_tounicode_from_encoding(&font, &doc).is_some());
@@ -3471,7 +3494,10 @@ endcidrange
             Object::Integer(500),
         ]);
         assert!(cid_values_look_like_unicode(&high));
-        let low = cid_font_dict_with_w(vec![Object::Integer(0), Object::Array(vec![Object::Integer(500); 5])]);
+        let low = cid_font_dict_with_w(vec![
+            Object::Integer(0),
+            Object::Array(vec![Object::Integer(500); 5]),
+        ]);
         assert!(!cid_values_look_like_unicode(&low));
         assert!(!cid_values_look_like_unicode(&lopdf::Dictionary::new()));
     }
@@ -3568,7 +3594,8 @@ endcidrange
         assert!(entry.primary.char_map.len() > 1000);
         assert_eq!(entry.remapped.as_ref().unwrap().lookup(1), Some("A".into()));
 
-        let direct = build_cmap_entry_from_stream(&cmap_stream(1).content, &font, &doc, 99).unwrap();
+        let direct =
+            build_cmap_entry_from_stream(&cmap_stream(1).content, &font, &doc, 99).unwrap();
         assert!(direct.primary.char_map.len() > 1000);
     }
 
@@ -3858,11 +3885,15 @@ endcidrange
         let mut cmap = ToUnicodeCMap::new();
         cmap.char_map.insert(100, "A".into());
         let plain = lopdf::Dictionary::new();
-        assert!(try_remap_subset_cmap(cmap.clone(), &plain, &doc, 1).1.is_none());
+        assert!(try_remap_subset_cmap(cmap.clone(), &plain, &doc, 1)
+            .1
+            .is_none());
 
         let mut identity = lopdf::Dictionary::new();
         identity.set("Encoding", Object::Name(b"Identity-H".to_vec()));
-        assert!(try_remap_subset_cmap(cmap.clone(), &identity, &doc, 1).1.is_none());
+        assert!(try_remap_subset_cmap(cmap.clone(), &identity, &doc, 1)
+            .1
+            .is_none());
         let mut low = ToUnicodeCMap::new();
         low.char_map.insert(1, "A".into());
         assert!(try_remap_subset_cmap(low, &identity, &doc, 1).1.is_none());
@@ -3954,7 +3985,10 @@ endcidrange
         assert_eq!(cmap.lookup(1), Some("Z".into()));
         assert!(cmap.char_map.len() + cmap.ranges.len() > 100);
         let missing = b"/Missing-UCS2 usecmap\n1 beginbfchar\n<01> <0041>\nendbfchar";
-        assert_eq!(ToUnicodeCMap::parse(missing).unwrap().lookup(1), Some("A".into()));
+        assert_eq!(
+            ToUnicodeCMap::parse(missing).unwrap().lookup(1),
+            Some("A".into())
+        );
     }
 
     #[test]
@@ -3968,7 +4002,10 @@ endcidrange
         let mut cid_font = korea_cid_font();
         cid_font.set(
             "W",
-            Object::Array(vec![Object::Integer(0), Object::Array(vec![500.into(); 10])]),
+            Object::Array(vec![
+                Object::Integer(0),
+                Object::Array(vec![500.into(); 10]),
+            ]),
         );
         let cid_id = doc.add_object(cid_font);
         let mut font = lopdf::Dictionary::new();
