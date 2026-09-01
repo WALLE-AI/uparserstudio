@@ -1,0 +1,4521 @@
+[
+    {
+        "gt_idx": [
+            0
+        ],
+        "gt": "郭下${}^{\\text{〔二七〕}}$圍梁數旬則梁可拔${}^{\\text{〔二八〕}}$，拔梁則魏可舉，舉魏則荆、趙之意絕${}^{\\text{〔二九〕}}$，荆、趙之意絕則趙危。趙危而荊狐疑${}^{\\text{〔三〇〕}}$。東以弱齊、燕，中以凌三晉。然則是一舉而霸王之名可成也，四鄰諸侯可朝也。而謀臣不為，引軍而退，復與魏氏為和${}^{\\text{〔三一〕}}$，令魏氏反收亡國，聚散民，立杜稷，主置宗廟，令${}^{\\text{〔三二〕}}$。此固以失霸王之道二矣。前者穰侯之治秦也，用一國之兵而欲以成兩國之功${}^{\\text{〔三三〕}}$。是故兵終身暴露於外，士民疲病於內${}^{\\text{〔三四〕}}$，霸王之名不成，此固以失霸王之道三矣。",
+        "pred_idx": [
+            0
+        ],
+        "pred": "郭下三七圍梁數旬則梁可拔三八拔梁則魏可舉舉魏則荆趙之意絕三九荆趙之意\n絕則趙危趙危而荆狐疑三○東以弱齊燕中以凌三晉然則是一舉而霸王之名可成\n也，四鄰諸侯可朝也而謀臣不為引軍而退復與魏氏為和三二令魏氏反收亡國聚散\n民立社稷主置宗廟令三三此固以失霸王之道二矣前者穰侯之治秦也用一國之兵\n而欲以成兩國之功三三是故兵終身暴露於外士民疲病於内三四，霸王之名不成此固\n以失霸王之道三矣",
+        "edit": 0.05027932960893855,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            ""
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "郭下二七圍梁數旬則梁可拔二八拔梁則魏可舉舉魏則荆趙之意絕二九荆趙之意絕則趙危趙危而荊狐疑三〇東以弱齊燕中以凌三晉然則是一舉而霸王之名可成也四鄰諸侯可朝也而謀臣不為引軍而退復與魏氏為和三一令魏氏反收亡國聚散民立杜稷主置宗廟令三二此固以失霸王之道二矣前者穰侯之治秦也用一國之兵而欲以成兩國之功三三是故兵終身暴露於外士民疲病於內三四霸王之名不成此固以失霸王之道三矣",
+        "norm_pred": "郭下三七圍梁數旬則梁可拔三八拔梁則魏可舉舉魏則荆趙之意絕三九荆趙之意絕則趙危趙危而荆狐疑三東以弱齊燕中以凌三晉然則是一舉而霸王之名可成也四鄰諸侯可朝也而謀臣不為引軍而退復與魏氏為和三二令魏氏反收亡國聚散民立社稷主置宗廟令三三此固以失霸王之道二矣前者穰侯之治秦也用一國之兵而欲以成兩國之功三三是故兵終身暴露於外士民疲病於内三四霸王之名不成此固以失霸王之道三矣",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 179,
+        "metric": {
+            "Edit_dist": 0.05027932960893855
+        },
+        "Edit_num": 9
+    },
+    {
+        "gt_idx": [
+            1,
+            2
+        ],
+        "gt": "〔一〕奇猷案：史記田齊世家：「齊閔王二十二年與秦擊敗楚於重丘。」即此所指。又案：舊連上，今提行。〔二〕王先慎曰：東，策作「中」，誤，當依此訂。下云：「中使韓、魏」，五戰之事備矣。⊙奇猷案：史記：「閔王三十八年伐宋，宋王出亡，死於溫。」",
+        "pred_idx": [
+            1
+        ],
+        "pred": "一奇猷案：史記田齊世家齊閔王二十二年與秦擊敗楚於重丘即此所指又案舊連上今提行\n二王先慎曰：東策作中誤當依此訂下云：中使韓魏五戰之事備矣奇猷案史記：閔王三十八\n年伐宋宋王出亡死於温°",
+        "edit": 0.012048192771084338,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            1,
+            2
+        ],
+        "pred_position": 186,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "一奇猷案史記田齊世家齊閔王二十二年與秦擊敗楚於重丘即此所指又案舊連上今提行二王先慎曰東策作中誤當依此訂下云中使韓魏五戰之事備矣奇猷案史記閔王三十八年伐宋宋王出亡死於溫",
+        "norm_pred": "一奇猷案史記田齊世家齊閔王二十二年與秦擊敗楚於重丘即此所指又案舊連上今提行二王先慎曰東策作中誤當依此訂下云中使韓魏五戰之事備矣奇猷案史記閔王三十八年伐宋宋王出亡死於温",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 83,
+        "metric": {
+            "Edit_dist": 0.012048192771084338
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "〔五〕奇猷案：說文：「使，令也。」謂中令韓、魏也。史記齊閔王二十六年與韓、魏共攻秦，是令韓、魏也。",
+        "pred_idx": [
+            2
+        ],
+        "pred": "五奇猷案：說文使令也謂中令韓魏也史記齊閔王二十六年與韓、魏共攻秦是令韓魏也",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 276,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "五奇猷案說文使令也謂中令韓魏也史記齊閔王二十六年與韓魏共攻秦是令韓魏也",
+        "norm_pred": "五奇猷案說文使令也謂中令韓魏也史記齊閔王二十六年與韓魏共攻秦是令韓魏也",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 35,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            6,
+            7
+        ],
+        "gt": "〔六〕王先慎曰：策無「土」字。〔七〕奇猷案：史記田齊世家云：「齊閔王欲以并周室，為天子，泗上諸侯鄒魯之君皆稱臣，諸侯恐懼。」可見閔王確有詔令天下之意。",
+        "pred_idx": [
+            3
+        ],
+        "pred": "六〕王先慎曰：策無土字。\n七奇猷案史記田齊世家云齊閔王欲以并周室為天子泗上諸侯鄰魯之君皆稱臣諸侯恐懼可見閔王確有\n器令天下之意",
+        "edit": 0.034482758620689655,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            6,
+            7
+        ],
+        "pred_position": 313,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "六王先慎曰策無土字七奇猷案史記田齊世家云齊閔王欲以并周室為天子泗上諸侯鄒魯之君皆稱臣諸侯恐懼可見閔王確有詔令天下之意",
+        "norm_pred": "六王先慎曰策無土字七奇猷案史記田齊世家云齊閔王欲以并周室為天子泗上諸侯鄰魯之君皆稱臣諸侯恐懼可見閔王確有器令天下之意",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 58,
+        "metric": {
+            "Edit_dist": 0.034482758620689655
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "〔三〕奇猷案：史記「閔王二十六年齊與韓、魏共攻秦，至函谷軍焉。二十八年，秦與韓河外以和，兵罷。」",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            3
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "三奇猷案史記閔王二十六年齊與韓魏共攻秦至函谷軍焉二十八年秦與韓河外以和兵罷",
+        "norm_pred": "",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 37,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 37
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "〔四〕津田鳳卿曰：鮑注：（猷案：即國策鮑彪注，下同）「閔王十五年。」吳注：（猷案：即國策吴師道注，下同）「齊宣王二十九年伐燕，取之。」按閔王破燕，史表在十年，吴氏據孟子以破燕為宣王事，不可從。",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            4
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "norm_gt": "四津田鳳卿曰鮑注猷案即國策鮑彪注下同閔王十五年吳注猷案即國策吴師道注下同齊宣王二十九年伐燕取之按閔王破燕史表在十年吴氏據孟子以破燕為宣王事不可從",
+        "norm_pred": "",
+        "image_name": "page-942ac90d-4704-43f3-9286-719c7be9e655.png",
+        "upper_len": 72,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 72
+    },
+    {
+        "gt_idx": [
+            10,
+            28,
+            29
+        ],
+        "gt": "虎 蛇 勾龙 玄 虎蛇 勾 朱",
+        "pred_idx": [
+            5
+        ],
+        "pred": "龙\n玄\n虎\n蛇\n勾\n朱",
+        "edit": 0.3333333333333333,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            10,
+            28,
+            29
+        ],
+        "pred_position": 125,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "虎蛇勾龙玄虎蛇勾朱",
+        "norm_pred": "龙玄虎蛇勾朱",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 9,
+        "metric": {
+            "Edit_dist": 0.3333333333333333
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            12,
+            13,
+            25
+        ],
+        "gt": "断曰：二女遇疑难事，想求汝夫指点迷津，然又冲散未问。结果次年始知因果应。有二女自言想问迷津，最后因其事化坏故未问。应",
+        "pred_idx": [
+            0
+        ],
+        "pred": "断曰二女遇疑难事想求汝夫指点迷津然又冲散未问结果次年始知果应。\n有二女自言想问迷津，最后因其事化坏故未问。",
+        "edit": 0.0392156862745098,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            12,
+            13,
+            25
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "断曰二女遇疑难事想求汝夫指点迷津然又冲散未问结果次年始知因果应有二女自言想问迷津最后因其事化坏故未问应",
+        "norm_pred": "断曰二女遇疑难事想求汝夫指点迷津然又冲散未问结果次年始知果应有二女自言想问迷津最后因其事化坏故未问",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 51,
+        "metric": {
+            "Edit_dist": 0.0392156862745098
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            14
+        ],
+        "gt": "梦解：天显云篆指路，是她人祈贵人天恩指未来之路也。",
+        "pred_idx": [
+            2
+        ],
+        "pred": "梦解：天显云篆指路是她人祈贵人天恩指未来之路也。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            14
+        ],
+        "pred_position": 60,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "梦解天显云篆指路是她人祈贵人天恩指未来之路也",
+        "norm_pred": "梦解天显云篆指路是她人祈贵人天恩指未来之路也",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 22,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            15
+        ],
+        "gt": "# 三只母鸡",
+        "pred_idx": [
+            1
+        ],
+        "pred": "## 三只母鸡",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            15
+        ],
+        "pred_position": 53,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "三只母鸡",
+        "norm_pred": "三只母鸡",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            3,
+            16
+        ],
+        "gt": "寅寅月丙戌日一人梦邻人门前有三只鸡一只公鸡很大占兆",
+        "pred_idx": [
+            3
+        ],
+        "pred": "寅月丙戌日一人梦邻人门前有三只鸡一只公鸡很大占兆",
+        "edit": 0.04,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            3,
+            16
+        ],
+        "pred_position": 84,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "寅寅月丙戌日一人梦邻人门前有三只鸡一只公鸡很大占兆",
+        "norm_pred": "寅月丙戌日一人梦邻人门前有三只鸡一只公鸡很大占兆",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 25,
+        "metric": {
+            "Edit_dist": 0.04
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            20,
+            26,
+            27
+        ],
+        "gt": "变卦兑为泽父 兄 孙兄 官 父",
+        "pred_idx": [
+            4
+        ],
+        "pred": "变卦兑为泽\n父\n兄\n孙\n兄\n官\n父",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            20,
+            26,
+            27
+        ],
+        "pred_position": 108,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "变卦兑为泽父兄孙兄官父",
+        "norm_pred": "变卦兑为泽父兄孙兄官父",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 11,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            18,
+            30
+        ],
+        "gt": "卦身断曰：是有不洁之女干扰汝家生活。其女点头默认，问有几人，予曰：二人。其曰：梦中兆示三位何说二位？予曰：另有亦未认识，只是星像应兆，未必与汝夫有染。其曰：明白。断有不洁女干扰是阴兄玄武空动化沐浴冲汝夫官鬼卦身。断二女是身后有库中原神动生，即房中出主意人。梦解：三鸡者三妓女也。一公鸡者一妓男也。公鸡肥大者是有钱势之人或有地位之人",
+        "pred_idx": [
+            6
+        ],
+        "pred": "断曰是有不洁之女干扰汝家生活其女点头默认问有几人予曰二人其\n曰：梦中兆示三位何说二位？予曰另有亦未认识只是星像应兆，未必与汝夫\n有染其曰明白断有不洁女干扰是阴兄玄武空动化沐浴冲汝夫官鬼卦身断\n二女是身后有库中原神动生即房中出主意人梦解：三鸡者三妓女也一公鸡\n者一妓男也。公鸡肥大者是有钱势之人或有地位之人",
+        "edit": 0.013793103448275862,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            18,
+            30
+        ],
+        "pred_position": 136,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "卦身断曰是有不洁之女干扰汝家生活其女点头默认问有几人予曰二人其曰梦中兆示三位何说二位予曰另有亦未认识只是星像应兆未必与汝夫有染其曰明白断有不洁女干扰是阴兄玄武空动化沐浴冲汝夫官鬼卦身断二女是身后有库中原神动生即房中出主意人梦解三鸡者三妓女也一公鸡者一妓男也公鸡肥大者是有钱势之人或有地位之人",
+        "norm_pred": "断曰是有不洁之女干扰汝家生活其女点头默认问有几人予曰二人其曰梦中兆示三位何说二位予曰另有亦未认识只是星像应兆未必与汝夫有染其曰明白断有不洁女干扰是阴兄玄武空动化沐浴冲汝夫官鬼卦身断二女是身后有库中原神动生即房中出主意人梦解三鸡者三妓女也一公鸡者一妓男也公鸡肥大者是有钱势之人或有地位之人",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 145,
+        "metric": {
+            "Edit_dist": 0.013793103448275862
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            31
+        ],
+        "gt": "# 飞鹰抓蛇",
+        "pred_idx": [
+            7
+        ],
+        "pred": "## 飞鷹抓蛇",
+        "edit": 0.25,
+        "gt_category_type": "title",
+        "gt_position": [
+            31
+        ],
+        "pred_position": 288,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "飞鹰抓蛇",
+        "norm_pred": "飞鷹抓蛇",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 0.25
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            0
+        ],
+        "gt": "化酉鬼 化丑财 ， 化巳孙",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            ""
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "化酉鬼化丑财化巳孙",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 9,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 9
+    },
+    {
+        "gt_idx": [
+            1
+        ],
+        "gt": "山风蛊【巽】",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            1
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "山风蛊巽",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "变卦火泽睽",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            2
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "变卦火泽睽",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 5,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 5
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "子戌",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            4
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "子戌",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "空酉",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "空酉",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            6
+        ],
+        "gt": "亥冲丑",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            6
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "亥冲丑",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "应- = x 世 o - x",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            7
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "应x世ox",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 5,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 5
+    },
+    {
+        "gt_idx": [
+            8
+        ],
+        "gt": "兄 父 妻",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            8
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "兄父妻",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "官 父 妻",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            9
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "官父妻",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            11
+        ],
+        "gt": "朱 龙 玄",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            11
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "朱龙玄",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            17
+        ],
+        "gt": "化未兄 化酉孙",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            17
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "化未兄化酉孙",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 6
+    },
+    {
+        "gt_idx": [
+            19
+        ],
+        "gt": "火泽睽【艮】",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            19
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "火泽睽艮",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            21
+        ],
+        "gt": "巳 空未",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            21
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "巳空未",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            22
+        ],
+        "gt": "酉 丑 卯",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            22
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "酉丑卯",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            23
+        ],
+        "gt": "己",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            23
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "己",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 1,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            24
+        ],
+        "gt": "o x 世- =",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            24
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "norm_gt": "ox世",
+        "norm_pred": "",
+        "image_name": "page-8e2f7ce3-83c4-4977-b6dc-278394c4bd64.png",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "一、本校注以文義分章節。所分章節與乾道本不同者，皆予以說明，以見乾道本之舊。",
+        "pred_idx": [
+            1
+        ],
+        "pred": "一本校注以文義分章節所分章節與乾道本不同者皆予以說明以見乾道本之舊",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            4
+        ],
+        "pred_position": 9,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "norm_gt": "一本校注以文義分章節所分章節與乾道本不同者皆予以說明以見乾道本之舊",
+        "norm_pred": "一本校注以文義分章節所分章節與乾道本不同者皆予以說明以見乾道本之舊",
+        "image_name": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "upper_len": 33,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "一、所錄前賢校說，皆指明其是非。指明其非者皆予以證明，而指明其是者亦多為之疏證。",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            2
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "norm_gt": "一所錄前賢校說皆指明其是非指明其非者皆予以證明而指明其是者亦多為之疏證",
+        "norm_pred": "",
+        "image_name": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "upper_len": 35,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 35
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "一、凡韓非子書中有問題之處，本校注皆有交代。其能作答者，固詳加解說，其不能作出答案者，亦說明疑難所在。",
+        "pred_idx": [
+            ""
+        ],
+        "pred": "",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            3
+        ],
+        "pred_position": "",
+        "pred_category_type": "",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "norm_gt": "一凡韓非子書中有問題之處本校注皆有交代其能作答者固詳加解說其不能作出答案者亦說明疑難所在",
+        "norm_pred": "",
+        "image_name": "page-3ecc67a1-9b19-4fb9-b74d-acbb73db5c53.png",
+        "upper_len": 44,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 44
+    },
+    {
+        "gt_idx": [
+            0
+        ],
+        "gt": "弘扬国学精髓，回归中医本性",
+        "pred_idx": [
+            0
+        ],
+        "pred": "# 弘扬国学精髓，回归中医本性",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "弘扬国学精髓回归中医本性",
+        "norm_pred": "弘扬国学精髓回归中医本性",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            1
+        ],
+        "gt": "# 黄帝内经上",
+        "pred_idx": [
+            1
+        ],
+        "pred": "# 黄帝内经上",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            2
+        ],
+        "pred_position": 15,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "黄帝内经上",
+        "norm_pred": "黄帝内经上",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 5,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            2,
+            3,
+            10
+        ],
+        "gt": "经方典藏中医纯正知识精华集经方典藏",
+        "pred_idx": [
+            3
+        ],
+        "pred": "# 经方典藏中医纯正知识精华集",
+        "edit": 0.23529411764705882,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            3,
+            4,
+            11
+        ],
+        "pred_position": 28,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "经方典藏中医纯正知识精华集经方典藏",
+        "norm_pred": "经方典藏中医纯正知识精华集",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.23529411764705882
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "倪海厦 美籍华人，研究中医达30年之久，并精通其它【命、相、卜、山】四项。被喻为当代少见的【命、相、卜、山、医】五术兼备之旷世奇人。曾任佛罗里达州卫生署中医委员会最高委员会委员，因治好许多西医认为不治之病，常被病患称为最后的希望.",
+        "pred_idx": [
+            4
+        ],
+        "pred": "# 倪海廈美籍华人研究中医达30年\n之久并精通其它命相卜山四\n被喻为当代少见的命相卜\n项\n山医五术兼备之旷世奇人曾任佛罗\n里达州，卫生署中医委员会最高委员会委\n员，因治好许多西医认为不治之病，常被\n病患称为最后的希望。",
+        "edit": 0.03125,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 43,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "倪海厦美籍华人研究中医达30年之久并精通其它命相卜山四项被喻为当代少见的命相卜山医五术兼备之旷世奇人曾任佛罗里达州卫生署中医委员会最高委员会委员因治好许多西医认为不治之病常被病患称为最后的希望",
+        "norm_pred": "倪海廈美籍华人研究中医达30年之久并精通其它命相卜山四被喻为当代少见的命相卜项山医五术兼备之旷世奇人曾任佛罗里达州卫生署中医委员会最高委员会委员因治好许多西医认为不治之病常被病患称为最后的希望",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 96,
+        "metric": {
+            "Edit_dist": 0.03125
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            6,
+            8
+        ],
+        "gt": "REN JI XI LIE TU SHU加强版",
+        "pred_idx": [
+            6
+        ],
+        "pred": "# 加强版\nREN JI XI LIE TU SHU",
+        "edit": 0.3333333333333333,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            7,
+            9
+        ],
+        "pred_position": 157,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "RENJIXILIETUSHU加强版",
+        "norm_pred": "加强版RENJIXILIETUSHU",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 18,
+        "metric": {
+            "Edit_dist": 0.3333333333333333
+        },
+        "Edit_num": 6
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "②",
+        "pred_idx": [
+            5
+        ],
+        "pred": "# 列\n②",
+        "edit": 0.5,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            8
+        ],
+        "pred_position": 152,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "2",
+        "norm_pred": "列2",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 0.5
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "倪海厦 著",
+        "pred_idx": [
+            2
+        ],
+        "pred": "# 倪海厦著",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            10
+        ],
+        "pred_position": 22,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "倪海厦著",
+        "norm_pred": "倪海厦著",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "人纪系列",
+        "pred_idx": [
+            7
+        ],
+        "pred": "# 黄帝内經",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            6
+        ],
+        "pred_position": 183,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "norm_gt": "人纪系列",
+        "norm_pred": "黄帝内經",
+        "image_name": "page-56023e3d-ae9b-486d-b7bb-419624d18356.png",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            0
+        ],
+        "gt": "# 4 监管罚单数量及罚款金额分析——按地域",
+        "pred_idx": [
+            0
+        ],
+        "pred": "## 4监管罚单数量及罚款金额分析——按地域",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            ""
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-d29fe4d2-832a-4ad6-ac80-dc01cf8b0e16.png",
+        "norm_gt": "4监管罚单数量及罚款金额分析按地域",
+        "norm_pred": "4监管罚单数量及罚款金额分析按地域",
+        "image_name": "page-d29fe4d2-832a-4ad6-ac80-dc01cf8b0e16.png",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            1
+        ],
+        "gt": "2023年，银行业金融机构收到的罚单平均每张金额约50万元。从披露罚单的监管部门所处区域来看，处罚总金额处于全国前四位的地区，分别为浙江省、山东省、上海市和福建省。从处罚事由来看，“违规发放/审批贷款”是前四地域共同的处罚事由，同时也是金融监管总局上海监管局及原银保监分局出具罚单最多的事由；“贷款‘三查’不尽职”是金融监管总局浙江监管局、福建监管局及原银保监分局出具罚单数量最多的事由，而“贷后管理不到位”则是金融监管总局山东监管局及原银保监分局2023年度关注重点。",
+        "pred_idx": [
+            1
+        ],
+        "pred": "2023年，银行业金融机构收到的罚单平均每张金额约50万元。从披露罚单的监管部门所处区域来看，处罚总金额处于全国前四位的地区，分别为浙江\n省、山东省、上海市和福建省。从处罚事由来看，“违规发放/审批贷款”是前四地域共同的处罚事由，同时也是金融监管总局上海监管局及原银保监\n分局出具罚单最多的事由；“贷款三查’不尽职”是金融监管总局浙江监管局、福建监管局及原银保监分局出具罚单数量最多的事由，而“贷后管\n理不到位”则是金融监管总局山东监管局及原银保监分局2023年度关注重点。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 22,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "page-d29fe4d2-832a-4ad6-ac80-dc01cf8b0e16.png",
+        "norm_gt": "2023年银行业金融机构收到的罚单平均每张金额约50万元从披露罚单的监管部门所处区域来看处罚总金额处于全国前四位的地区分别为浙江省山东省上海市和福建省从处罚事由来看违规发放审批贷款是前四地域共同的处罚事由同时也是金融监管总局上海监管局及原银保监分局出具罚单最多的事由贷款三查不尽职是金融监管总局浙江监管局福建监管局及原银保监分局出具罚单数量最多的事由而贷后管理不到位则是金融监管总局山东监管局及原银保监分局2023年度关注重点",
+        "norm_pred": "2023年银行业金融机构收到的罚单平均每张金额约50万元从披露罚单的监管部门所处区域来看处罚总金额处于全国前四位的地区分别为浙江省山东省上海市和福建省从处罚事由来看违规发放审批贷款是前四地域共同的处罚事由同时也是金融监管总局上海监管局及原银保监分局出具罚单最多的事由贷款三查不尽职是金融监管总局浙江监管局福建监管局及原银保监分局出具罚单数量最多的事由而贷后管理不到位则是金融监管总局山东监管局及原银保监分局2023年度关注重点",
+        "image_name": "page-d29fe4d2-832a-4ad6-ac80-dc01cf8b0e16.png",
+        "upper_len": 213,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "5.3案例分析",
+        "pred_idx": [
+            0,
+            1
+        ],
+        "pred": "## 5.3## 案例分析",
+        "edit": 0.14285714285714285,
+        "gt_category_type": "title",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "yanbaor2_afad9eb86f2a04271428aa988aec7d1949713bb5a5ce5c0cf26f320650b7966a.pdf_14.jpg",
+        "norm_gt": "53案例分析",
+        "norm_pred": "53案例分析",
+        "image_name": "yanbaor2_afad9eb86f2a04271428aa988aec7d1949713bb5a5ce5c0cf26f320650b7966a.pdf_14.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "高质量的研究报告不仅是投资者了解市场信息的重要途径，更是证券公司及证券研究机构展业的坚实基础。因此，强化内控合规、提升研报质量既是金融监管的目标所在，更应成为证券公司不断提升服务质量的根本要求。本期普华永道将从研究报告合规管控的角度进行案例分析。",
+        "pred_idx": [
+            2
+        ],
+        "pred": "高质量的研究报告不仅是投资者了解市场信息的重要途径，更是证券公司及证券研究机构展业的坚实基础。因此，强化内控合规、提升研报质量既\n是金融监管的目标所在，更应成为证券公司不断提升服务质量的根本要求。本期普华永道将从研究报告合规管控的角度进行案例分析。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            2
+        ],
+        "pred_position": 13,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "yanbaor2_afad9eb86f2a04271428aa988aec7d1949713bb5a5ce5c0cf26f320650b7966a.pdf_14.jpg",
+        "norm_gt": "高质量的研究报告不仅是投资者了解市场信息的重要途径更是证券公司及证券研究机构展业的坚实基础因此强化内控合规提升研报质量既是金融监管的目标所在更应成为证券公司不断提升服务质量的根本要求本期普华永道将从研究报告合规管控的角度进行案例分析",
+        "norm_pred": "高质量的研究报告不仅是投资者了解市场信息的重要途径更是证券公司及证券研究机构展业的坚实基础因此强化内控合规提升研报质量既是金融监管的目标所在更应成为证券公司不断提升服务质量的根本要求本期普华永道将从研究报告合规管控的角度进行案例分析",
+        "image_name": "yanbaor2_afad9eb86f2a04271428aa988aec7d1949713bb5a5ce5c0cf26f320650b7966a.pdf_14.jpg",
+        "upper_len": 116,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            6
+        ],
+        "gt": "47.95+22.95-37.35=33.55",
+        "pred_idx": [
+            4
+        ],
+        "pred": "47.95+22.95-37.35=33.55",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 147,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "4795229537353355",
+        "norm_pred": "4795229537353355",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 16,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "20.35+3.18-18.92=4.61",
+        "pred_idx": [
+            7
+        ],
+        "pred": "20.35 + 3.18 - 18.92 = 4.61",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            8
+        ],
+        "pred_position": 233,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "20353181892461",
+        "norm_pred": "20353181892461",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 14,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            12
+        ],
+        "gt": "5+2.7-0.3=7.4",
+        "pred_idx": [
+            10
+        ],
+        "pred": "5+2.7-0.3=7.4",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            11
+        ],
+        "pred_position": 324,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "5270374",
+        "norm_pred": "5270374",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 7,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            6
+        ],
+        "gt": "第1课时",
+        "pred_idx": [
+            1
+        ],
+        "pred": "# 第1课时",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            2
+        ],
+        "pred_position": 12,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "第1课时",
+        "norm_pred": "第1课时",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "字词轻松过关",
+        "pred_idx": [
+            2
+        ],
+        "pred": "## 词轻松过关",
+        "edit": 0.16666666666666666,
+        "gt_category_type": "title",
+        "gt_position": [
+            3
+        ],
+        "pred_position": 18,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "字词轻松过关",
+        "norm_pred": "词轻松过关",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.16666666666666666
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            8
+        ],
+        "gt": "一、给加点字选择正确的读音，打“ $ \\surd $ \" 。",
+        "pred_idx": [
+            3
+        ],
+        "pred": "## 一、给加点字选择正确的读音，打“√”。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            4
+        ],
+        "pred_position": 26,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "一给加点字选择正确的读音打",
+        "norm_pred": "一给加点字选择正确的读音打",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 13,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "1. 父亲突然站定, 朝(cháo zhāo)幽深的树林望了又望。 2. 黎(ní lí)明时, 所有的鸟抖(dǒu dòu)动着浑身的羽翎。 3. 树林里过夜的鸟总(zhǒng zǒng)是一群。",
+        "pred_idx": [
+            4,
+            5,
+            6
+        ],
+        "pred": "1。父亲突然站定，朝（cháo zhāo）幽深的树林望了又望。2。黎（nílí）明时，所有的鸟抖（dǒu dòu）动着浑身的羽翎。3。 树林里过夜的鸟总（zhǒng zǒng）是一群。",
+        "edit": 0.02702702702702703,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 48,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "1父亲突然站定朝cháozhāo幽深的树林望了又望2黎nílí明时所有的鸟抖dǒudòu动着浑身的羽翎3树林里过夜的鸟总zhǒngzǒng是一群",
+        "norm_pred": "1父亲突然站定朝cháozhāo幽深的树林望了又望2黎nílí明时所有的鸟抖dǒudòu动着浑身的羽翎3树林里过夜的鸟总zhǒngzǒng是一群",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 72,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            10
+        ],
+        "gt": "二、看拼音，写词语。",
+        "pred_idx": [
+            7
+        ],
+        "pred": "## 二、看拼音，写词语。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            9
+        ],
+        "pred_position": 140,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "二看拼音写词语",
+        "norm_pred": "二看拼音写词语",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 7,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            11
+        ],
+        "gt": "三、我喜欢连一连，还想把这些词语写下来。",
+        "pred_idx": [
+            9
+        ],
+        "pred": "## 三、我喜欢连一连，还想把这些词语写下来。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            11
+        ],
+        "pred_position": 165,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "三我喜欢连一连还想把这些词语写下来",
+        "norm_pred": "三我喜欢连一连还想把这些词语写下来",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            14
+        ],
+        "gt": "语句积累运用",
+        "pred_idx": [
+            26
+        ],
+        "pred": "## 语句积累运用",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            26
+        ],
+        "pred_position": 206,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "语句积累运用",
+        "norm_pred": "语句积累运用",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            15
+        ],
+        "gt": "四、我能用加点词写一句有意义的话。",
+        "pred_idx": [
+            27
+        ],
+        "pred": "## 四、我能用加点词写一句有意义的话。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            27
+        ],
+        "pred_position": 209,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "四我能用加点词写一句有意义的话",
+        "norm_pred": "四我能用加点词写一句有意义的话",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            16
+        ],
+        "gt": "1. 我知道父亲此时也最快活。",
+        "pred_idx": [
+            28
+        ],
+        "pred": "1。我知道父亲此时也最快活。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            28
+        ],
+        "pred_position": 210,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "1我知道父亲此时也最快活",
+        "norm_pred": "1我知道父亲此时也最快活",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            17
+        ],
+        "gt": "2. 鸟飞离树枝的那一瞬间，容易被猎人打中。",
+        "pred_idx": [
+            29
+        ],
+        "pred": "2。鸟飞离树枝的那一瞬间，容易被猎人打中。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            29
+        ],
+        "pred_position": 211,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "2鸟飞离树枝的那一瞬间容易被猎人打中",
+        "norm_pred": "2鸟飞离树枝的那一瞬间容易被猎人打中",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 18,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            18
+        ],
+        "gt": "五、在“ $ \\Box $ ”里填上恰当的标点符号。",
+        "pred_idx": [
+            30
+        ],
+        "pred": "## 五、在“”里填上恰当的标点符号。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            30
+        ],
+        "pred_position": 214,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "五在里填上恰当的标点符号",
+        "norm_pred": "五在里填上恰当的标点符号",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            19
+        ],
+        "gt": "1. $ \\Box $看那里 $ \\Box $没有风 $ \\Box $叶子为什么在动 $ \\Box $",
+        "pred_idx": [
+            31
+        ],
+        "pred": "1。看那里没有风叶子为什么在动",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            31
+        ],
+        "pred_position": 217,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "1看那里没有风叶子为什么在动",
+        "norm_pred": "1看那里没有风叶子为什么在动",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 14,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            20
+        ],
+        "gt": "2. $ \\Box $为什么 $ \\Box $我惊愕地问 $ \\Box $",
+        "pred_idx": [
+            32
+        ],
+        "pred": "2。 为什么 我惊愕地问",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            32
+        ],
+        "pred_position": 220,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "2为什么我惊愕地问",
+        "norm_pred": "2为什么我惊愕地问",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 9,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            21
+        ],
+        "gt": "目标与预习",
+        "pred_idx": [
+            33
+        ],
+        "pred": "## 目标与预习",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            33
+        ],
+        "pred_position": 223,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "目标与预习",
+        "norm_pred": "目标与预习",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 5,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            22
+        ],
+        "gt": "学习重点",
+        "pred_idx": [
+            34
+        ],
+        "pred": "## 学习重点",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            34
+        ],
+        "pred_position": 226,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "学习重点",
+        "norm_pred": "学习重点",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 4,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            23
+        ],
+        "gt": "1. 认识生字；会写生字。\n2. 默读课文，理解课文内容。\n3. 积累优美词语，练习用“我会读”中的词语说句子。\n4. 体会“父亲”的爱鸟之情和“我”的护鸟心愿。",
+        "pred_idx": [
+            35,
+            36,
+            37,
+            38
+        ],
+        "pred": "1。 认识生字；会写生字。2。默读课文，理解课文\n内容。3。 积累优美词语，练习\n用“我会读”中的词语\n说句子。4。体会“父亲”的爱鸟之\n情和“我”的护鸟心愿。",
+        "edit": 0.05,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            35
+        ],
+        "pred_position": 235,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "1认识生字会写生字2默读课文理解课文内容3积累优美词语练习用我会读中的词语说句子4体会父亲的爱鸟之情和我的护鸟心愿",
+        "norm_pred": "1认识生字会写生字2默读课文理解课文内容3积累优美词语练习用我会读中的词语说句子4体会父亲的爱鸟之情和我的护鸟心愿",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 57,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            24
+        ],
+        "gt": "会认字",
+        "pred_idx": [
+            39
+        ],
+        "pred": "## 会认字",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            40
+        ],
+        "pred_position": 309,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "会认字",
+        "norm_pred": "会认字",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            25
+        ],
+        "gt": "读一读，连一连。",
+        "pred_idx": [
+            40
+        ],
+        "pred": "读一读，连一连。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            41
+        ],
+        "pred_position": 324,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "读一读连一连",
+        "norm_pred": "读一读连一连",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            26
+        ],
+        "gt": "黎 níng\n凝 chàng\n畅 lí\n瞬 liè\n猎 shùn",
+        "pred_idx": [
+            41,
+            42,
+            43,
+            44,
+            45
+        ],
+        "pred": "黎 níng凝 chàng畅 lí瞬 liè猎 shùn",
+        "edit": 0.14814814814814814,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            42
+        ],
+        "pred_position": 336,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "黎níng凝chàng畅lí瞬liè猎shùn",
+        "norm_pred": "黎níng凝chàng畅lí瞬liè猎shùn",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 23,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            27
+        ],
+        "gt": "会写字",
+        "pred_idx": [
+            46
+        ],
+        "pred": "## 会写字",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            48
+        ],
+        "pred_position": 407,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "会写字",
+        "norm_pred": "会写字",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            28
+        ],
+        "gt": "比一比，再组词。",
+        "pred_idx": [
+            47
+        ],
+        "pred": "比一比，再组词。",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            49
+        ],
+        "pred_position": 431,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "比一比再组词",
+        "norm_pred": "比一比再组词",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            29
+        ],
+        "gt": "湿（    ）\n显（    ）",
+        "pred_idx": [
+            48
+        ],
+        "pred": "湿（ ）显（ ）",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            50
+        ],
+        "pred_position": 437,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "湿显",
+        "norm_pred": "湿显",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            30
+        ],
+        "gt": "膀（    ）\n旁（    ）",
+        "pred_idx": [
+            49
+        ],
+        "pred": "膀（ ）旁（",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            53
+        ],
+        "pred_position": 445,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "膀旁",
+        "norm_pred": "膀旁",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            31
+        ],
+        "gt": "露（    ）\n雾（    ）",
+        "pred_idx": [
+            50,
+            51
+        ],
+        "pred": "露（ ）雾（",
+        "edit": 0.3333333333333333,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            56
+        ],
+        "pred_position": 451,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "露雾",
+        "norm_pred": "露雾",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            32
+        ],
+        "gt": "蒙（    ）\n家（    ）",
+        "pred_idx": [
+            52,
+            53
+        ],
+        "pred": "蒙（ ）家（",
+        "edit": 0.3333333333333333,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            59
+        ],
+        "pred_position": 462,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "蒙家",
+        "norm_pred": "蒙家",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 2,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "23父亲、树林和鸟",
+        "pred_idx": [
+            8
+        ],
+        "pred": "wù méng méng",
+        "edit": 1,
+        "gt_category_type": "title",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 153,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "23父亲树林和鸟",
+        "norm_pred": "wùméngméng",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 10,
+        "metric": {
+            "Edit_dist": 1.0
+        },
+        "Edit_num": 10
+    },
+    {
+        "gt_idx": [
+            13
+        ],
+        "gt": "重声\n轻夜\n过要\n气味\n（    ） （    ）\n（     ） （     ）",
+        "pred_idx": [
+            13
+        ],
+        "pred": "重",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            19
+        ],
+        "pred_position": 191,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "重声轻夜过要气味",
+        "norm_pred": "重",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 8,
+        "metric": {
+            "Edit_dist": 0.875
+        },
+        "Edit_num": 7
+    },
+    {
+        "gt_idx": [
+            12
+        ],
+        "gt": "并畅\n舒且\n时欢\n喜刻\n（    ） （    ）\n（     ） （     ）",
+        "pred_idx": [
+            10
+        ],
+        "pred": "并",
+        "edit": 1,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            12
+        ],
+        "pred_position": 188,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "norm_gt": "并畅舒且时欢喜刻",
+        "norm_pred": "并",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_620.jpg",
+        "upper_len": 8,
+        "metric": {
+            "Edit_dist": 0.875
+        },
+        "Edit_num": 7
+    },
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "（Ⅱ）解法1：由（I）知， ∠A^' O C=1 2 0^∘ - ---6分\n如图建系 O-xyz，B(1，0，0），设OC=b, O A^'=a ，则 C(0, b, 0)， A^' ( 0,  -1/2 a,  √(3)/2 a ) B C=(-1,   b,   0 ) - ---8分\n平面 A^' D B的法向量为 n=( 0, √(3), 1 ) - ---10分\n$ \\operatorname{s i n} 4 5^{\\circ}=\\left| \\operatorname{c o s} \\langle\\vec{n}, \\overrightarrow{B C} \\rangle\\right|=\\left| \\frac{\\vec{n} \\cdot\\overrightarrow{B C}} {\\left| \\overrightarrow{n} \\right| \\left| \\overrightarrow{B C} \\right|} \\right| $ - ---11分\n解得 b=√(2) ， B C=√(3) - ---12分",
+        "pred_idx": [
+            12
+        ],
+        "pred": "\\sin 45^{\\circ} = \\left| \\cos \\left( \\vec{n}, \\overrightarrow{BC} \\right) \\right| = \\left| \\frac{\\vec{n} \\cdot \\overrightarrow{BC}}{\\left| \\overrightarrow{n} \\right| \\left| \\overrightarrow{BC} \\right|} \\right|",
+        "edit": 0.47368421052631576,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 378,
+        "pred_category_type": "equation_inline",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "norm_gt": "Ⅱ解法1由I知AOC1206分如图建系OxyzB100设OCbOAa则C0b0A012a32aBC1b08分平面ADB的法向量为n03110分operatornamesin45circleftoperatornamecoslanglevecnoverrightarrowBCranglerightleftfracvecncdotoverrightarrowBCleftoverrightarrownrightleftoverrightarrowBCrightright11分解得b2BC312分",
+        "norm_pred": "sin45circleftcosleftvecnoverrightarrowBCrightrightleftfracvecncdotoverrightarrowBCleftoverrightarrownrightleftoverrightarrowBCrightright",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "upper_len": 247,
+        "metric": {
+            "Edit_dist": 0.47368421052631576
+        },
+        "Edit_num": 117
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "解法2：由（I）知， $ \\angle A^{\\prime} O C=1 2 0^{\\circ} $ - ---6分\n过C作CH $ \\bot A^{\\prime} O $ ，BD $ \\bot $平面 $ A^{\\prime} O C $ ， $ \\therefore $ BD $ \\bot $ CH，CH $ \\bot A^{\\prime} O $ ，CH $ \\bot $平面 $ A^{\\prime} B D $ $ \\angle C B H $就是BC与平面 $ \\Delta A^{\\prime} B D $所成角----9分\n设 CO = x，则 $ C H=\\frac{\\sqrt{3}} {2} \\, x $ , $ C B=\\sqrt{2} C H=\\frac{\\sqrt{6}} {2} \\, x $ , $ C B=\\sqrt{O B^{2}+O C^{2}}=\\sqrt{1+x^{2}} $ ，则 $ {\\frac{\\sqrt{6}} {2}} \\, x={\\sqrt{1+x^{2}}} $解得 $ x=\\sqrt{2} $ ， $ B C=\\sqrt{3} $ - ---12分",
+        "pred_idx": [
+            1
+        ],
+        "pred": "（Ⅱ）解法1：由（I）知， ---6分\n如图建系 ，设 ，则\n分\n平面 的法向量为\n$\\sin 45^{\\circ} = \\left| \\cos \\left( \\vec{n}, \\overrightarrow{BC} \\right) \\right| = \\left| \\frac{\\vec{n} \\cdot \\overrightarrow{BC}}{\\left| \\overrightarrow{n} \\right| \\left| \\overrightarrow{BC} \\right|} \\right|$\n解得 $b = \\sqrt{2} , \\quad BC = \\sqrt{3}$ - -- - ---12分\n解法2：由（I）知， $\\angle A^{\\prime}OC = 120^{\\circ}$ --6分\n过C作 $CH \\perp A^{\\prime}O , BD \\perp$ 平面 $A^{\\prime}OC$\n$BD \\perp CH ,\\ CH \\perp A^{\\prime}O ,\\ CH \\perp$ 平面 $A^{\\prime}BD$\n$\\angle CBH$ 就是BC与平面 $\\Delta A^{\\prime}BD$ 所成角 ------ 9分\n设 $CO = x$ ，则 $CH=\\frac{\\sqrt{3}}{2}x,\\quad CB=\\sqrt{2}CH=\\frac{\\sqrt{6}}{2}x$\n$CB=\\sqrt{OB^{2}+OC^{2}}=\\sqrt{1+x^{2}}$ ，则 $\\frac{\\sqrt{6}}{2}x = \\sqrt{1 + x^{2}}$\n解得 $x = \\sqrt{2}$ $BC = \\sqrt{3}$ --- - - -- ---12 分",
+        "edit": 0.6101083032490975,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            7
+        ],
+        "pred_position": 334,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "norm_gt": "解法2由I知AOC1206分过C作CHAOBD平面AOCBDCHCHAOCH平面ABDCBH就是BC与平面ΔABD所成角9分设COx则CH32xCB2CH62xCBOB2OC21x2则62x1x2解得x2BC312分",
+        "norm_pred": "Ⅱ解法1由I知6分如图建系设则分平面的法向量为sin45circleftcosleftvecnoverrightarrowBCrightrightleftfracvecncdotoverrightarrowBCleftoverrightarrownrightleftoverrightarrowBCrightright解得b2BC312分解法2由I知AOC1206分过C作CHAOBD平面AOCBDCHCHAOCH平面ABDCBH就是BC与平面ΔABD所成角9分设COx则CH32xCB2CH62xCBOB2OC21x2则62x1x2解得x2BC312分",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "upper_len": 277,
+        "metric": {
+            "Edit_dist": 0.6101083032490975
+        },
+        "Edit_num": 169
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "21.  解：",
+        "pred_idx": [
+            2
+        ],
+        "pred": "21。 解：",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            12
+        ],
+        "pred_position": 1091,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "norm_gt": "21解",
+        "norm_pred": "21解",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            6
+        ],
+        "gt": "（Ⅱ）设坐标分别为 $ x_{1}, y_{1} $ $ x_{2}, y_{2} $ A(-2,0)，由（I）知\n$ \\left\\{\\begin{array} {l} {x_1+x_2=\\frac{8k}{1-4k^2}}\\\\ {} \\\\ {x_1\\cdot x_2=\\frac{-8}{1-4k^2}} \\\\ \\end{array} \\right. $ - ---6分\n直线MA的方程为 $ y=\\frac{y_{1}} {x_{1}+2} \\big( x+2 \\big) $ ，令 x=0 可得点 P 坐标为 $ 0, \\frac{2 y_{1}} {x_{1}+2} $同理点Q坐标为（ $ 0, \\frac{2 y_{2}} {x_{2}+2} $ ）----8分\n$ \\big| P Q \\big|=1 \\Rightarrow\\left| \\frac{y_{1}} {x_{1}+2}-\\frac{y_{2}} {x_{2}+2} \\right|=\\frac{1} {2} \\Rightarrow\\left| \\frac{\\big( x_{1}-x_{2} \\big) \\big( 1-2 k \\big)} {\\big( x_{1}+2 \\big) \\big( x_{2}+2 \\big)} \\right|=\\frac{1} {2} $ $ \\left| 4 \\sqrt{2} \\sqrt{1-2 k^{2}} \\left( 1-2 k \\right) \\right|=2 \\left( 2 k-1 \\right)^{2} $ - ---10分",
+        "pred_idx": [
+            3
+        ],
+        "pred": "（I）联立方程组 $\\begin{cases}y = kx + 1 \\\\x^{2} - 4y^{2} = 4\\end{cases}$ 消y得： $\\left(1-4k^{2}\\right)x^{2}-8kx-8=0$ -------2分\n$\\begin{cases}1 - 4k^{2} \\neq 0 \\\\\\Delta = 32 - 64k^{2} > 0\\end{cases}$ 解得 $-\\frac{\\sqrt{2}}{2} < k < \\frac{\\sqrt{2}}{2}$ 且 $k \\neq \\pm \\frac { 1 } { 2 } .$ ------5分\n(漏 $k \\ne \\pm \\frac{1}{2}$ 得4分） （II）设M，N坐标分别为 $\\left\\{ \\begin{aligned} x_{1} + x_{2} &= \\frac{8k}{1 - 4k^{2}} \\\\ x_{1} \\cdot x_{2} &= \\frac{- 8}{1 - 4k^{2}} \\end{aligned} \\right.$ $(x_{1},y_{1}),(x_{2},y_{2})$ ，A(-2,0)，由（I）知\n----6分\n直线MA的方程为 $y = \\frac{y_{1}}{x_{1} + 2}(x + 2)$ ，令x=0可得点P坐标为 $\\left(0,\\frac{2y_{1}}{x_{1}+2}\\right)$\n同理点Q坐标为 $\\left(0,\\frac{2y_{2}}{x_{2}+2}\\right)$ -- -8分\n$\\left|PQ\\right|=1 \\Rightarrow \\left|\\frac{y_{1}}{x_{1}+2}-\\frac{y_{2}}{x_{2}+2}\\right|=\\frac{1}{2} \\Rightarrow \\left|\\frac{\\left(x_{1}-x_{2}\\right)(1-2 k)}{\\left(x_{1}+2\\right)\\left(x_{2}+2\\right)}\\right|=\\frac{1}{2}$\n$\\left| 4 \\sqrt { 2 } \\sqrt { 1 - 2 k ^ { 2 } } ( 1 - 2 k ) \\right| = 2 ( 2 k - 1 ) ^ { 2 } \\ldots \\ldots \\ldots \\ldots 1 0$ 分",
+        "edit": 0.4152334152334152,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            17
+        ],
+        "pred_position": 1097,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "norm_gt": "Ⅱ设坐标分别为x_1y_1x_2y_2A20由I知leftbeginarraylx_1x_2frac8k14k2x_1cdotx_2frac814k2endarrayright6分直线MA的方程为yy_1x_12x2令x0可得点P坐标为02y_1x_12同理点Q坐标为02y_2x_228分bigPQbig1Rightarrowleftfracy_1x_12fracy_2x_22rightfrac12Rightarrowleftfracbigx_1x_2bigbig12kbigbigx_12bigbigx_22bigrightfrac124212k212k22k1210分",
+        "norm_pred": "I联立方程组begincasesykx1x24y24endcases消y得14k2x28kx802分begincases14k2eq0Delta3264k20endcases解得22k22且k125分漏k12得4分II设MN坐标分别为leftbeginalignedx_1x_2frac8k14k2x_1cdotx_2frac814k2endalignedrightx_1y_1x_2y_2A20由I知6分直线MA的方程为yy_1x_12x2令x0可得点P坐标为02y_1x_12同理点Q坐标为02y_2x_228分leftPQright1Rightarrowleftfracy_1x_12fracy_2x_22rightfrac12Rightarrowleftfracleftx_1x_2right12kleftx_12rightleftx_22rightrightfrac124212k212k22k1210分",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "upper_len": 407,
+        "metric": {
+            "Edit_dist": 0.4152334152334152
+        },
+        "Edit_num": 169
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "（I）联立方程组 $ \\left\\{\\begin{array} {l} {y=kx+1}\\\\ {{{{}}}} \\\\ {x^2-4y^2=4} \\\\ \\end{array} \\right. $消y得： (1-4k^2)x^2-8k x-8=0 - ---2分\n$ \\left\\{\\begin{array} {l} {{{1-4k^{2}\\neq0 \\,}}} \\\\ {{{{}}}} \\\\ {{{{\\Delta=32-64k^2>0}}}} \\\\ \\end{array} \\right. $解得 - √(2)/2 < k < √(2)/2且 k ≠±1/2 - ---5分\n(漏 k ≠±1/2得4分)",
+        "pred_idx": [
+            39
+        ],
+        "pred": "\\left|PQ\\right|=1 \\Rightarrow \\left|\\frac{y_{1}}{x_{1}+2}-\\frac{y_{2}}{x_{2}+2}\\right|=\\frac{1}{2} \\Rightarrow \\left|\\frac{\\left(x_{1}-x_{2}\\right)(1-2 k)}{\\left(x_{1}+2\\right)\\left(x_{2}+2\\right)}\\right|=\\frac{1}{2}",
+        "edit": 0.8181818181818182,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            13
+        ],
+        "pred_position": 1774,
+        "pred_category_type": "equation_inline",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "norm_gt": "I联立方程组leftbeginarraylykx1x24y24endarrayright消y得14k2x28kx802分leftbeginarrayl14k2eq0Delta3264k20endarrayright解得22k22且k125分漏k12得4分",
+        "norm_pred": "leftPQright1Rightarrowleftfracy_1x_12fracy_2x_22rightfrac12Rightarrowleftfracleftx_1x_2right12kleftx_12rightleftx_22rightrightfrac12",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_664.jpg",
+        "upper_len": 132,
+        "metric": {
+            "Edit_dist": 0.8181818181818182
+        },
+        "Edit_num": 108
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "北京农学院将毕业生“村官”纳入科技推广服务体系",
+        "pred_idx": [
+            3
+        ],
+        "pred": "# 北京农学院将毕业生“村官”纳入科技推广服务体系",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 70,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "北京农学院将毕业生村官纳入科技推广服务体系",
+        "norm_pred": "北京农学院将毕业生村官纳入科技推广服务体系",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 21,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            8
+        ],
+        "gt": "北京市昌平区崔村镇大辛峰村村官柳明娟依托母校智力资源，运用自主研发的菜果有机营养液，保进当地产业发展；延庆康庄镇西山沟村村官孙智慧借助母校专家顾问团优势，主动承包蔬菜大棚，通过示范促进了当地设施农业的发展；延庆康庄镇西红寺村村官马剑锋通过努力健特色“西红寺”西瓜品种顺利通过有机认证，提升了这一地方特色品种的知名度和附加值······ 12月20日，北京农学院召开实施大学生村官工作五周年回顾暨村官“十佳”科技推广标兵表彰大会。对十佳科技推广标兵进行表彰，给予每人3000元现金奖励，以表彰本校毕业生扎根农村以来潜心钻研，求真务实的科学精神，不断探索、勇于改革的创新精神和心系 “三农”科技富农的服务精神。",
+        "pred_idx": [
+            4,
+            5
+        ],
+        "pred": "北京市昌平区崔村镇大辛峰\n村村官柳明娟依托母校智力资源，\n运用自主研发的苹果有机营养液，\n促进当地产业发展；延庆康庄镇西\n山沟村村官孙智慧借助母校专家顾\n问团优势，主动承包蔬菜大棚，通过\n示范促进了当地设施农业的发展；\n延庆康庄镇西红寺村村官马剑锋通过努力使特色“西红寺”西瓜品种顺\n利通过有机认证，提升了这一地方\n特色品种的知名度和附加值…\n12月20日，北京农学院召开实施\n大学生村官工作五周年回顾暨村\n官“十佳”科技推广标兵表彰大会，\n对十佳科技推广标兵进行表彰，给\n予每人3000元现金奖励，以表彰",
+        "edit": 0.20072992700729927,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            2
+        ],
+        "pred_position": 95,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "北京市昌平区崔村镇大辛峰村村官柳明娟依托母校智力资源运用自主研发的菜果有机营养液保进当地产业发展延庆康庄镇西山沟村村官孙智慧借助母校专家顾问团优势主动承包蔬菜大棚通过示范促进了当地设施农业的发展延庆康庄镇西红寺村村官马剑锋通过努力健特色西红寺西瓜品种顺利通过有机认证提升了这一地方特色品种的知名度和附加值12月20日北京农学院召开实施大学生村官工作五周年回顾暨村官十佳科技推广标兵表彰大会对十佳科技推广标兵进行表彰给予每人3000元现金奖励以表彰本校毕业生扎根农村以来潜心钻研求真务实的科学精神不断探索勇于改革的创新精神和心系三农科技富农的服务精神",
+        "norm_pred": "北京市昌平区崔村镇大辛峰村村官柳明娟依托母校智力资源运用自主研发的苹果有机营养液促进当地产业发展延庆康庄镇西山沟村村官孙智慧借助母校专家顾问团优势主动承包蔬菜大棚通过示范促进了当地设施农业的发展延庆康庄镇西红寺村村官马剑锋通过努力使特色西红寺西瓜品种顺利通过有机认证提升了这一地方特色品种的知名度和附加值12月20日北京农学院召开实施大学生村官工作五周年回顾暨村官十佳科技推广标兵表彰大会对十佳科技推广标兵进行表彰给予每人3000元现金奖励以表彰",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 274,
+        "metric": {
+            "Edit_dist": 0.19708029197080293
+        },
+        "Edit_num": 54
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "据了解，5年来，北京农学院将大学生村官纳人学按科技推广服务体系中，整合各种资额，充分发挥大学生知识和年龄优势，使一大批大学生村官在学校的支持下帮助农民致富，保进了当地产业发展，得到了当地政府和村民的高度评价和充分认可。他们中有4人担任村党支部副书记、10人当选为村党支部委员，18人荣获北京市优秀大学生“村官”称号。",
+        "pred_idx": [
+            7
+        ],
+        "pred": "批大学生村官在学校的支持下帮\n助农民致富，促进了当地产业发\n展，得到了当地政府和村民的高度\n评价和充分认可。他们中有4人\n担任村党支部副书记、10人当选为\n村党支部委员，18人荣获北京市优\n秀大学生“村官”称号。",
+        "edit": 0.3724137931034483,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 470,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "据了解5年来北京农学院将大学生村官纳人学按科技推广服务体系中整合各种资额充分发挥大学生知识和年龄优势使一大批大学生村官在学校的支持下帮助农民致富保进了当地产业发展得到了当地政府和村民的高度评价和充分认可他们中有4人担任村党支部副书记10人当选为村党支部委员18人荣获北京市优秀大学生村官称号",
+        "norm_pred": "批大学生村官在学校的支持下帮助农民致富促进了当地产业发展得到了当地政府和村民的高度评价和充分认可他们中有4人担任村党支部副书记10人当选为村党支部委员18人荣获北京市优秀大学生村官称号",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 145,
+        "metric": {
+            "Edit_dist": 0.3724137931034483
+        },
+        "Edit_num": 54
+    },
+    {
+        "gt_idx": [
+            10
+        ],
+        "gt": "刘铁军",
+        "pred_idx": [
+            8
+        ],
+        "pred": "刘铁军",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            7
+        ],
+        "pred_position": 576,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "刘铁军",
+        "norm_pred": "刘铁军",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 3,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            11,
+            12
+        ],
+        "gt": "农业信息智能服务技术助力现代农业一一访中国农科院农业信息研究所所长许世卫研究员",
+        "pred_idx": [
+            9
+        ],
+        "pred": "# 农业信息智能服务技术助力现代农业\n访中国农科院农业信息研究所所长许世卫研究员",
+        "edit": 0.05128205128205128,
+        "gt_category_type": "title",
+        "gt_position": [
+            8,
+            9
+        ],
+        "pred_position": 579,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "农业信息智能服务技术助力现代农业一一访中国农科院农业信息研究所所长许世卫研究员",
+        "norm_pred": "农业信息智能服务技术助力现代农业访中国农科院农业信息研究所所长许世卫研究员",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 39,
+        "metric": {
+            "Edit_dist": 0.05128205128205128
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            13
+        ],
+        "gt": "信息化是当今发展最迅建、最活跃的科技因素，正在对我国现代农业的发最产生着深刻影响。当前物联网、云计算和3G等信息技术在农业各额城、各环节的研完应用步伐正在加快，如何抓住机遇，让农业信息智能服务在建设现代农业中充分发挥作用，对于走中国特色农业现代化道路意义重大。",
+        "pred_idx": [
+            10
+        ],
+        "pred": "信息化是当今发展最迅速、最活跃的科技因素，正在对我国现代农业的\n发展产生着深刻影响。当前物联网、云计算和3G等信息技术在农业各领域、\n各环节的研究应用步伐正在加快，如何抓住机遇，让农业信息智能服务在建\n设现代农业中充分发挥作用，对于走中国特色农业现代化道路意义重大。",
+        "edit": 0.04132231404958678,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            10
+        ],
+        "pred_position": 619,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "信息化是当今发展最迅建最活跃的科技因素正在对我国现代农业的发最产生着深刻影响当前物联网云计算和3G等信息技术在农业各额城各环节的研完应用步伐正在加快如何抓住机遇让农业信息智能服务在建设现代农业中充分发挥作用对于走中国特色农业现代化道路意义重大",
+        "norm_pred": "信息化是当今发展最迅速最活跃的科技因素正在对我国现代农业的发展产生着深刻影响当前物联网云计算和3G等信息技术在农业各领域各环节的研究应用步伐正在加快如何抓住机遇让农业信息智能服务在建设现代农业中充分发挥作用对于走中国特色农业现代化道路意义重大",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 121,
+        "metric": {
+            "Edit_dist": 0.04132231404958678
+        },
+        "Edit_num": 5
+    },
+    {
+        "gt_idx": [
+            14
+        ],
+        "gt": "本报记者  周铮",
+        "pred_idx": [
+            11
+        ],
+        "pred": "本报记者周铮",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            11
+        ],
+        "pred_position": 752,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "本报记者周铮",
+        "norm_pred": "本报记者周铮",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            15
+        ],
+        "gt": "现代农业离不开信息化，发达国家的成功经验表明，农业信息化是现代农业的重要标志。当前，我国已进入加快传统农业改造，走中国特色农业现代化道路的关键时刻，如何发挥农业信息智能服务在发展现代农业中不可替代的作用，我国农业信息领域专家，中国农业科学院农业信息研究所所长许世卫，提出的发展农业信息智能服务技术的观点，引起业界关注，记者日前为此专访了许世卫研究员。",
+        "pred_idx": [
+            12
+        ],
+        "pred": "现代农业离不开信息化，发\n达国家的成功经验表明，农业信\n息化是现代农业的重要标志。当\n前，我国已进入加快传统农业改\n造，走中国特色农业现代化道路\n的关键时刻，如何发挥农业信息\n智能服务在发展现代农业中不可\n替代的作用，我国农业信息领域\n专家、中国农业科学院农业信息\n研究所所长许世卫，提出的发展\n农业信息智能服务技术的观点，\n引起业界关注，记者日前为此专\n访了许世卫研究员。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            12
+        ],
+        "pred_position": 754,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "现代农业离不开信息化发达国家的成功经验表明农业信息化是现代农业的重要标志当前我国已进入加快传统农业改造走中国特色农业现代化道路的关键时刻如何发挥农业信息智能服务在发展现代农业中不可替代的作用我国农业信息领域专家中国农业科学院农业信息研究所所长许世卫提出的发展农业信息智能服务技术的观点引起业界关注记者日前为此专访了许世卫研究员",
+        "norm_pred": "现代农业离不开信息化发达国家的成功经验表明农业信息化是现代农业的重要标志当前我国已进入加快传统农业改造走中国特色农业现代化道路的关键时刻如何发挥农业信息智能服务在发展现代农业中不可替代的作用我国农业信息领域专家中国农业科学院农业信息研究所所长许世卫提出的发展农业信息智能服务技术的观点引起业界关注记者日前为此专访了许世卫研究员",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 163,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            16
+        ],
+        "gt": "记者：信息化已成为我们这个时代的标志，点为推动经济社会发是的重要力量。有些专家提出信息化与农业现代化相融合的概念，可否理解为二者的融合就是农业信息智能服务，可否对此给读者进行一个描述。",
+        "pred_idx": [
+            13
+        ],
+        "pred": "记者：信息化已成为我们这\n个时代的标志，成为推动经济社\n会发展的重要力量。有些专家提\n出信息化与农业现代化相融合的\n概念，可否理解为二者的融合就\n是农业信息智能服务，可否对此\n给读者进行一个描述。",
+        "edit": 0.023255813953488372,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            13
+        ],
+        "pred_position": 760,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "记者信息化已成为我们这个时代的标志点为推动经济社会发是的重要力量有些专家提出信息化与农业现代化相融合的概念可否理解为二者的融合就是农业信息智能服务可否对此给读者进行一个描述",
+        "norm_pred": "记者信息化已成为我们这个时代的标志成为推动经济社会发展的重要力量有些专家提出信息化与农业现代化相融合的概念可否理解为二者的融合就是农业信息智能服务可否对此给读者进行一个描述",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 86,
+        "metric": {
+            "Edit_dist": 0.023255813953488372
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            17
+        ],
+        "gt": "许世卫：当前，随着我国全面小康社会建设的大力推进，加快农业发展方式转变，大力推进农业信息化已经成为当务之急。农业信息智能服务是农业信息化的核心内容。农业信息智能服务是利用诸如物联网，云计算技术等先进信息技术对农业信息进行智能采集、加工、传播和应用的过程，是农业领域”信息物化”的过程，是把”信息”转变为农业生产力的过程。通过农业信息智能服务可以有效化解农业在发展中所遇到的危机。",
+        "pred_idx": [
+            14
+        ],
+        "pred": "许世卫：当前，随着我国全面\n小康社会建设的大力推进，加快\n农业发展方式转变，大力推进农\n业信息化已经成为当务之急。农\n业信息智能服务是农业信息化的\n核心内容。农业信息智能服务是\n利用诸如物联网、云计算技术等\n先进信息技术对农业信息进行智\n能采集、加工、传播和应用的过\n程，是农业领域“信息物化”的过\n程，是把“信息”转变为农业生产\n力的过程。通过农业信息智能服\n务可以有效化解农业在发展中所\n遇到的危机。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            14
+        ],
+        "pred_position": 947,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "许世卫当前随着我国全面小康社会建设的大力推进加快农业发展方式转变大力推进农业信息化已经成为当务之急农业信息智能服务是农业信息化的核心内容农业信息智能服务是利用诸如物联网云计算技术等先进信息技术对农业信息进行智能采集加工传播和应用的过程是农业领域信息物化的过程是把信息转变为农业生产力的过程通过农业信息智能服务可以有效化解农业在发展中所遇到的危机",
+        "norm_pred": "许世卫当前随着我国全面小康社会建设的大力推进加快农业发展方式转变大力推进农业信息化已经成为当务之急农业信息智能服务是农业信息化的核心内容农业信息智能服务是利用诸如物联网云计算技术等先进信息技术对农业信息进行智能采集加工传播和应用的过程是农业领域信息物化的过程是把信息转变为农业生产力的过程通过农业信息智能服务可以有效化解农业在发展中所遇到的危机",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 172,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            18
+        ],
+        "gt": "记者：我国正面临着一个新的农业发展转折点，机遇与批战并在，当前，在发最现代农业中我们遇到了农业劳动力点本新高，农业生产稳定性较差，农业比校效益不高，农业可持续发是面临挑战等问题，农业信息智能服务挂术可否化解这些矛盾、走出困境？",
+        "pred_idx": [
+            15
+        ],
+        "pred": "记者：我国正面临着一个新\n的农业发展转折点，机遇与挑战\n并存，当前，在发展现代农业中我\n们遇到了农业劳动力成本渐高，农\n业生产稳定性较差，农业比较效益\n不高，农业可持续发展面临挑战等\n问题，农业信息智能服务技术可\n否化解这些矛盾、走出困境？",
+        "edit": 0.07766990291262135,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            15
+        ],
+        "pred_position": 1045,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "记者我国正面临着一个新的农业发展转折点机遇与批战并在当前在发最现代农业中我们遇到了农业劳动力点本新高农业生产稳定性较差农业比校效益不高农业可持续发是面临挑战等问题农业信息智能服务挂术可否化解这些矛盾走出困境",
+        "norm_pred": "记者我国正面临着一个新的农业发展转折点机遇与挑战并存当前在发展现代农业中我们遇到了农业劳动力成本渐高农业生产稳定性较差农业比较效益不高农业可持续发展面临挑战等问题农业信息智能服务技术可否化解这些矛盾走出困境",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 103,
+        "metric": {
+            "Edit_dist": 0.07766990291262135
+        },
+        "Edit_num": 8
+    },
+    {
+        "gt_idx": [
+            19,
+            20
+        ],
+        "gt": "许世卫：通过农业信息智能服务技术，可以简化农业管理程序，降低劳动强度，提高劳动效率，减少农业用工数量，提高农业生产的自动化水平，从而相对解决劳动力成本上升问题；可以通过风险分析，进行早期发现，早期预警，早期干预，防正生产消费的大起大落，平抑波动，控制波幅，从而相对保障农业生产的稳定性；可以通过点对点的个性化服务，有针对性地迅速普及农业科技知识，及时传输农业市场信息，有利于提高农民表质和培养新型农民，增加农业产业科技含量和附加值，促进农业增效和农民增收，从而相对提高农业比较效益；可以通过指导产业规划，教育培训，整合农业资源推进“田间”管理数字化，实现精准灌溉，旅肥和用药，从而相对缓解农业可持续性挑站战。记者：通过多年的农业信息科研实践，在我国您首先提出了农业信息督能服务政以及发展农业信息智能服务技术这个观点。农业信息智能服务的定义是什么？以及农业信息智能服务技本应该包括哪些方面？",
+        "pred_idx": [
+            17
+        ],
+        "pred": "决劳动力成本上升问题；可以通\n过风险分析，进行早期发现、早期\n预警、早期干预，防止生产消费的\n大起大落，平抑波动、控制波幅，\n从而相对保障农业生产的稳定性；\n可以通过点对点的个性化服务，有\n针对性地迅速普及农业科技知识、\n及时传输农业市场信息，有利于提\n高农民素质和培养新型农民，增加\n农业产业科技含量和附加值，促进\n农业增效和农民增收，从而相对提\n高农业比较效益；可以通过指导产\n业规划、教育培训，整合农业资源，\n推进“田间”管理数字化，实现精\n准灌溉、施肥和用药，从而相对缓\n解农业可持续性挑战。记者：通过多年的农业信息\n科研实践，在我国您首先提出了\n农业信息智能服务以及发展农业\n信息智能服务技术这个观点。农\n业信息智能服务的定义是什么？\n以及农业信息智能服务技术应该\n包括哪些方面？",
+        "edit": 0.19273743016759776,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            16,
+            18
+        ],
+        "pred_position": 1367,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "许世卫通过农业信息智能服务技术可以简化农业管理程序降低劳动强度提高劳动效率减少农业用工数量提高农业生产的自动化水平从而相对解决劳动力成本上升问题可以通过风险分析进行早期发现早期预警早期干预防正生产消费的大起大落平抑波动控制波幅从而相对保障农业生产的稳定性可以通过点对点的个性化服务有针对性地迅速普及农业科技知识及时传输农业市场信息有利于提高农民表质和培养新型农民增加农业产业科技含量和附加值促进农业增效和农民增收从而相对提高农业比较效益可以通过指导产业规划教育培训整合农业资源推进田间管理数字化实现精准灌溉旅肥和用药从而相对缓解农业可持续性挑站战记者通过多年的农业信息科研实践在我国您首先提出了农业信息督能服务政以及发展农业信息智能服务技术这个观点农业信息智能服务的定义是什么以及农业信息智能服务技本应该包括哪些方面",
+        "norm_pred": "决劳动力成本上升问题可以通过风险分析进行早期发现早期预警早期干预防止生产消费的大起大落平抑波动控制波幅从而相对保障农业生产的稳定性可以通过点对点的个性化服务有针对性地迅速普及农业科技知识及时传输农业市场信息有利于提高农民素质和培养新型农民增加农业产业科技含量和附加值促进农业增效和农民增收从而相对提高农业比较效益可以通过指导产业规划教育培训整合农业资源推进田间管理数字化实现精准灌溉施肥和用药从而相对缓解农业可持续性挑战记者通过多年的农业信息科研实践在我国您首先提出了农业信息智能服务以及发展农业信息智能服务技术这个观点农业信息智能服务的定义是什么以及农业信息智能服务技术应该包括哪些方面",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 358,
+        "metric": {
+            "Edit_dist": 0.19273743016759776
+        },
+        "Edit_num": 69
+    },
+    {
+        "gt_idx": [
+            21
+        ],
+        "gt": "许世卫：农业信息智能服务是解决当的农业发展危机问题的重要途径，是适应现代农业发展的，更高求平，更深层次的农业信息服务形式。农业信息智能服务是现代农业发展依靠科技进步的所需婴，必将开辟信息技术服务于现代农业建设的新天地。",
+        "pred_idx": [
+            18
+        ],
+        "pred": "许世卫：农业信息智能服务\n是解决当前农业发展危机问题的\n重要途径，是适应现代农业发展\n的，更高水平、更深层次的农业信\n息服务形式。农业信息智能服务\n是现代农业发展依靠科技进步的\n新需要，必将开辟信息技术服务\n于现代农业建设的新天地。",
+        "edit": 0.0392156862745098,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            19
+        ],
+        "pred_position": 1440,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "许世卫农业信息智能服务是解决当的农业发展危机问题的重要途径是适应现代农业发展的更高求平更深层次的农业信息服务形式农业信息智能服务是现代农业发展依靠科技进步的所需婴必将开辟信息技术服务于现代农业建设的新天地",
+        "norm_pred": "许世卫农业信息智能服务是解决当前农业发展危机问题的重要途径是适应现代农业发展的更高水平更深层次的农业信息服务形式农业信息智能服务是现代农业发展依靠科技进步的新需要必将开辟信息技术服务于现代农业建设的新天地",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 102,
+        "metric": {
+            "Edit_dist": 0.0392156862745098
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            22
+        ],
+        "gt": "什么是农业信息智能服务？农业信息智能服务是以农业种植、养殖，加工、经营过程中各类事件为服务对象，以基础海量数据、动态即时数据获取和智能信息处理系统为技心技术，以分布式、互动性、主动型、自动化等为特征的信息服务。其核心是：利用现代信息技术手段，对农业生产的各种要素信息，进行标准化采集、科学化管理，自动化控制，精准化服务，提高管理支持，降低生产成本，提高产业效益。",
+        "pred_idx": [
+            19,
+            20
+        ],
+        "pred": "什么是农业信息智能服务？\n农业信息智能服务是以农业种\n植、养殖、加工、经营过程中各类\n事件为服务对象，以基础海量数\n据、动态即时数据获取和智能信\n息处理系统为核心技术，以分布\n式、互动性、主动型、自动化等为\n特征的信息服务。其核心是：利用现代信息技术手段，对农业生\n产的各种要素信息，进行标准化\n采集、科学化管理、自动化控制、\n精准化服务，提高管理支持，降低\n生产成本，提高产业效益。",
+        "edit": 0.012422360248447204,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            20
+        ],
+        "pred_position": 1785,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "什么是农业信息智能服务农业信息智能服务是以农业种植养殖加工经营过程中各类事件为服务对象以基础海量数据动态即时数据获取和智能信息处理系统为技心技术以分布式互动性主动型自动化等为特征的信息服务其核心是利用现代信息技术手段对农业生产的各种要素信息进行标准化采集科学化管理自动化控制精准化服务提高管理支持降低生产成本提高产业效益",
+        "norm_pred": "什么是农业信息智能服务农业信息智能服务是以农业种植养殖加工经营过程中各类事件为服务对象以基础海量数据动态即时数据获取和智能信息处理系统为核心技术以分布式互动性主动型自动化等为特征的信息服务其核心是利用现代信息技术手段对农业生产的各种要素信息进行标准化采集科学化管理自动化控制精准化服务提高管理支持降低生产成本提高产业效益",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 160,
+        "metric": {
+            "Edit_dist": 0.00625
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            23,
+            24,
+            25
+        ],
+        "gt": "农业信息智能服务技术应该包括三个方面，即农情精准获取技术、数据自动处理技术和信息推送应用技术。记者：上世纪90年代以来。信息获取挂术、信息处理技术取得突飞廷进发展，农业信息智能服务已成为当今世界最且影响力的农业信息化发展前沿领域。现在提出的发展农业信息智能服务技本是不是农主信息化概念上的深化？许世卫：农业信息智能服务技术的提出，并不只是概念上的变化，它是经济、社会和科技发展的必然，是一种助推现代农业科学化发展和兼顾高产、优质、高效，生态、安全农业综合目标的有效技术系统。",
+        "pred_idx": [
+            21
+        ],
+        "pred": "农业信息智能服务技术应该\n包括三个方面，即农情精准获取\n技术、数据自动处理技术和信息\n推送应用技术。记者：上世纪90年代以来，\n信息获取技术、信息处理技术取得\n突飞猛进发展，农业信息智能服务\n已成为当今世界最具影响力的农业\n信息化发展前沿领域。现在提出\n的发展农业信息智能服务技术是\n不是农业信息化概念上的深化？许世卫：农业信息智能服务\n技术的提出，并不只是概念上的\n变化，它是经济、社会和科技发展\n的必然，是一种助推现代农业科\n学化发展和兼顾高产、优质、高\n效、生态、安全农业综合目标的有\n效技术系统。",
+        "edit": 0.022935779816513763,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            22,
+            23,
+            24
+        ],
+        "pred_position": 2019,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "农业信息智能服务技术应该包括三个方面即农情精准获取技术数据自动处理技术和信息推送应用技术记者上世纪90年代以来信息获取挂术信息处理技术取得突飞廷进发展农业信息智能服务已成为当今世界最且影响力的农业信息化发展前沿领域现在提出的发展农业信息智能服务技本是不是农主信息化概念上的深化许世卫农业信息智能服务技术的提出并不只是概念上的变化它是经济社会和科技发展的必然是一种助推现代农业科学化发展和兼顾高产优质高效生态安全农业综合目标的有效技术系统",
+        "norm_pred": "农业信息智能服务技术应该包括三个方面即农情精准获取技术数据自动处理技术和信息推送应用技术记者上世纪90年代以来信息获取技术信息处理技术取得突飞猛进发展农业信息智能服务已成为当今世界最具影响力的农业信息化发展前沿领域现在提出的发展农业信息智能服务技术是不是农业信息化概念上的深化许世卫农业信息智能服务技术的提出并不只是概念上的变化它是经济社会和科技发展的必然是一种助推现代农业科学化发展和兼顾高产优质高效生态安全农业综合目标的有效技术系统",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 218,
+        "metric": {
+            "Edit_dist": 0.022935779816513763
+        },
+        "Edit_num": 5
+    },
+    {
+        "gt_idx": [
+            26
+        ],
+        "gt": "农业信息智能服务是农业信息化的核心内容，是加快农业生产方式转变的表现形式，是服务 “三农”的最佳途径。传统的农业服务模式存在许多不足之处，不能满足农业生产和消费的需要。农业信息智能服务具有独特的优势；互动性、智能性，主动性，即时性、预见性。",
+        "pred_idx": [
+            22
+        ],
+        "pred": "农业信息智能服务是农业信\n息化的核心内容，是加快农业生\n产方式转变的表现形式，是服务\n“三农”的最佳途径。传统的农业\n服务模式存在许多不足之处，不\n能满足农业生产和消费的需要。\n农业信息智能服务具有独特的优\n势：互动性、智能性、主动性、即时\n性、预见性。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            25
+        ],
+        "pred_position": 2093,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "农业信息智能服务是农业信息化的核心内容是加快农业生产方式转变的表现形式是服务三农的最佳途径传统的农业服务模式存在许多不足之处不能满足农业生产和消费的需要农业信息智能服务具有独特的优势互动性智能性主动性即时性预见性",
+        "norm_pred": "农业信息智能服务是农业信息化的核心内容是加快农业生产方式转变的表现形式是服务三农的最佳途径传统的农业服务模式存在许多不足之处不能满足农业生产和消费的需要农业信息智能服务具有独特的优势互动性智能性主动性即时性预见性",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 106,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            27
+        ],
+        "gt": "面对海量的信息，特别是日益发达的科学技术，瞬息万变的市场供求，农民的迷茫，农业信息智能服务的优越性更加凸显，它可以分层次地区别对待，可以有针对性地一对一指导，也可以提供多元化选择，还可以被你选择，被你咨询，达到为我所用之目的。",
+        "pred_idx": [
+            23
+        ],
+        "pred": "面对海量的信息，特别是日\n益发达的科学技术、瞬息万变的\n市场供求，农民的迷茫，农业信息\n智能服务的优越性更加凸显，它\n可以分层次地区别对待，可以有\n针对性地一对一指导，也可以提\n供多元化选择，还可以被你选择、",
+        "edit": 0.12745098039215685,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            26
+        ],
+        "pred_position": 2345,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "面对海量的信息特别是日益发达的科学技术瞬息万变的市场供求农民的迷茫农业信息智能服务的优越性更加凸显它可以分层次地区别对待可以有针对性地一对一指导也可以提供多元化选择还可以被你选择被你咨询达到为我所用之目的",
+        "norm_pred": "面对海量的信息特别是日益发达的科学技术瞬息万变的市场供求农民的迷茫农业信息智能服务的优越性更加凸显它可以分层次地区别对待可以有针对性地一对一指导也可以提供多元化选择还可以被你选择",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 102,
+        "metric": {
+            "Edit_dist": 0.12745098039215685
+        },
+        "Edit_num": 13
+    },
+    {
+        "gt_idx": [
+            28,
+            29,
+            30
+        ],
+        "gt": "记者：传统的农精数据采集费时，费事，不能满足指导生产、科学研究的需要。现代农业对农情信息的及时性、准确性、全面性、科学性都提出了更高的要求。农情准确获取是农业信息智能服务的基础和前提，如何获得精准的农情信息呢？许世卫：精准地获取农情信息，可以随时感知农业变化脉搏，对提高农业信息智能服务水平和促进现代农业发展步伐都有着重要的意义。由于过去在农业信息资源采集、处理和利用过程中，不同地区、不同部门，不可机构对农情的采集，定义，描述及应用等大多自主确定了自己的标准，导致了农情数据采集不仅浪费了巨大的人力、物力，而且又人为地造成信息隔离，数据鸿沟，难以具有可比性，不能得到有效整合，共享利用。为破解这一难题，中国农业科学院农业信息研究所制定了农情信息分类标准和编制各类农情信息分类代码表。它是针对调查农情信息的需求，分析国内网络农业信息资源建设现状和现行的网络农业信息资源组织方法，引人元数据与知识组织方法理论，研究形成了农情信息规范采集标准。",
+        "pred_idx": [
+            25
+        ],
+        "pred": "恢的，用口ソ。\n记者：传统的农情数据采集\n费时、费事，不能满足指导生产、\n科学研究的需要。现代农业对农\n情信息的及时性、准确性、全面\n性、科学性都提出了更高的要\n求。农情准确获取是农业信息智\n能服务的基础和前提，如何获得\n精准的农情信息呢？许世卫：精准地获取农情信\n息，可以随时感知农业变化脉搏，\n对提高农业信息智能服务水平和\n促进现代农业发展步伐都有着重\n要的意义。由于过去在农业信息\n资源采集、处理和利用过程中，不\n同地区、不同部门、不同机构对农\n情的采集、定义、描述及应用等大多\n自主确定了自己的标准，导致了农\n情数据采集不仅浪费了巨大的人\n力、物力，而且又人为地造成信息隔\n离、数据鸿沟，难以具有可比性，不\n能得到有效整合、共享利用。为破解这一难题，中国农业\n科学院农业信息研究所制定了农\n情信息分类标准和编制各类农情\n信息分类代码表。它是针对调查\n农情信息的需求，分析国内网络农\n业信息资源建设现状和现行的网\n络农业信息资源组织方法，引入元\n数据与知识组织方法理论，研究\n形成了农情信息规范采集标准。另外，针对目前信息内容不\n全面，一些重要信息遗漏，难以表\n述农产品信息的内涵和实质，在\n信息分析时笼统采用平均的方法\n等问题，中国农科院农业信息研\n究所首次提出了全息农产品信息\n的概念，通过完整描述农产品在\n相关环节主要显性和隐形信息因",
+        "edit": 0.22828282828282828,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            28,
+            29,
+            30
+        ],
+        "pred_position": 2576,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {},
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "记者传统的农精数据采集费时费事不能满足指导生产科学研究的需要现代农业对农情信息的及时性准确性全面性科学性都提出了更高的要求农情准确获取是农业信息智能服务的基础和前提如何获得精准的农情信息呢许世卫精准地获取农情信息可以随时感知农业变化脉搏对提高农业信息智能服务水平和促进现代农业发展步伐都有着重要的意义由于过去在农业信息资源采集处理和利用过程中不同地区不同部门不可机构对农情的采集定义描述及应用等大多自主确定了自己的标准导致了农情数据采集不仅浪费了巨大的人力物力而且又人为地造成信息隔离数据鸿沟难以具有可比性不能得到有效整合共享利用为破解这一难题中国农业科学院农业信息研究所制定了农情信息分类标准和编制各类农情信息分类代码表它是针对调查农情信息的需求分析国内网络农业信息资源建设现状和现行的网络农业信息资源组织方法引人元数据与知识组织方法理论研究形成了农情信息规范采集标准",
+        "norm_pred": "恢的用口ソ记者传统的农情数据采集费时费事不能满足指导生产科学研究的需要现代农业对农情信息的及时性准确性全面性科学性都提出了更高的要求农情准确获取是农业信息智能服务的基础和前提如何获得精准的农情信息呢许世卫精准地获取农情信息可以随时感知农业变化脉搏对提高农业信息智能服务水平和促进现代农业发展步伐都有着重要的意义由于过去在农业信息资源采集处理和利用过程中不同地区不同部门不同机构对农情的采集定义描述及应用等大多自主确定了自己的标准导致了农情数据采集不仅浪费了巨大的人力物力而且又人为地造成信息隔离数据鸿沟难以具有可比性不能得到有效整合共享利用为破解这一难题中国农业科学院农业信息研究所制定了农情信息分类标准和编制各类农情信息分类代码表它是针对调查农情信息的需求分析国内网络农业信息资源建设现状和现行的网络农业信息资源组织方法引入元数据与知识组织方法理论研究形成了农情信息规范采集标准另外针对目前信息内容不全面一些重要信息遗漏难以表述农产品信息的内涵和实质在信息分析时笼统采用平均的方法等问题中国农科院农业信息研究所首次提出了全息农产品信息的概念通过完整描述农产品在相关环节主要显性和隐形信息因",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 495,
+        "metric": {
+            "Edit_dist": 0.22828282828282828
+        },
+        "Edit_num": 113
+    },
+    {
+        "gt_idx": [
+            31
+        ],
+        "gt": "另外，针对目前信息内容不全面，一些重要信息遗漏，难以表述农产品信息的内涵和实质，在信息分析时笼统采用平均的方法等问题，中国农科院安业信息研究所首次提出了全息农产品信息的概念，通过完整描述农产品在相关环节主要显性和隐形信息因素，全面，准确描述和定义农产品时间，空间、内容等相关属性，实现农产品信息实质和数据表达的一一对应。全息农产品信息研究工作的完成，必将极大地推进我国农业信息工作的标准化进程，为农业信息资源的共享利用奠定基础，是着眼于现代农业发展的长远考虑。",
+        "pred_idx": [
+            26
+        ],
+        "pred": "素，全面、准确描述和定义农产品\n时间、空间、内容等相关属性，实\n现农产品信息实质和数据表达的\n一一对应。全息农产品信息研究\n工作的完成，必将极大地推进我\n国农业信息工作的标准化进程，\n为农业信息资源的共享利用奠定\n基础，是着眼于现代农业发展的\n长远考虑。",
+        "edit": 0.49065420560747663,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            31
+        ],
+        "pred_position": 2591,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "另外针对目前信息内容不全面一些重要信息遗漏难以表述农产品信息的内涵和实质在信息分析时笼统采用平均的方法等问题中国农科院安业信息研究所首次提出了全息农产品信息的概念通过完整描述农产品在相关环节主要显性和隐形信息因素全面准确描述和定义农产品时间空间内容等相关属性实现农产品信息实质和数据表达的一一对应全息农产品信息研究工作的完成必将极大地推进我国农业信息工作的标准化进程为农业信息资源的共享利用奠定基础是着眼于现代农业发展的长远考虑",
+        "norm_pred": "素全面准确描述和定义农产品时间空间内容等相关属性实现农产品信息实质和数据表达的一一对应全息农产品信息研究工作的完成必将极大地推进我国农业信息工作的标准化进程为农业信息资源的共享利用奠定基础是着眼于现代农业发展的长远考虑",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 214,
+        "metric": {
+            "Edit_dist": 0.49065420560747663
+        },
+        "Edit_num": 105
+    },
+    {
+        "gt_idx": [
+            32
+        ],
+        "gt": "记者：我们了解到，农业信息智能服务是推进农业现代化的重要手段，是转变农业发展方式的重要途径。用信息技本改造传统农业、装备现代农业，用信息手段推广农业技术，用信息融务提升农业生产水平，是发展现代农业、建设社会主义新农村的重要措施。请介绍一些目前比较成熟的农业信息智能服务技术。",
+        "pred_idx": [
+            27
+        ],
+        "pred": "记者：我们了解到，农业信息\n智能服务是推进农业现代化的重\n要手段，是转变农业发展方式的\n重要途径。用信息技术改造传统\n农业、装备现代农业，用信息手段\n推广农业技术，用信息服务提升\n农业生产水平，是发展现代农业、\n建设社会主义新农村的重要措\n施。请介绍一些目前比较成熟的\n农业信息智能服务技术。",
+        "edit": 0.015873015873015872,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            33
+        ],
+        "pred_position": 3164,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "记者我们了解到农业信息智能服务是推进农业现代化的重要手段是转变农业发展方式的重要途径用信息技本改造传统农业装备现代农业用信息手段推广农业技术用信息融务提升农业生产水平是发展现代农业建设社会主义新农村的重要措施请介绍一些目前比较成熟的农业信息智能服务技术",
+        "norm_pred": "记者我们了解到农业信息智能服务是推进农业现代化的重要手段是转变农业发展方式的重要途径用信息技术改造传统农业装备现代农业用信息手段推广农业技术用信息服务提升农业生产水平是发展现代农业建设社会主义新农村的重要措施请介绍一些目前比较成熟的农业信息智能服务技术",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 126,
+        "metric": {
+            "Edit_dist": 0.015873015873015872
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            33
+        ],
+        "gt": "许世卫：助力现代农业腾飞是农业信息智能服务的目的和归宿。现在比较成熟的农业信息推送应用技术主要包括农业生产适用技术个性化推送服务，化解基层用户在海量信息面前\"信息迷向\"问题：作物品种优化布局辅助决策服务，为农业管理部门决策提供支持：农业信息智能服务技术平台建设，解决服务渠道问题：农业基础经济信息快速查询系统，解决信息查询困难问题等。农业信息技术、数字农业研究已经取得了很大成效，一批具有较高理论意义和实用价值的技术产品已经研制成功，井且已经开展了应用示范。",
+        "pred_idx": [
+            28
+        ],
+        "pred": "许世卫：助力现代农业腾飞\n是农业信息智能服务的目的和归\n宿。现在比较成熟的农业信息推\n送应用技术主要包括农业生产适\n用技术个性化推送服务，化解基\n层用户在海量信息面前“信息迷\n向”问题；作物品种优化布局辅助\n决策服务，为农业管理部门决策\n提供支持；农业信息智能服务技\n术平合建设，解决服务渠道问题；\n农业基础经济信息快速查询系\n统，解决信息查询困难问题等。\n农业信息技术、数字农业研究已\n经取得了很大成效，一批具有较\n高理论意义和实用价值的技术产\n品已经研制成功，并且已经开展\n了应用示范。",
+        "edit": 0.009389671361502348,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            34
+        ],
+        "pred_position": 3291,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "许世卫助力现代农业腾飞是农业信息智能服务的目的和归宿现在比较成熟的农业信息推送应用技术主要包括农业生产适用技术个性化推送服务化解基层用户在海量信息面前信息迷向问题作物品种优化布局辅助决策服务为农业管理部门决策提供支持农业信息智能服务技术平台建设解决服务渠道问题农业基础经济信息快速查询系统解决信息查询困难问题等农业信息技术数字农业研究已经取得了很大成效一批具有较高理论意义和实用价值的技术产品已经研制成功井且已经开展了应用示范",
+        "norm_pred": "许世卫助力现代农业腾飞是农业信息智能服务的目的和归宿现在比较成熟的农业信息推送应用技术主要包括农业生产适用技术个性化推送服务化解基层用户在海量信息面前信息迷向问题作物品种优化布局辅助决策服务为农业管理部门决策提供支持农业信息智能服务技术平合建设解决服务渠道问题农业基础经济信息快速查询系统解决信息查询困难问题等农业信息技术数字农业研究已经取得了很大成效一批具有较高理论意义和实用价值的技术产品已经研制成功并且已经开展了应用示范",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 213,
+        "metric": {
+            "Edit_dist": 0.009389671361502348
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            34
+        ],
+        "gt": "但是，不得不承认，农业信息技术研究成果与应用示范还存在较大落差；信息的提供者与接收者不对称，信息服务缺少整体性和个性化；在浩瀚的信息内容面前，使用者无从下手；智能化程度低，农业软件门槛过高和操作复杂；标准化程度低，信息采集手工干预过多，信息采集不够及时和准确等，需要我们在“十二五“期间，关注和解决这一问题，让农业信息智能服务技术为我国现代农业插上腾飞的翘榜。",
+        "pred_idx": [
+            29
+        ],
+        "pred": "但是，不得不承认，农业信息\n技术研究成果与应用示范还存在\n较大落差：信息的提供者与接收\n者不对称，信息服务缺少整体性\n和个性化；在浩瀚的信息内容面\n前，使用者无从下手；智能化程度\n低，农业软件门槛过高和操作复\n杂；标准化程度低，信息采集手工\n干预过多、信息采集不够及时和\n准确等，需要我们在“十二五”期\n间，关注和解决这一问题，让农业\n信息智能服务技术为我国现代农\n业插上腾飞的翅膀。",
+        "edit": 0.012269938650306749,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            35
+        ],
+        "pred_position": 3437,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "但是不得不承认农业信息技术研究成果与应用示范还存在较大落差信息的提供者与接收者不对称信息服务缺少整体性和个性化在浩瀚的信息内容面前使用者无从下手智能化程度低农业软件门槛过高和操作复杂标准化程度低信息采集手工干预过多信息采集不够及时和准确等需要我们在十二五期间关注和解决这一问题让农业信息智能服务技术为我国现代农业插上腾飞的翘榜",
+        "norm_pred": "但是不得不承认农业信息技术研究成果与应用示范还存在较大落差信息的提供者与接收者不对称信息服务缺少整体性和个性化在浩瀚的信息内容面前使用者无从下手智能化程度低农业软件门槛过高和操作复杂标准化程度低信息采集手工干预过多信息采集不够及时和准确等需要我们在十二五期间关注和解决这一问题让农业信息智能服务技术为我国现代农业插上腾飞的翅膀",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 163,
+        "metric": {
+            "Edit_dist": 0.012269938650306749
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            35
+        ],
+        "gt": "罕见疾病BH4缺乏症将有药可医",
+        "pred_idx": [
+            30
+        ],
+        "pred": "# 罕见疾病BH4缺乏症\n将有药可医",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            36
+        ],
+        "pred_position": 3682,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "罕见疾病BH4缺乏症将有药可医",
+        "norm_pred": "罕见疾病BH4缺乏症将有药可医",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            36
+        ],
+        "gt": "本报记者 周铮",
+        "pred_idx": [
+            31
+        ],
+        "pred": "本报记者周铮",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            37
+        ],
+        "pred_position": 3874,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "本报记者周铮",
+        "norm_pred": "本报记者周铮",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            37
+        ],
+        "gt": "四氢生物蝶呤（BH4）缺乏症是一种遗传性罕见疾病，我国每年 1600万新生儿中约有200例罹患该病，如不及时诊治，会产重损伤患儿脑组织，出现智力低下，癣痫、运动功能障碍、肌张力异常、精神行为异常，肤色变浅、毛发稀黄，湿疹，身体散发鼠尿味等症状，疾病给患者和家庭造成无尽的伤害。",
+        "pred_idx": [
+            32
+        ],
+        "pred": "四氢生物蝶呤（BH4）缺乏症是\n一种遗传性罕见疾病，我国每年\n1600万新生儿中约有200例罹患\n该病，如不及时诊治，会严重损伤\n患儿脑组织，出现智力低下、癫痫、\n运动功能障碍、肌张力异常、精神\n行为异常、肤色变浅、毛发稀黄、湿\n疹、身体散发鼠尿味等症状，疾病\n给患者和家庭造成无尽的伤害。",
+        "edit": 0.01652892561983471,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            38
+        ],
+        "pred_position": 3892,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "四氢生物蝶呤BH4缺乏症是一种遗传性罕见疾病我国每年1600万新生儿中约有200例罹患该病如不及时诊治会产重损伤患儿脑组织出现智力低下癣痫运动功能障碍肌张力异常精神行为异常肤色变浅毛发稀黄湿疹身体散发鼠尿味等症状疾病给患者和家庭造成无尽的伤害",
+        "norm_pred": "四氢生物蝶呤BH4缺乏症是一种遗传性罕见疾病我国每年1600万新生儿中约有200例罹患该病如不及时诊治会严重损伤患儿脑组织出现智力低下癫痫运动功能障碍肌张力异常精神行为异常肤色变浅毛发稀黄湿疹身体散发鼠尿味等症状疾病给患者和家庭造成无尽的伤害",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 121,
+        "metric": {
+            "Edit_dist": 0.01652892561983471
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            38
+        ],
+        "gt": "医学不断进步，目前BH4缺乏症可以通过对新生儿进行疾病筛查，检出高苯丙氨酸血症（HPA）后进行进一步检查可以确诊。我国新生儿遗传性疾病研究专家，中华预防医学会儿童保健分会新生儿筛查学组副组长，北京大学第一医院儿科杨艳玲授数授12月16日向记者透露，现在我国已经把HPA列入新生儿筛查疾病，从默克雪兰诺公司引进的首个治疗BH4缺乏症药物科望（Kuvan）已经获得国家食品药品监督管理局批准，将于明年在我国医院应用，改变过去我们对BH4缺乏症束手无策的状祝，使该罕见病成为有药可医的病，为患儿和其父母带来希望。",
+        "pred_idx": [
+            33
+        ],
+        "pred": "医学不断进步，目前BH4缺乏\n症可以通过对新生儿进行疾病筛\n查，检出高苯丙氨酸血症（HPA）后\n进行进一步检查可以确诊。我国\n新生儿遗传性疾病研究专家、中华\n预防医学会儿童保健分会新生儿\n筛查学组副组长、北京大学第一医\n院儿科杨艳玲教授12月16日向记\n者透露，现在我国已经把HPA列\n入新生儿筛查疾病，从默克雪兰诺\n公司引进的首个治疗BH4缺乏症\n药物科望（Kuvan®）已经获得国家\n食品药品监督管理局批准，将于明\n年在我国医院应用，改变过去我们\n对BH4缺乏症束手无策的状况，使\n该罕见病成为有药可医的病，为患\n儿和其父母带来希望。",
+        "edit": 0.012658227848101266,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            39
+        ],
+        "pred_position": 3898,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "医学不断进步目前BH4缺乏症可以通过对新生儿进行疾病筛查检出高苯丙氨酸血症HPA后进行进一步检查可以确诊我国新生儿遗传性疾病研究专家中华预防医学会儿童保健分会新生儿筛查学组副组长北京大学第一医院儿科杨艳玲授数授12月16日向记者透露现在我国已经把HPA列入新生儿筛查疾病从默克雪兰诺公司引进的首个治疗BH4缺乏症药物科望Kuvan已经获得国家食品药品监督管理局批准将于明年在我国医院应用改变过去我们对BH4缺乏症束手无策的状祝使该罕见病成为有药可医的病为患儿和其父母带来希望",
+        "norm_pred": "医学不断进步目前BH4缺乏症可以通过对新生儿进行疾病筛查检出高苯丙氨酸血症HPA后进行进一步检查可以确诊我国新生儿遗传性疾病研究专家中华预防医学会儿童保健分会新生儿筛查学组副组长北京大学第一医院儿科杨艳玲教授12月16日向记者透露现在我国已经把HPA列入新生儿筛查疾病从默克雪兰诺公司引进的首个治疗BH4缺乏症药物科望Kuvan已经获得国家食品药品监督管理局批准将于明年在我国医院应用改变过去我们对BH4缺乏症束手无策的状况使该罕见病成为有药可医的病为患儿和其父母带来希望",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 237,
+        "metric": {
+            "Edit_dist": 0.012658227848101266
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            39
+        ],
+        "gt": "据了解，目前国内开展BH4缺乏症的鉴别诊断及治疗的医院主要有：上海新华医院、中日友好医院、北京大学第一医院、济南妇幼保健院、浙江大学儿童医院、广州妇幼保健院、山西儿童医院和西安儿童医院等。",
+        "pred_idx": [
+            34
+        ],
+        "pred": "据了解，目前国内开展BH4缺\n乏症的鉴别诊断及治疗的医院主\n要有：上海新华医院、中日友好医\n院、北京大学第一医院、济南妇幼\n保健院、浙江大学儿童医院、广州\n妇幼保健院、山西儿童医院和西安\n儿童医院等。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            40
+        ],
+        "pred_position": 4043,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "据了解目前国内开展BH4缺乏症的鉴别诊断及治疗的医院主要有上海新华医院中日友好医院北京大学第一医院济南妇幼保健院浙江大学儿童医院广州妇幼保健院山西儿童医院和西安儿童医院等",
+        "norm_pred": "据了解目前国内开展BH4缺乏症的鉴别诊断及治疗的医院主要有上海新华医院中日友好医院北京大学第一医院济南妇幼保健院浙江大学儿童医院广州妇幼保健院山西儿童医院和西安儿童医院等",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 85,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            42
+        ],
+        "gt": "我国学生资助体系逐步完善",
+        "pred_idx": [
+            37
+        ],
+        "pred": "# 我国学生资助体系逐步完善",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            44
+        ],
+        "pred_position": 4553,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "我国学生资助体系逐步完善",
+        "norm_pred": "我国学生资助体系逐步完善",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            43
+        ],
+        "gt": "本报记者 曹茸",
+        "pred_idx": [
+            38
+        ],
+        "pred": "本报记者曹茸",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            45
+        ],
+        "pred_position": 4559,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "本报记者曹茸",
+        "norm_pred": "本报记者曹茸",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 6,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            44
+        ],
+        "gt": "12月20日，记者从教育部在北京召开的”2010年高校国家奖学金获奖学生暨全国学生资助工作先进单位表彰大会”了解到，经过多年不懈努力，我国家庭经济困难学生资助政策已轻形成了一个比较系统，比较完整的体系，其覆盖范围之广、资助力度之大、资助比例之高，历史上前所未有。",
+        "pred_idx": [
+            40
+        ],
+        "pred": "12月20日，记者从教育部在\n北京召开的“2010年高校国家奖学\n金获奖学生暨全国学生资助工作\n先进单位表彰大会”了解到，经过\n多年不懈努力，我国家庭经济困难\n学生资助政策已经形成了一个比\n较系统、比较完善的体系，其覆盖\n范围之广、资助力度之大、资助比\n例之高，历史上前所未有。",
+        "edit": 0.016666666666666666,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            46
+        ],
+        "pred_position": 4579,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "12月20日记者从教育部在北京召开的2010年高校国家奖学金获奖学生暨全国学生资助工作先进单位表彰大会了解到经过多年不懈努力我国家庭经济困难学生资助政策已轻形成了一个比较系统比较完整的体系其覆盖范围之广资助力度之大资助比例之高历史上前所未有",
+        "norm_pred": "12月20日记者从教育部在北京召开的2010年高校国家奖学金获奖学生暨全国学生资助工作先进单位表彰大会了解到经过多年不懈努力我国家庭经济困难学生资助政策已经形成了一个比较系统比较完善的体系其覆盖范围之广资助力度之大资助比例之高历史上前所未有",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 120,
+        "metric": {
+            "Edit_dist": 0.016666666666666666
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            45
+        ],
+        "gt": "数育部部长袁册仁指出，党的十六大以来，国家把促进教育公平作为基本教育政策，推动教育公平迈出重大步伐。先后在高等学校和中等职业学校建立健全了家庭经济围难学生资助政策体系，对中等职业学校农村家庭经济困难学生和涉农专业学生实行免学费政策，在文务教育阶段学校全面免除了城乡所有学生的学杂费，为农村学生提供免费教科书，并为家庭经济困难的寄宿生提供生活补助。全国教育工作会议召开和教育规划钢要颁布后，各级政府和有关部门迅速行动，相继出台一系列新的资助政策，提高了普通高校国家助学金标准、扩大了中等职业学校免学费政策覆盖范图、设立了普通高中国家助学金制度。",
+        "pred_idx": [
+            41
+        ],
+        "pred": "教育部部长袁贵仁指出，党的\n十六大以来，国家把促进教育公平\n作为基本教育政策，推动教育公平\n迈出重大步伐。先后在高等学校\n和中等职业学校建立健全了家庭\n经济困难学生资助政策体系，对中\n等职业学校农村家庭经济困难学\n生和涉农专业学生实行免学费政\n策，在义务教育阶段学校全面免除\n了城乡所有学生的学杂费，为农村\n学生提供免费教科书，并为家庭经\n济困难的寄宿生提供生活补助。\n全国教育工作会议召开和教育规\n划纲要颁布后，各级政府和有关部\n门迅速行动，相继出台一系列新的\n资助政策，提高了普通高校国家助\n学金标准、扩大了中等职业学校免",
+        "edit": 0.10546875,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            47
+        ],
+        "pred_position": 4604,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "数育部部长袁册仁指出党的十六大以来国家把促进教育公平作为基本教育政策推动教育公平迈出重大步伐先后在高等学校和中等职业学校建立健全了家庭经济围难学生资助政策体系对中等职业学校农村家庭经济困难学生和涉农专业学生实行免学费政策在文务教育阶段学校全面免除了城乡所有学生的学杂费为农村学生提供免费教科书并为家庭经济困难的寄宿生提供生活补助全国教育工作会议召开和教育规划钢要颁布后各级政府和有关部门迅速行动相继出台一系列新的资助政策提高了普通高校国家助学金标准扩大了中等职业学校免学费政策覆盖范图设立了普通高中国家助学金制度",
+        "norm_pred": "教育部部长袁贵仁指出党的十六大以来国家把促进教育公平作为基本教育政策推动教育公平迈出重大步伐先后在高等学校和中等职业学校建立健全了家庭经济困难学生资助政策体系对中等职业学校农村家庭经济困难学生和涉农专业学生实行免学费政策在义务教育阶段学校全面免除了城乡所有学生的学杂费为农村学生提供免费教科书并为家庭经济困难的寄宿生提供生活补助全国教育工作会议召开和教育规划纲要颁布后各级政府和有关部门迅速行动相继出台一系列新的资助政策提高了普通高校国家助学金标准扩大了中等职业学校免",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 256,
+        "metric": {
+            "Edit_dist": 0.10546875
+        },
+        "Edit_num": 27
+    },
+    {
+        "gt_idx": [
+            46
+        ],
+        "gt": "在高等学校，2009年中央和地方财政投入资助经费约175亿元，全国有5万名学生获得国家奖学金，61万名学生获得国家励志奖学金，400万名学生获得国家助学金超过100万名学生获得国家助学贷款，4万多名毕业生获得学费补偿和助学贷款代偿；在中等职业学校，中央和批万财政投入经费200多亿元，近1200万名学生获得国家助学金，所有农村家庭经济困难学生和涉农专业学生享受免学费政策；在义务教育阶段，2009年，中央和地方用于免费教料书、家庭经济困难寄宿生生活补助的总资金达 269亿元，全国免除了近1.5亿义务教育阶段学生的学杂费，为1.38亿学生免费提供了国家教科书，向中西部1224万名家经济困难的寄宿生提供了生活补助。",
+        "pred_idx": [
+            42
+        ],
+        "pred": "在高等学校，2009年中央和地\n方财政投入资助经费约175亿元，\n全国有5万名学生获得国家奖学\n金，61万名学生获得国家励志奖学\n金，400万名学生获得国家助学金，\n超过100万名学生获得国家助学贷\n款，4万多名毕业生获得学费补偿\n和助学贷款代偿；在中等职业学\n校，中央和地方财政投入经费200\n多亿元，近1200万名学生获得国家\n助学金，所有农村家庭经济困难学\n生和涉农专业学生享受免学费政\n策；在义务教育阶段，2009年，中央\n和地方用于免费教科书、家庭经济\n困难寄宿生生活补助的总资金达\n269亿元，全国免除了近1.5亿义务\n教育阶段学生的学杂费，为1.38亿\n学生免费提供了国家教科书，向中\n西部1224万名家庭经济困难的寄\n宿生提供了生活补助。",
+        "edit": 0.013888888888888888,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            49
+        ],
+        "pred_position": 4743,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "在高等学校2009年中央和地方财政投入资助经费约175亿元全国有5万名学生获得国家奖学金61万名学生获得国家励志奖学金400万名学生获得国家助学金超过100万名学生获得国家助学贷款4万多名毕业生获得学费补偿和助学贷款代偿在中等职业学校中央和批万财政投入经费200多亿元近1200万名学生获得国家助学金所有农村家庭经济困难学生和涉农专业学生享受免学费政策在义务教育阶段2009年中央和地方用于免费教料书家庭经济困难寄宿生生活补助的总资金达269亿元全国免除了近15亿义务教育阶段学生的学杂费为138亿学生免费提供了国家教科书向中西部1224万名家经济困难的寄宿生提供了生活补助",
+        "norm_pred": "在高等学校2009年中央和地方财政投入资助经费约175亿元全国有5万名学生获得国家奖学金61万名学生获得国家励志奖学金400万名学生获得国家助学金超过100万名学生获得国家助学贷款4万多名毕业生获得学费补偿和助学贷款代偿在中等职业学校中央和地方财政投入经费200多亿元近1200万名学生获得国家助学金所有农村家庭经济困难学生和涉农专业学生享受免学费政策在义务教育阶段2009年中央和地方用于免费教科书家庭经济困难寄宿生生活补助的总资金达269亿元全国免除了近15亿义务教育阶段学生的学杂费为138亿学生免费提供了国家教科书向中西部1224万名家庭经济困难的寄宿生提供了生活补助",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 288,
+        "metric": {
+            "Edit_dist": 0.013888888888888888
+        },
+        "Edit_num": 4
+    },
+    {
+        "gt_idx": [
+            47
+        ],
+        "gt": "会上，包括金融机构、省级学生资助管理中心等在内的76家单位被授予全国学生资助工作先进单位称号：49958名学生获得 2009~2010学年度国家奖学金，每人奖励8000元。",
+        "pred_idx": [
+            43
+        ],
+        "pred": "会上，包括金融机构、省级学\n生资助管理中心等在内的76家\n单位被授予全国学生资助工作先\n进单位称号；49958名学生获得\n2009~2010学年度国家奖学金，每\n人奖励8000元。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            50
+        ],
+        "pred_position": 5006,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "会上包括金融机构省级学生资助管理中心等在内的76家单位被授予全国学生资助工作先进单位称号49958名学生获得20092010学年度国家奖学金每人奖励8000元",
+        "norm_pred": "会上包括金融机构省级学生资助管理中心等在内的76家单位被授予全国学生资助工作先进单位称号49958名学生获得20092010学年度国家奖学金每人奖励8000元",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 79,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            48
+        ],
+        "gt": "嘉祥县把“农民中专”办到村里",
+        "pred_idx": [
+            44
+        ],
+        "pred": "# 嘉祥县把“农民中专”办到村里",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            51
+        ],
+        "pred_position": 5333,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "嘉祥县把农民中专办到村里",
+        "norm_pred": "嘉祥县把农民中专办到村里",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            49
+        ],
+        "gt": "近日，一个全日制中职数学班在山东省嘉祥县满硐乡南武山村举行了开学典礼，农民不用花一分钱，就可以到全日制中职班学习农业科技和创业技能，三年拿到中专学历证书，为农民致富和产业转型莫定了良好基础。",
+        "pred_idx": [
+            45
+        ],
+        "pred": "近日，一个全日制中职教学班\n在山东省嘉祥县满硐乡南武山村\n举行了开学典礼，农民不用花一分\n钱，就可以到全日制中职班学习农\n业科技和创业技能，三年拿到中专\n学历证书，为农民致富和产业转型\n奠定了良好基础。",
+        "edit": 0.02247191011235955,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            52
+        ],
+        "pred_position": 5423,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "近日一个全日制中职数学班在山东省嘉祥县满硐乡南武山村举行了开学典礼农民不用花一分钱就可以到全日制中职班学习农业科技和创业技能三年拿到中专学历证书为农民致富和产业转型莫定了良好基础",
+        "norm_pred": "近日一个全日制中职教学班在山东省嘉祥县满硐乡南武山村举行了开学典礼农民不用花一分钱就可以到全日制中职班学习农业科技和创业技能三年拿到中专学历证书为农民致富和产业转型奠定了良好基础",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 89,
+        "metric": {
+            "Edit_dist": 0.02247191011235955
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            50
+        ],
+        "gt": "据了群，嘉祥经山东省农广校批准，今年进行第一次试点，开办了农业种植、畜牧养殖两个班，招生规模100人，学制3年。本次中职教育班的最大特点是进村办班，免学费，前两年每个学员还可获得每年1500元生活补助费。这两个教学班利用南武山小学闲置教室作为教学点，立足于当地群众种植，养殖大棚多，有发展特色农业愿望的基批，很快就完成了招生计划。县农业局投入 8万元改善了教学条件，从县农业局，畜牧局选聘了12名具有中级职称以上专家作为代课教师，并制定了完着的教学管理制度。",
+        "pred_idx": [
+            46,
+            47
+        ],
+        "pred": "据了解，嘉祥经山东省农广校\n批准，今年进行第一次试点，开办了\n农业种植、畜牧养殖两个班，招生规\n模100人，学制3年。本次中职教育\n班的最大特点是进村办班，免学费，\n前两年每个学员还可获得每年1500\n元生活补助费。这两个教学班利用\n南武山小学闲置教室作为教学点，立足于当地群众种植、养殖大棚多，\n有发展特色农业愿望的基础，很快\n就完成了招生计划。县农业局投入\n8万元改善了教学条件，从县农业\n局、畜牧局选聘了12名具有中级职\n称以上专家作为代课教师，并制定\n了完善的教学管理制度。",
+        "edit": 0.01904761904761905,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            53
+        ],
+        "pred_position": 5439,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "据了群嘉祥经山东省农广校批准今年进行第一次试点开办了农业种植畜牧养殖两个班招生规模100人学制3年本次中职教育班的最大特点是进村办班免学费前两年每个学员还可获得每年1500元生活补助费这两个教学班利用南武山小学闲置教室作为教学点立足于当地群众种植养殖大棚多有发展特色农业愿望的基批很快就完成了招生计划县农业局投入8万元改善了教学条件从县农业局畜牧局选聘了12名具有中级职称以上专家作为代课教师并制定了完着的教学管理制度",
+        "norm_pred": "据了解嘉祥经山东省农广校批准今年进行第一次试点开办了农业种植畜牧养殖两个班招生规模100人学制3年本次中职教育班的最大特点是进村办班免学费前两年每个学员还可获得每年1500元生活补助费这两个教学班利用南武山小学闲置教室作为教学点立足于当地群众种植养殖大棚多有发展特色农业愿望的基础很快就完成了招生计划县农业局投入8万元改善了教学条件从县农业局畜牧局选聘了12名具有中级职称以上专家作为代课教师并制定了完善的教学管理制度",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 209,
+        "metric": {
+            "Edit_dist": 0.014354066985645933
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            51
+        ],
+        "gt": "据介绍，该村计划今年再发展大棚50个，两年内发展到200个。嘉祥也准备在办好今年两个教学班的基础上，从2011年起，每年在仲山，万张、老僧堂，黄垓等7个乡镇至少开办两个教学班，培养具有种植、养殖专业学历的农村实用人才1000人。    吕兵兵  陈常领",
+        "pred_idx": [
+            48
+        ],
+        "pred": "据介绍，该村计划今年再发展\n大棚50个，两年内发展到200个。\n嘉祥也准备在办好今年两个教学\n班的基础上，从2011年起，每年在\n仲山、万张、老僧堂、黄垓等7个乡\n镇至少开办两个教学班，培养具有\n种植、养殖专业学历的农村实用人\n才1000人。吕兵兵陈常领",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            55
+        ],
+        "pred_position": 5672,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "据介绍该村计划今年再发展大棚50个两年内发展到200个嘉祥也准备在办好今年两个教学班的基础上从2011年起每年在仲山万张老僧堂黄垓等7个乡镇至少开办两个教学班培养具有种植养殖专业学历的农村实用人才1000人吕兵兵陈常领",
+        "norm_pred": "据介绍该村计划今年再发展大棚50个两年内发展到200个嘉祥也准备在办好今年两个教学班的基础上从2011年起每年在仲山万张老僧堂黄垓等7个乡镇至少开办两个教学班培养具有种植养殖专业学历的农村实用人才1000人吕兵兵陈常领",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 109,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            52
+        ],
+        "gt": "徐水农技小分队活跃小麦冬管一线",
+        "pred_idx": [
+            49
+        ],
+        "pred": "# 徐水农技小分队活跃小麦冬管一线",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            56
+        ],
+        "pred_position": 5781,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "徐水农技小分队活跃小麦冬管一线",
+        "norm_pred": "徐水农技小分队活跃小麦冬管一线",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            53
+        ],
+        "gt": "连日来，河北省保定市徐水县采取多种措施加强冬小麦管理，确保71万亩小麦安全过冬。",
+        "pred_idx": [
+            50
+        ],
+        "pred": "连日来，河北省保定市徐水县\n采取多种措施加强冬小麦管理，确\n保71万亩小麦安全过冬。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            57
+        ],
+        "pred_position": 5908,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "连日来河北省保定市徐水县采取多种措施加强冬小麦管理确保71万亩小麦安全过冬",
+        "norm_pred": "连日来河北省保定市徐水县采取多种措施加强冬小麦管理确保71万亩小麦安全过冬",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 37,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            54
+        ],
+        "gt": "该县品农业、教育、科协、乡镇等部门抽调50多名技术人员组成 14支下乡助农小分队，做好苗情、墒情，病虫草情调查，掌握生产动态，并向农民讲解冬小麦管理知识，解答农民疑问；该县还印发5万张冬小麦冬灌技术标准明白纸，下发到小麦种植户手中，让农户们学会科学浇水；农资部门配齐化肥，农药，确保物资供应到位；供电公司对所有技术人员进行了再培训，并成立17支冬灌服务小分队，对全县所有IC卡机井箱进行了消缺检查，及时处理安全隐患800多处。他们还开辟冬灌业扩绿色通道，配备20辆抢险车随时待命，确保农民冬灌用电。     马立涛 常新社",
+        "pred_idx": [
+            51,
+            52
+        ],
+        "pred": "该县从农业、教育、科协、乡镇\n等部门抽调50多名技术人员组成\n14支下乡助农小分队，做好苗情、\n墒情、病虫草情调查，掌握生产动\n态，并向农民讲解冬小麦管理知\n识，解答农民疑问；该县还印发5万\n张冬小麦冬灌技术标准明白纸，下发到小麦种植户手中，让农户们学\n会科学浇水；农资部门配齐化肥、\n农药，确保物资供应到位；供电公\n司对所有技术人员进行了再培训，\n并成立17支冬灌服务小分队，对全\n县所有IC卡机井箱进行了消缺检\n查，及时处理安全隐患800多处。\n他们还开辟冬灌业扩绿色通道，配\n备20辆抢险车随时待命，确保农民\n冬灌用电。马立涛常新社",
+        "edit": 0.008620689655172414,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            58
+        ],
+        "pred_position": 5925,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "该县品农业教育科协乡镇等部门抽调50多名技术人员组成14支下乡助农小分队做好苗情墒情病虫草情调查掌握生产动态并向农民讲解冬小麦管理知识解答农民疑问该县还印发5万张冬小麦冬灌技术标准明白纸下发到小麦种植户手中让农户们学会科学浇水农资部门配齐化肥农药确保物资供应到位供电公司对所有技术人员进行了再培训并成立17支冬灌服务小分队对全县所有IC卡机井箱进行了消缺检查及时处理安全隐患800多处他们还开辟冬灌业扩绿色通道配备20辆抢险车随时待命确保农民冬灌用电马立涛常新社",
+        "norm_pred": "该县从农业教育科协乡镇等部门抽调50多名技术人员组成14支下乡助农小分队做好苗情墒情病虫草情调查掌握生产动态并向农民讲解冬小麦管理知识解答农民疑问该县还印发5万张冬小麦冬灌技术标准明白纸下发到小麦种植户手中让农户们学会科学浇水农资部门配齐化肥农药确保物资供应到位供电公司对所有技术人员进行了再培训并成立17支冬灌服务小分队对全县所有IC卡机井箱进行了消缺检查及时处理安全隐患800多处他们还开辟冬灌业扩绿色通道配备20辆抢险车随时待命确保农民冬灌用电马立涛常新社",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 231,
+        "metric": {
+            "Edit_dist": 0.004329004329004329
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            55
+        ],
+        "gt": "孝感为发展现代农业打造基础保障",
+        "pred_idx": [
+            53
+        ],
+        "pred": "# 孝感为发展现代农业打造基础保障",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            60
+        ],
+        "pred_position": 6078,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "孝感为发展现代农业打造基础保障",
+        "norm_pred": "孝感为发展现代农业打造基础保障",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            56
+        ],
+        "gt": "近日，湖北省孝感市汉脉旺镇两台大型挖掘机正在疏通一横渠。这是孝感市今冬明春计划建设的众多农田水利项目中的一个。截至12月2日，孝感市已开工各类水利工程3600多处，完成投资 5亿元，累计完成土石方1600万方，为发展现代农业打造基础保障。",
+        "pred_idx": [
+            54
+        ],
+        "pred": "近日，湖北省孝感市汉川脉旺\n镇两台大型挖掘机正在疏通一横\n渠。这是孝感市今冬明春计划建\n设的众多农田水利项目中的一\n个。截至12月2日，孝感市已开工\n各类水利工程3600多处，完成投资\n5亿元，累计完成土石方1600万方，\n为发展现代农业打造基础保障。",
+        "edit": 0.009009009009009009,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            61
+        ],
+        "pred_position": 6236,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "近日湖北省孝感市汉脉旺镇两台大型挖掘机正在疏通一横渠这是孝感市今冬明春计划建设的众多农田水利项目中的一个截至12月2日孝感市已开工各类水利工程3600多处完成投资5亿元累计完成土石方1600万方为发展现代农业打造基础保障",
+        "norm_pred": "近日湖北省孝感市汉川脉旺镇两台大型挖掘机正在疏通一横渠这是孝感市今冬明春计划建设的众多农田水利项目中的一个截至12月2日孝感市已开工各类水利工程3600多处完成投资5亿元累计完成土石方1600万方为发展现代农业打造基础保障",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 111,
+        "metric": {
+            "Edit_dist": 0.009009009009009009
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            57
+        ],
+        "gt": "孝感北高南跃，易旱易涝。该市因地制宜，在南部平原湖区重点进行堤防整治和深沟大渠疏浚，提高防洪排涝标准；在北部山丘地区，重点进行塘堰改造和末级渠系建设，提高供水保证率。",
+        "pred_idx": [
+            55
+        ],
+        "pred": "孝感北高南低，易旱易涝。该\n市因地制宜，在南部平原湖区重点\n进行堤防整治和深沟大渠疏竣，提\n高防洪排涝标准；在北部山丘地",
+        "edit": 0.3333333333333333,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            62
+        ],
+        "pred_position": 6253,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "孝感北高南跃易旱易涝该市因地制宜在南部平原湖区重点进行堤防整治和深沟大渠疏浚提高防洪排涝标准在北部山丘地区重点进行塘堰改造和末级渠系建设提高供水保证率",
+        "norm_pred": "孝感北高南低易旱易涝该市因地制宜在南部平原湖区重点进行堤防整治和深沟大渠疏竣提高防洪排涝标准在北部山丘地",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 75,
+        "metric": {
+            "Edit_dist": 0.3333333333333333
+        },
+        "Edit_num": 25
+    },
+    {
+        "gt_idx": [
+            58
+        ],
+        "gt": "以今年起，该市计划用3年时间，筹资15亿元，基本解决小塘堰，小泵站、小集道等方面的突出问题。孝感市整合涉农专项资金用于农田水利设施建设，每年政策性资金投入在3亿元以上。在财力紧张的情况下，市县两级共落实3000余万元“以奖代补”资金，撬动民间资本投入8696万元。",
+        "pred_idx": [
+            56
+        ],
+        "pred": "区，重点进行塘堰改造和末级渠系\n建设，提高供水保证率。从今年起，该市计划用3年时\n间，筹资15亿元，基本解决小塘堰、\n小泵站、小渠道等方面的突出问\n题。孝感市整合涉农专项资金用\n于农田水利设施建设，每年政策性\n资金投入在3亿元以上。在财力紧\n张的情况下，市县两级共落实3000\n余万元“以奖代补”资金，撬动民间\n资本投入8696万元。",
+        "edit": 0.176056338028169,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            64
+        ],
+        "pred_position": 6379,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "以今年起该市计划用3年时间筹资15亿元基本解决小塘堰小泵站小集道等方面的突出问题孝感市整合涉农专项资金用于农田水利设施建设每年政策性资金投入在3亿元以上在财力紧张的情况下市县两级共落实3000余万元以奖代补资金撬动民间资本投入8696万元",
+        "norm_pred": "区重点进行塘堰改造和末级渠系建设提高供水保证率从今年起该市计划用3年时间筹资15亿元基本解决小塘堰小泵站小渠道等方面的突出问题孝感市整合涉农专项资金用于农田水利设施建设每年政策性资金投入在3亿元以上在财力紧张的情况下市县两级共落实3000余万元以奖代补资金撬动民间资本投入8696万元",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 142,
+        "metric": {
+            "Edit_dist": 0.176056338028169
+        },
+        "Edit_num": 25
+    },
+    {
+        "gt_idx": [
+            59
+        ],
+        "gt": "管淳   张俐俐",
+        "pred_idx": [
+            57
+        ],
+        "pred": "管淳 张俐俐",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            65
+        ],
+        "pred_position": 6439,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "管淳张俐俐",
+        "norm_pred": "管淳张俐俐",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 5,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            60
+        ],
+        "gt": "让公众“触摸”低碳",
+        "pred_idx": [
+            58
+        ],
+        "pred": "# 让公众“触摸”低碳",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            66
+        ],
+        "pred_position": 6606,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "让公众触摸低碳",
+        "norm_pred": "让公众触摸低碳",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 7,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            61
+        ],
+        "gt": "———走进中国科技馆“低碳生活”专题展览",
+        "pred_idx": [
+            59
+        ],
+        "pred": "走进中国科技馆“低碳生活”专题展览",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            67
+        ],
+        "pred_position": 6612,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "走进中国科技馆低碳生活专题展览",
+        "norm_pred": "走进中国科技馆低碳生活专题展览",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            62
+        ],
+        "gt": "本报记者   黄朝武",
+        "pred_idx": [
+            60
+        ],
+        "pred": "本报记者黄朝武",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            68
+        ],
+        "pred_position": 6623,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "本报记者黄朝武",
+        "norm_pred": "本报记者黄朝武",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 7,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            63,
+            64
+        ],
+        "gt": "一件衣物，从其生产、流通、使用到废弃后的处理，每一个环节都在排放二氧化拨，一条约400克的涤纶裤，“一生”所消耗的能源相当于排放47干克二氧化碳，是其自重的117倍！“碳”的大量排放，让极端天气，冰川消融、海平面上升，动植物天绝等愈发频繁，人们也愈来愈清晰而真切地感受到了由此给人类及生态系统带来的不利影响。再来比较一个数据，人类食用 1干克牛肉，所排放的二氧化碳为 36.5干克，而吃同等分量的果蔬后，所排放的二氧化碳仅为该数值的 1/9······",
+        "pred_idx": [
+            61
+        ],
+        "pred": "一件衣物，从其生产、流通、\n使用到废弃后的处理，每一个环节\n都在排放二氧化碳，一条约400克\n的涤纶裤，“一生”所消耗的能源\n相当于排放47千克二氧化碳，是\n其自重的117倍！“碳”的大量排\n放，让极端天气、冰川消融、海平面\n上升、动植物灭绝等愈发频繁，人\n们也愈来愈清晰而真切地感受到\n了由此给人类及生态系统带来的\n不利影响。再来比较一个数据，人类食用\n1千克牛肉，所排放的二氧化碳为\n36.5千克，而吃同等分量的果蔬后，\n所排放的二氧化碳仅为该数值的\n1/9………",
+        "edit": 0.025906735751295335,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            69,
+            70
+        ],
+        "pred_position": 6640,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "一件衣物从其生产流通使用到废弃后的处理每一个环节都在排放二氧化拨一条约400克的涤纶裤一生所消耗的能源相当于排放47干克二氧化碳是其自重的117倍碳的大量排放让极端天气冰川消融海平面上升动植物天绝等愈发频繁人们也愈来愈清晰而真切地感受到了由此给人类及生态系统带来的不利影响再来比较一个数据人类食用1干克牛肉所排放的二氧化碳为365干克而吃同等分量的果蔬后所排放的二氧化碳仅为该数值的19",
+        "norm_pred": "一件衣物从其生产流通使用到废弃后的处理每一个环节都在排放二氧化碳一条约400克的涤纶裤一生所消耗的能源相当于排放47千克二氧化碳是其自重的117倍碳的大量排放让极端天气冰川消融海平面上升动植物灭绝等愈发频繁人们也愈来愈清晰而真切地感受到了由此给人类及生态系统带来的不利影响再来比较一个数据人类食用1千克牛肉所排放的二氧化碳为365千克而吃同等分量的果蔬后所排放的二氧化碳仅为该数值的19",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 193,
+        "metric": {
+            "Edit_dist": 0.025906735751295335
+        },
+        "Edit_num": 5
+    },
+    {
+        "gt_idx": [
+            65
+        ],
+        "gt": "为了让公众了解气候变化的起因，影响和可能的群决方法，充分认识温室气体减排的重要性和紧迫性，中国科技馆从12月 15日至2011年6月推出“低碳生活”专题展览，免费向公众开放，引导公众改变生活观含，减少二氧化碳排放，降低全球变暖效应。",
+        "pred_idx": [
+            63
+        ],
+        "pred": "起因、影响和可能的解决方法，\n充分认识温室气体减排的重要\n性和紧迫性，中国科技馆从12月\n15日至2011年6月推出“低碳生\n活”专题展览，免费向公众开放，\n引导公众改变生活观念，减少二\n氧化碳排放，降低全球变暖效应。地球村的“碳”危机、自然界的\n“碳”循环、你和我的“碳”足迹、高\n科技的减“碳”术和新生活的低\n“碳”路，“低碳生活”专题展览围",
+        "edit": 0.427536231884058,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            71
+        ],
+        "pred_position": 6881,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "为了让公众了解气候变化的起因影响和可能的群决方法充分认识温室气体减排的重要性和紧迫性中国科技馆从12月15日至2011年6月推出低碳生活专题展览免费向公众开放引导公众改变生活观含减少二氧化碳排放降低全球变暖效应",
+        "norm_pred": "起因影响和可能的解决方法充分认识温室气体减排的重要性和紧迫性中国科技馆从12月15日至2011年6月推出低碳生活专题展览免费向公众开放引导公众改变生活观念减少二氧化碳排放降低全球变暖效应地球村的碳危机自然界的碳循环你和我的碳足迹高科技的减碳术和新生活的低碳路低碳生活专题展览围",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 138,
+        "metric": {
+            "Edit_dist": 0.427536231884058
+        },
+        "Edit_num": 59
+    },
+    {
+        "gt_idx": [
+            66
+        ],
+        "gt": "地球村的”碳”危机、自然界的 “碳”循环、你和我的”碳”足迹、高科技的减”碳”术和新生活的低 “碳“路，“低碳生活”专题展览围绕感受危机，认识低碳，了解低碳、践行低碳四个方面，设置上述五个分主题展区，主要展示人类长期以来高碳发展引发的气候，生态，能源、资源等种种危机与挑战，引发人们对高碳发展和生活方式的重新审视与反思；诠释碳元素的存在形式和碳元素在自然界的循环与运动，使人们明确低碳概念；揭示碳排放，温室效应，气候变化与每个人日常生活衣食住行及生活方式的关系；让观念体验低碳科技的发展与进步，了解节能减排、绿色低碳技术的大力推广将有效地降低人类活动碳排放；从衣食住行各方面感受低碳生活的新鲜方式，引导人们改变生活观念，从点滴做起，积极践行低碳生活方式。",
+        "pred_idx": [
+            64,
+            65
+        ],
+        "pred": "绕感受危机、认识低碳、了解低\n碳、践行低碳四个方面，设置上述\n五个分主题展区，主要展示人类\n长期以来高碳发展引发的气候、\n生态、能源、资源等种种危机与挑\n战，引发人们对高碳发展和生活\n方式的重新审视与反思；诠释碳\n元素的存在形式和碳元素在自然\n界的循环与运动，使人们明确低\n碳概念；揭示碳排放、温室效应、\n气候变化与每个人日常生活衣食住行及生活方式的关系；让观念\n体验低碳科技的发展与进步，了\n解节能减排、绿色低碳技术的大\n力推广将有效地降低人类活动碳\n排放；从衣食住行各方面感受低\n碳生活的新鲜方式，引导人们改\n变生活观念，从点滴做起，积极践\n行低碳生活方式。",
+        "edit": 0.1602787456445993,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            73
+        ],
+        "pred_position": 6893,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "地球村的碳危机自然界的碳循环你和我的碳足迹高科技的减碳术和新生活的低碳路低碳生活专题展览围绕感受危机认识低碳了解低碳践行低碳四个方面设置上述五个分主题展区主要展示人类长期以来高碳发展引发的气候生态能源资源等种种危机与挑战引发人们对高碳发展和生活方式的重新审视与反思诠释碳元素的存在形式和碳元素在自然界的循环与运动使人们明确低碳概念揭示碳排放温室效应气候变化与每个人日常生活衣食住行及生活方式的关系让观念体验低碳科技的发展与进步了解节能减排绿色低碳技术的大力推广将有效地降低人类活动碳排放从衣食住行各方面感受低碳生活的新鲜方式引导人们改变生活观念从点滴做起积极践行低碳生活方式",
+        "norm_pred": "绕感受危机认识低碳了解低碳践行低碳四个方面设置上述五个分主题展区主要展示人类长期以来高碳发展引发的气候生态能源资源等种种危机与挑战引发人们对高碳发展和生活方式的重新审视与反思诠释碳元素的存在形式和碳元素在自然界的循环与运动使人们明确低碳概念揭示碳排放温室效应气候变化与每个人日常生活衣食住行及生活方式的关系让观念体验低碳科技的发展与进步了解节能减排绿色低碳技术的大力推广将有效地降低人类活动碳排放从衣食住行各方面感受低碳生活的新鲜方式引导人们改变生活观念从点滴做起积极践行低碳生活方式",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 287,
+        "metric": {
+            "Edit_dist": 0.156794425087108
+        },
+        "Edit_num": 45
+    },
+    {
+        "gt_idx": [
+            67
+        ],
+        "gt": "68件动展品，约200块展板， 2300平方米展出面积。展厅以多组展板构成的‘C’形（碳的元素符号)造型墙对各分主题展区进行区域分割，互动展品点缀其中。情景化，艺术化的布展形式与互动式，参与式的展品相结合，让互动，参与，体验和直观、形象，易于理解，成为专题展览的一大完点。",
+        "pred_idx": [
+            66,
+            67
+        ],
+        "pred": "68件动展品，约200块展板，\n2300平方米展出面积。展厅以多\n组展板构成的“C”形（碳的元素符号）造型墙对各分主题展区进行区\n域分割，互动展品点缀其中。情景\n化、艺术化的布展形式与互动式、\n参与式的展品相结合，让互动、参\n与、体验和直观、形象、易于理解，\n成为专题展览的一大亮点。",
+        "edit": 0.01694915254237288,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            76
+        ],
+        "pred_position": 7233,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "68件动展品约200块展板2300平方米展出面积展厅以多组展板构成的C形碳的元素符号造型墙对各分主题展区进行区域分割互动展品点缀其中情景化艺术化的布展形式与互动式参与式的展品相结合让互动参与体验和直观形象易于理解成为专题展览的一大完点",
+        "norm_pred": "68件动展品约200块展板2300平方米展出面积展厅以多组展板构成的C形碳的元素符号造型墙对各分主题展区进行区域分割互动展品点缀其中情景化艺术化的布展形式与互动式参与式的展品相结合让互动参与体验和直观形象易于理解成为专题展览的一大亮点",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 117,
+        "metric": {
+            "Edit_dist": 0.008547008547008548
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            68
+        ],
+        "gt": "记者在现场发现，每一位参观者都兴致勃勃地参与展品的低碳互动，不时发出种种感概，或惊喜，或惊讶，或担忧、或乐观，抑或基种无可言状的态度······“绿色低碳不仅仅是需要公众承担起来的一份责任，同时也意味着一种新的发展机会，一种新的生活时尚。“现场一位参观者如是说。",
+        "pred_idx": [
+            68,
+            69
+        ],
+        "pred": "记者在现场发现，每一位参观\n者都兴致勃勃地参与展品的低碳\n互动，不时发出种种感概，或惊喜、\n或惊讶、或担忧、或乐观，抑或某种\n无可言状的态度…“绿色低碳不仅仅是需要公众承担起来的一份\n责任，同时也意味着一种新的发展\n机会、一种新的生活时尚。”现场一\n位参观者如是说。",
+        "edit": 0.017699115044247787,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            78
+        ],
+        "pred_position": 7396,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "记者在现场发现每一位参观者都兴致勃勃地参与展品的低碳互动不时发出种种感概或惊喜或惊讶或担忧或乐观抑或基种无可言状的态度绿色低碳不仅仅是需要公众承担起来的一份责任同时也意味着一种新的发展机会一种新的生活时尚现场一位参观者如是说",
+        "norm_pred": "记者在现场发现每一位参观者都兴致勃勃地参与展品的低碳互动不时发出种种感概或惊喜或惊讶或担忧或乐观抑或某种无可言状的态度绿色低碳不仅仅是需要公众承担起来的一份责任同时也意味着一种新的发展机会一种新的生活时尚现场一位参观者如是说",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 112,
+        "metric": {
+            "Edit_dist": 0.008928571428571428
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            69
+        ],
+        "gt": "为挖掘和延伸专题展览的教育功能，中国科技馆在展宽期间还组织了“低碳、我先行”系列教育活动，包括“变废为宝，创意无限“动手制作、“我的低碳生活”绘画作品征集以及“志愿者讲低碳”等相关活动，同时组织*科学讲坛一一低碳生活系列讲座”，邀请相关专家在展览期间进行科普讲座。",
+        "pred_idx": [
+            70
+        ],
+        "pred": "为挖掘和延伸专题展览的教\n育功能，中国科技馆在展览期间\n还组织了“低碳、我先行”系列教\n育活动，包括“变废为宝，创意无\n限”动手制作、“我的低碳生活”\n绘画作品征集以及“志愿者讲低\n碳”等相关活动，同时组织“科学\n讲坛—低碳生活系列讲座”，邀\n请相关专家在展览期间进行科普\n讲座。",
+        "edit": 0.02631578947368421,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            80
+        ],
+        "pred_position": 7566,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "为挖掘和延伸专题展览的教育功能中国科技馆在展宽期间还组织了低碳我先行系列教育活动包括变废为宝创意无限动手制作我的低碳生活绘画作品征集以及志愿者讲低碳等相关活动同时组织科学讲坛一一低碳生活系列讲座邀请相关专家在展览期间进行科普讲座",
+        "norm_pred": "为挖掘和延伸专题展览的教育功能中国科技馆在展览期间还组织了低碳我先行系列教育活动包括变废为宝创意无限动手制作我的低碳生活绘画作品征集以及志愿者讲低碳等相关活动同时组织科学讲坛低碳生活系列讲座邀请相关专家在展览期间进行科普讲座",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 114,
+        "metric": {
+            "Edit_dist": 0.02631578947368421
+        },
+        "Edit_num": 3
+    },
+    {
+        "gt_idx": [
+            70
+        ],
+        "gt": "现场的一位负责人告诉记者，北京展出结束后，展览还将在全国范围内进行巡回展出，以帮助更多人理解低碳概念，让更多人在日常生活中参与低碳，保护生态环境。",
+        "pred_idx": [
+            71
+        ],
+        "pred": "现场的一位负责人告诉记者，\n北京展出结束后，展览还将在全国\n范围内进行巡回展出，以帮助更多\n人理解低碳概念，让更多人在日常\n生活中参与低碳，保护生态环境。",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            81
+        ],
+        "pred_position": 7622,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "norm_gt": "现场的一位负责人告诉记者北京展出结束后展览还将在全国范围内进行巡回展出以帮助更多人理解低碳概念让更多人在日常生活中参与低碳保护生态环境",
+        "norm_pred": "现场的一位负责人告诉记者北京展出结束后展览还将在全国范围内进行巡回展出以帮助更多人理解低碳概念让更多人在日常生活中参与低碳保护生态环境",
+        "image_name": "newspaper_028a1dd5500fbd774e4d85df3c460c4d_1.jpg",
+        "upper_len": 67,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            0,
+            1
+        ],
+        "gt": "The 65th William Lowell Putnam Mathematical CompetitionSaturday, December 4, 2004",
+        "pred_idx": [
+            0
+        ],
+        "pred": "# The 65th William Lowell Putnam Mathematical Competition\nSaturday, December 4, 2004",
+        "edit": 0.0,
+        "gt_category_type": "title",
+        "gt_position": [
+            1,
+            2
+        ],
+        "pred_position": 0,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {},
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "The65thWilliamLowellPutnamMathematicalCompetitionSaturdayDecember42004",
+        "norm_pred": "The65thWilliamLowellPutnamMathematicalCompetitionSaturdayDecember42004",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 70,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "A1 Basketball star Shanille O'Keal's team statistician keeps track of the number, $S ( N )$ ，of successful free throws she has made in her first $N$ attempts of the season. Early in the season, $S ( N )$ was less than $80 \\%$ of $N$, but by the end of the season, $S ( N )$ was more than $80 \\%$ of $N$ .Was there necessarily a moment in between when $S ( N )$ was exactly $80 \\%$ of $N$ ？",
+        "pred_idx": [
+            1
+        ],
+        "pred": "A1 Basketball star Shanille O'Keal's team statistician\nkeeps track of the number, S(N), of successful free\nthrows she has made in her first N attempts of the sea-\nson. Early in the season, $S ( N )$ was less than 80% of $N ,$\nbut by the end of the season, $S ( N )$ was more than 80%\nof N. Was there necessarily a moment in between when\n$S ( N )$ was exactly 80% of $N ?$",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            3
+        ],
+        "pred_position": 84,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A1BasketballstarShanilleOKealsteamstatisticiankeepstrackofthenumberSNofsuccessfulfreethrowsshehasmadeinherfirstNattemptsoftheseasonEarlyintheseasonSNwaslessthan80ofNbutbytheendoftheseasonSNwasmorethan80ofNWastherenecessarilyamomentinbetweenwhenSNwasexactly80ofN",
+        "norm_pred": "A1BasketballstarShanilleOKealsteamstatisticiankeepstrackofthenumberSNofsuccessfulfreethrowsshehasmadeinherfirstNattemptsoftheseasonEarlyintheseasonSNwaslessthan80ofNbutbytheendoftheseasonSNwasmorethan80ofNWastherenecessarilyamomentinbetweenwhenSNwasexactly80ofN",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 261,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "A2 For $i=1,2$ let $T_i$ be a triangle with side lengths $a_i,b_i,c_i$, and area $A_i$. Suppose that $a_1 \\le a_2, b_1 \\le b_2, c_1 \\le c_2$, and that $T_2$ is an acute triangle. Does it follow that $A_1 \\le A_2$?",
+        "pred_idx": [
+            2
+        ],
+        "pred": "A2 For $i = 1 , 2$ let $T _ { i }$ be a triangle with side lengths $a _ { i } , b _ { i } , c _ { i } ,$\nand area $A _ { i } .$ Suppose that $a _ { 1 } \\leq a _ { 2 } , b _ { 1 } \\leq b _ { 2 } , c _ { 1 } \\leq c _ { 2 }$ , and\nthat $T _ { 2 }$ is an acute triangle. Does it follow that $A _ { 1 } \\leq A _ { 2 } ?$",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            4
+        ],
+        "pred_position": 455,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A2Fori12letT_ibeatrianglewithsidelengthsa_ib_ic_iandareaA_iSupposethata_1a_2b_1b_2c_1c_2andthatT_2isanacutetriangleDoesitfollowthatA_1A_2",
+        "norm_pred": "A2Fori12letT_ibeatrianglewithsidelengthsa_ib_ic_iandareaA_iSupposethata_1a_2b_1b_2c_1c_2andthatT_2isanacutetriangleDoesitfollowthatA_1A_2",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 137,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "A3 Define a sequence $\\{u_n\\}_{n=0}^{\\infty}$ by $u_0 = u_1 = u_2 = 1$, and\nthereafter by the condition that",
+        "pred_idx": [
+            3
+        ],
+        "pred": "A3 Define a sequence $\\left\\{ u _ { n } \\right\\} _ { n = 0 } ^ { \\infty }$ by $u _ { 0 } = u _ { 1 } = u _ { 2 } = 1$ , and\nthereafter by the condition that",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            5
+        ],
+        "pred_position": 770,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A3Defineasequenceu_n_n0byu_0u_1u_21andthereafterbytheconditionthat",
+        "norm_pred": "A3Defineasequenceu_n_n0byu_0u_1u_21andthereafterbytheconditionthat",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 66,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            6
+        ],
+        "gt": "for all $n \\geq 0$. Show that $u_n$ is an integer for all $n$. (By convention, $0! = 1$.)",
+        "pred_idx": [
+            5
+        ],
+        "pred": "for all $n \\geq 0$ Show that $u _ { n }$ is an integer for all n. (By\nconvention, $0 ! = 1 . )$ 0",
+        "edit": 0.019230769230769232,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            7
+        ],
+        "pred_position": 997,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "foralln0Showthatu_nisanintegerforallnByconvention01",
+        "norm_pred": "foralln0Showthatu_nisanintegerforallnByconvention010",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 52,
+        "metric": {
+            "Edit_dist": 0.019230769230769232
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "A4 Show that for any positive integer $n$ there is an integer $N$\nsuch that the product $x_1x_2 \\cdots x_n$ can be expressed identically in the form",
+        "pred_idx": [
+            6
+        ],
+        "pred": "A4 Show that for any positive integer n there is an integer N\nsuch that the product $x _ { 1 } x _ { 2 } \\cdots x _ { n }$ can be expressed iden-\ntically in the form",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            8
+        ],
+        "pred_position": 1094,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A4ShowthatforanypositiveintegernthereisanintegerNsuchthattheproductx_1x_2x_ncanbeexpressedidenticallyintheform",
+        "norm_pred": "A4ShowthatforanypositiveintegernthereisanintegerNsuchthattheproductx_1x_2x_ncanbeexpressedidenticallyintheform",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 110,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            9
+        ],
+        "gt": "where the $c_i$ are rational numbers and each $a_{ij}$ is one of\nthe numbers $-1, 0, 1$.",
+        "pred_idx": [
+            8
+        ],
+        "pred": "where the $c _ { i }$ are rational numbers and each $a _ { i j }$ is one of\nthe numbers $- 1 , 0 , 1$",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            10
+        ],
+        "pred_position": 1355,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "wherethec_iarerationalnumbersandeacha_ijisoneofthenumbers101",
+        "norm_pred": "wherethec_iarerationalnumbersandeacha_ijisoneofthenumbers101",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 60,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            10
+        ],
+        "gt": "A5  An $m \\times n$ checkerboard is colored randomly: each\nsquare is independently assigned red or black with\nprobability $1/2$. We say that two squares, $p$ and $q$, are\nin the same connected monochromatic region if there is\na sequence of squares, all of the same color, starting at\n$p$ and ending at $q$, in which successive squares in the\nsequence share a common side. Show that the expected\nnumber of connected monochromatic regions is greater\nthan $mn/8$.",
+        "pred_idx": [
+            9
+        ],
+        "pred": "A5 An $m \\times n$ checkerboard is colored randomly: each\nsquare is independently assigned red or black with\nprobability $1 / 2 .$ We say that two squares, $p$ and $q ,$ are\nin the same connected monochromatic region if there is\na sequence of squares, all of the same color, starting at\n$p$ and ending at $q ,$ in which successive squares in the\nsequence share a common side. Show that the expected\nnumber of connected monochromatic regions is greater\nthan mn $\\iota / 8 .$",
+        "edit": 0.002840909090909091,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            11
+        ],
+        "pred_position": 1456,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A5Anmncheckerboardiscoloredrandomlyeachsquareisindependentlyassignedredorblackwithprobability12WesaythattwosquarespandqareinthesameconnectedmonochromaticregionifthereisasequenceofsquaresallofthesamecolorstartingatpandendingatqinwhichsuccessivesquaresinthesequenceshareacommonsideShowthattheexpectednumberofconnectedmonochromaticregionsisgreaterthanmn8",
+        "norm_pred": "A5Anmncheckerboardiscoloredrandomlyeachsquareisindependentlyassignedredorblackwithprobability12WesaythattwosquarespandqareinthesameconnectedmonochromaticregionifthereisasequenceofsquaresallofthesamecolorstartingatpandendingatqinwhichsuccessivesquaresinthesequenceshareacommonsideShowthattheexpectednumberofconnectedmonochromaticregionsisgreaterthanmnι8",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 352,
+        "metric": {
+            "Edit_dist": 0.002840909090909091
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            11
+        ],
+        "gt": "A6 Suppose that $f(x,y)$ is a continuous real-valued function on the unit square $0 \\leq x \\leq 1, 0 \\leq y \\leq 1$. Show that",
+        "pred_idx": [
+            10
+        ],
+        "pred": "A6 Suppose that $f ( x , y )$ is a continuous real-valued func-\ntion on the unit square $0 \\leq x \\leq 1, 0 \\leq y \\leq 1$ . Show that",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            12
+        ],
+        "pred_position": 1929,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "A6Supposethatfxyisacontinuousrealvaluedfunctionontheunitsquare0x10y1Showthat",
+        "norm_pred": "A6Supposethatfxyisacontinuousrealvaluedfunctionontheunitsquare0x10y1Showthat",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 76,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            14
+        ],
+        "gt": "B1 Let $P(x) = c_n x^n + c_{n-1} x^{n-1} + \\dots + c_0$ be a polynomial\nwith integer coefficients. Suppose that $r$ is a rational\nnumber such that $P(r) = 0$. Show that the $n$ numbers",
+        "pred_idx": [
+            13
+        ],
+        "pred": "B1 Let $P(x) = c_{n}x^{n} + c_{n - 1}x^{n - 1} + \\cdots + c_{0}$ be a polynomial\nwith integer coefficients. Suppose that r is a rational\nnumber such that $P ( r ) = 0$ . Show that the n numbers",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            14
+        ],
+        "pred_position": 2317,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B1LetPxc_nxnc_n1xn1c_0beapolynomialwithintegercoefficientsSupposethatrisarationalnumbersuchthatPr0Showthatthennumbers",
+        "norm_pred": "B1LetPxc_nxnc_n1xn1c_0beapolynomialwithintegercoefficientsSupposethatrisarationalnumbersuchthatPr0Showthatthennumbers",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 117,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            17
+        ],
+        "gt": "are integers.",
+        "pred_idx": [
+            16
+        ],
+        "pred": "are integers.",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            16
+        ],
+        "pred_position": 2682,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "areintegers",
+        "norm_pred": "areintegers",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 11,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            18
+        ],
+        "gt": "B2 Let $m$ and $n$ be positive integers. Show that",
+        "pred_idx": [
+            17
+        ],
+        "pred": "B2 Let m and n be positive integers. Show that",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            17
+        ],
+        "pred_position": 2695,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B2LetmandnbepositiveintegersShowthat",
+        "norm_pred": "B2LetmandnbepositiveintegersShowthat",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 36,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            20
+        ],
+        "gt": "B3 Determine all real numbers $a > 0$ for which there exists a nonnegative continuous function $f ( x )$ defined on $[ 0 , a ]$ with the property that the region",
+        "pred_idx": [
+            19
+        ],
+        "pred": "B3 Determine all real numbers $a > 0$ for which there exists\na nonnegative continuous function $f ( x )$ defined on $[ 0 , a ]$\nwith the property that the region",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            19
+        ],
+        "pred_position": 2812,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B3Determineallrealnumbersa0forwhichthereexistsanonnegativecontinuousfunctionfxdefinedon0awiththepropertythattheregion",
+        "norm_pred": "B3Determineallrealnumbersa0forwhichthereexistsanonnegativecontinuousfunctionfxdefinedon0awiththepropertythattheregion",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 117,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            22
+        ],
+        "gt": "has perimeter $k$ units and area $k$ square units for some real number $k$.",
+        "pred_idx": [
+            21
+        ],
+        "pred": "has perimeter k units and area $k$ square units for some\nreal number k.",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            21
+        ],
+        "pred_position": 3042,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "hasperimeterkunitsandareaksquareunitsforsomerealnumberk",
+        "norm_pred": "hasperimeterkunitsandareaksquareunitsforsomerealnumberk",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 55,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            23
+        ],
+        "gt": "B4 Let $n$ be a positive integer, $n \\geq 2$, and put $\\theta = 2\\pi/n$. Define points $P_k = (k, 0)$ in the $xy$-plane, for $k = 1, 2, \\ldots, n$.\nLet $R_k$ be the map that rotates the plane counterclockwise by the angle $\\theta$ about the point $P_k$. Let $R$ denote\nthe map obtained by applying, in order, $R_1$, then $R_2, \\ldots,$\nthen $R_n$. For an arbitrary point $(x, y)$, find, and simplify,\nthe coordinates of $R(x, y)$.",
+        "pred_idx": [
+            22
+        ],
+        "pred": "B4 Let n be a positive integer, $n \\geq 2$ , and put $\\theta = 2 \\pi / n$ . De-\nfine points $P _ { k } = ( k , 0 )$ in the xy-plane, for $k = 1 , 2 , \\ldots , n$\nLet $R _ { k }$ be the map that rotates the plane counterclock-\nwise by the angle $\\theta$ about the point $P _ { k } .$ Let $R$ denote\nthe map obtained by applying, in order, $R _ { 1 }$ ,then $R _ { 2 } , \\ldots ,$\nthen $R _ { n } .$ For an arbitrary point $( x , y )$ , find, and simplify,\nthe coordinates of $R ( x , y )$ ·",
+        "edit": 0.0038314176245210726,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            22
+        ],
+        "pred_position": 3113,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B4Letnbeapositiveintegern2andputθ2πDefinepointsP_kk0inthexyplanefork12nLetR_kbethemapthatrotatestheplanecounterclockwisebytheangleθaboutthepointP_kLetRdenotethemapobtainedbyapplyinginorderR_1thenR_2thenR_nForanarbitrarypointxyfindandsimplifythecoordinatesofRxy",
+        "norm_pred": "B4Letnbeapositiveintegern2andputθ2πnDefinepointsP_kk0inthexyplanefork12nLetR_kbethemapthatrotatestheplanecounterclockwisebytheangleθaboutthepointP_kLetRdenotethemapobtainedbyapplyinginorderR_1thenR_2thenR_nForanarbitrarypointxyfindandsimplifythecoordinatesofRxy",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 261,
+        "metric": {
+            "Edit_dist": 0.0038314176245210726
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            24
+        ],
+        "gt": "B5 Evaluate",
+        "pred_idx": [
+            23
+        ],
+        "pred": "B5 Evaluate",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            23
+        ],
+        "pred_position": 3602,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B5Evaluate",
+        "norm_pred": "B5Evaluate",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 10,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            26
+        ],
+        "gt": "B6  Let $\\mathscr{A}$ be a non-empty set of positive integers, and let\n$N(x)$ denote the number of elements of $\\mathscr{A}$ not exceeding $x$. Let $\\mathscr{B}$ denote the set of positive integers $b$ that\ncan be written in the form $b = a - a'$ with $a \\in \\mathscr{A}$ and\n$a' \\in \\mathscr{A}$. Let $b_1 < b_2 < \\cdots$ be the members of $\\mathscr{B}$, listed\nin increasing order. Show that if the sequence $b_{i+1} - b_i$\nis unbounded, then",
+        "pred_idx": [
+            25
+        ],
+        "pred": "B6 Let $\\mathcal { A }$ be a non-empty set of positive integers, and let\n$N ( x )$ denote the number of elements of $\\mathcal { A }$ not exceed-\ning x. Let $\\mathcal { B }$ denote the set of positive integers b that\ncan be written in the form $b = a - a ^ { \\prime }$ with $a \\in \\mathcal { A }$ and\n$a ^ { \\prime } \\in \\mathcal { A }$ . Let $b _ { 1 } < b _ { 2 } < \\cdots$ be the members of $\\mathcal { B }$ ,listed\nin increasing order. Show that if the sequence $b _ { i + 1 } - b _ { i }$\nis unbounded, then",
+        "edit": 0.0,
+        "gt_category_type": "text_block",
+        "gt_position": [
+            25
+        ],
+        "pred_position": 3779,
+        "pred_category_type": "text_block",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "B6Let𝒜beanonemptysetofpositiveintegersandletNxdenotethenumberofelementsof𝒜notexceedingxLetℬdenotethesetofpositiveintegersbthatcanbewrittenintheformbaawitha𝒜anda𝒜Letb_1b_2bethemembersofℬlistedinincreasingorderShowthatifthesequenceb_i1b_iisunboundedthen",
+        "norm_pred": "B6Let𝒜beanonemptysetofpositiveintegersandletNxdenotethenumberofelementsof𝒜notexceedingxLetℬdenotethesetofpositiveintegersbthatcanbewrittenintheformbaawitha𝒜anda𝒜Letb_1b_2bethemembersofℬlistedinincreasingorderShowthatifthesequenceb_i1b_iisunboundedthen",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 251,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    }
+]

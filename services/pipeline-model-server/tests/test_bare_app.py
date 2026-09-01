@@ -129,6 +129,12 @@ class BareAppTests(unittest.IsolatedAsyncioTestCase):
             [decode(response.content).tensors["output"].tolist() for response in responses],
             [[3.0], [8.0]],
         )
+        health = await self.request(app, "GET", "/health")
+        stats = health.json()["inference"]["batched"]
+        self.assertEqual(stats["inference_calls"], 1)
+        self.assertEqual(stats["inference_items"], 2)
+        self.assertEqual(stats["max_batch_items"], 2)
+        self.assertGreaterEqual(stats["inference_seconds"], 0)
 
     async def test_accuracy_sensitive_models_are_not_microbatched(self):
         forwarded_shapes = []

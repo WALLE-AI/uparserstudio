@@ -721,8 +721,12 @@ impl PipelineV2Adapter {
         let body = tensor_wire::encode(&inputs)
             .map_err(|error| page_error(page, "formula_preprocess", error.to_string()))?;
         let _permit = ctx.acquire_permit().await;
+        // FormulaNet forwards are long-running and cannot be cancelled once
+        // admitted to the GPU worker. Retrying a queue timeout duplicates the
+        // same expensive batch and can turn load into a timeout cascade.
+        let formula_timeout = self.timeout.max(Duration::from_secs(900));
         let response = ctx
-            .dispatch_binary(endpoint, body, self.timeout, self.max_retries)
+            .dispatch_binary(endpoint, body, formula_timeout, 0)
             .await
             .map_err(|error| page_error(page, "formula_forward", error.to_string()))?;
         let outputs = tensor_wire::decode(&response)
@@ -1209,6 +1213,17 @@ impl PipelineV2Adapter {
                 pipeline_table::TableSelection {
                     model: pipeline_table::SelectedTableModel::Wireless,
                     reason: "high_confidence_wireless_classifier",
+                }
+            } else if classification.model == pipeline_table::SelectedTableModel::Wireless
+                && classification.confidence >= 0.55
+                && pipeline_table::wired_merges_unsupported_by_wireless(
+                    &wired_candidate,
+                    &wireless_candidate,
+                )
+            {
+                pipeline_table::TableSelection {
+                    model: pipeline_table::SelectedTableModel::Wireless,
+                    reason: "wireless_classifier_and_regular_grid_agree",
                 }
             } else {
                 pipeline_table::select_candidate(&wired_candidate, &wireless_candidate, &ocr_texts)
@@ -1990,12 +2005,17 @@ fn build_blocks(
                 .join("\n")
         };
         let mut text = (!assembled.is_empty()).then_some(assembled);
-        let latex = formulas
-            .get(&region.region_id)
-            .map(|formula| formula.latex.clone());
+        let latex = formulas.get(&region.region_id).and_then(|formula| {
+            let latex = formula.latex.trim();
+            (!latex.is_empty()).then(|| latex.to_owned())
+        });
         let html = tables
             .get(&region.region_id)
             .map(|table| table.html.clone());
+        if matches!(region.label.as_str(), "display_formula" | "inline_formula") && latex.is_none()
+        {
+            continue;
+        }
         if latex.is_some() || html.is_some() {
             text = None;
         }

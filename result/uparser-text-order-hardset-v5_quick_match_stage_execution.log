@@ -1,0 +1,16 @@
+save_name: uparser-text-order-hardset-v5_quick_match
+[page_match]
+workers: 4
+page_count: 11
+quick_match_truncated_timeout_sec: 300
+match_timeout_sec: 420
+fallbacks:
+  - page_timeout: count=0
+  - quick_match_timeout: count=0
+[table.TEDS]
+workers: 4
+timeout_sec: 120.0
+sample_count: 2
+timeout_case_count: 0
+error_case_count: 0
+exception_case_count: 0

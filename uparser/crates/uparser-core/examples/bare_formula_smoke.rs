@@ -16,7 +16,34 @@ async fn main() -> anyhow::Result<()> {
         "http://127.0.0.1:19002/v1/models/pp_formulanet_plus_m:infer".to_owned()
     });
 
-    let inputs = pipeline_formula::preprocess(&std::fs::read(image_path)?)?;
+    let image_bytes = std::fs::read(image_path)?;
+    let image_bytes = if let Ok(raw_bbox) = std::env::var("UPARSER_FORMULA_BBOX") {
+        let bbox = raw_bbox
+            .split(',')
+            .map(str::parse::<u32>)
+            .collect::<Result<Vec<_>, _>>()?;
+        if bbox.len() != 4 || bbox[2] <= bbox[0] || bbox[3] <= bbox[1] {
+            anyhow::bail!("UPARSER_FORMULA_BBOX must be left,top,right,bottom");
+        }
+        let image = image::load_from_memory(&image_bytes)?.to_rgb8();
+        let crop = image::imageops::crop_imm(
+            &image,
+            bbox[0],
+            bbox[1],
+            bbox[2] - bbox[0],
+            bbox[3] - bbox[1],
+        )
+        .to_image();
+        let mut encoded = Vec::new();
+        image::DynamicImage::ImageRgb8(crop).write_to(
+            &mut std::io::Cursor::new(&mut encoded),
+            image::ImageFormat::Png,
+        )?;
+        encoded
+    } else {
+        image_bytes
+    };
+    let inputs = pipeline_formula::preprocess(&image_bytes)?;
     let response = Transport::new()
         .dispatch_binary(BinaryRequest {
             endpoint,

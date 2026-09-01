@@ -210,7 +210,14 @@ class OnnxForward:
     def __init__(self, model_path: Path, input_name: str, output_names: list[str]):
         import onnxruntime
 
-        self.session = onnxruntime.InferenceSession(str(model_path))
+        session_options = onnxruntime.SessionOptions()
+        # The wired-table graph declares several scalar outputs as `{}` while
+        # returning `{1}`. ONNX Runtime otherwise emits the same benign shape
+        # warning thousands of times during a benchmark.
+        session_options.log_severity_level = 3
+        self.session = onnxruntime.InferenceSession(
+            str(model_path), sess_options=session_options
+        )
         self.input_name = input_name
         self.output_names = output_names
         self.lock = threading.RLock()

@@ -41,6 +41,10 @@ class _InferenceWorker:
     def __init__(self, model: Any, *, allow_batching: bool):
         self.model = model
         self.allow_batching = allow_batching
+        self.inference_calls = 0
+        self.inference_items = 0
+        self.inference_seconds = 0.0
+        self.max_batch_items = 0
         self.requests: queue.Queue = queue.Queue()
         self.thread = threading.Thread(
             target=self._run,
@@ -48,6 +52,16 @@ class _InferenceWorker:
             daemon=True,
         )
         self.thread.start()
+
+    def stats(self) -> dict[str, int | float | bool]:
+        return {
+            "batching": self.allow_batching,
+            "inference_calls": self.inference_calls,
+            "inference_items": self.inference_items,
+            "inference_seconds": self.inference_seconds,
+            "max_batch_items": self.max_batch_items,
+            "queued_requests": self.requests.qsize(),
+        }
 
     async def infer(self, inputs: TensorBundle) -> TensorBundle:
         response: queue.Queue = queue.Queue(maxsize=1)
@@ -146,7 +160,13 @@ class _InferenceWorker:
                     deferred.append(item)
             try:
                 merged, sizes = self._merge([inputs for inputs, _ in batch])
+                started = time.perf_counter()
                 result = self.model.infer(merged)
+                elapsed = time.perf_counter() - started
+                self.inference_calls += 1
+                self.inference_items += batch_items
+                self.inference_seconds += elapsed
+                self.max_batch_items = max(self.max_batch_items, batch_items)
                 results = self._split(result, sizes)
             except Exception as error:
                 for _, response in batch:
@@ -166,7 +186,11 @@ def create_app(registry: BareModelRegistry) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ready", "models": sorted(registry.metadata())}
+        return {
+            "status": "ready",
+            "models": sorted(registry.metadata()),
+            "inference": {name: worker.stats() for name, worker in sorted(workers.items())},
+        }
 
     @app.get("/v1/models")
     async def models():
@@ -213,6 +237,7 @@ def main() -> None:
         factory=True,
         host=os.getenv("UPARSER_PIPELINE_HOST", "127.0.0.1"),
         port=int(os.getenv("UPARSER_PIPELINE_PORT", "9001")),
+        access_log=False,
     )
 
 

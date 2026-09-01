@@ -1,0 +1,632 @@
+[
+    {
+        "gt_idx": [
+            2
+        ],
+        "gt": "$$\n4\\frac{3}{5}\\!-\\!1\\frac{1}{2}\\!=\\!3\\frac{1}{10}\n$$",
+        "pred_idx": [
+            0
+        ],
+        "pred": "\\[ 4\\frac{3}{5}-1\\frac{1}{2}=3\\frac{1}{10} \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            1
+        ],
+        "pred_position": 0,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "4\\frac35-1\\frac12=3\\frac110",
+        "norm_pred": "4\\frac35-1\\frac12=3\\frac110",
+        "gt_cdm": "4\\frac{3}{5}\\!-\\!1\\frac{1}{2}\\!=\\!3\\frac{1}{10}",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 27,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            3
+        ],
+        "gt": "$$\n6. 6 \\times3 0 0=1 9 8 0\n$$",
+        "pred_idx": [
+            1
+        ],
+        "pred": "\\[ 6.6 \\times 300 = 1980 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            2
+        ],
+        "pred_position": 47,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "6.6\\times300=1980",
+        "norm_pred": "6.6\\times300=1980",
+        "gt_cdm": "6. 6 \\times3 0 0=1 9 8 0",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            4
+        ],
+        "gt": "$$\n5\\frac{1}{2}\\!-\\!2\\frac{4}{9}\\!=\\!3\\,\\frac{1}{18}\n$$",
+        "pred_idx": [
+            2
+        ],
+        "pred": "\\[ 5\\frac{1}{2}-2\\frac{4}{9}=3\\frac{1}{18} \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            3
+        ],
+        "pred_position": 76,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "5\\frac12-2\\frac49=3\\frac118",
+        "norm_pred": "5\\frac12-2\\frac49=3\\frac118",
+        "gt_cdm": "5\\frac{1}{2}\\!-\\!2\\frac{4}{9}\\!=\\!3\\,\\frac{1}{18}",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 27,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "$$\n2 4 \\div1. 2=2 0\n$$",
+        "pred_idx": [
+            3
+        ],
+        "pred": "\\[ 24 \\div 1.2 = 20 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            4
+        ],
+        "pred_position": 123,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "24\\div1.2=20",
+        "norm_pred": "24\\div1.2=20",
+        "gt_cdm": "2 4 \\div1. 2=2 0",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 12,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            7
+        ],
+        "gt": "$$\n0. 3 \\times0. 8=0. 2 4\n$$",
+        "pred_idx": [
+            5
+        ],
+        "pred": "\\[ 0.3 \\times 0.8 = 0.24 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            6
+        ],
+        "pred_position": 178,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "0.3\\times0.8=0.24",
+        "norm_pred": "0.3\\times0.8=0.24",
+        "gt_cdm": "0. 3 \\times0. 8=0. 2 4",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            8
+        ],
+        "gt": "$$\n4. 2 \\times2 0=8 4\n$$",
+        "pred_idx": [
+            6
+        ],
+        "pred": "\\[ 4.2 \\times 20 = 84 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            7
+        ],
+        "pred_position": 207,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "4.2\\times20=84",
+        "norm_pred": "4.2\\times20=84",
+        "gt_cdm": "4. 2 \\times2 0=8 4",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 14,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            10
+        ],
+        "gt": "$$\n8. 0 1 \\div0. 9=8. 9\n$$",
+        "pred_idx": [
+            8
+        ],
+        "pred": "\\[ 8.01 \\div 0.9 = 8.9 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            9
+        ],
+        "pred_position": 268,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "8.01\\div0.9=8.9",
+        "norm_pred": "8.01\\div0.9=8.9",
+        "gt_cdm": "8. 0 1 \\div0. 9=8. 9",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            11
+        ],
+        "gt": "$$\n1. 6 \\times0. 3=0. 4 8\n$$",
+        "pred_idx": [
+            9
+        ],
+        "pred": "\\[ 1.6 \\times 0.3 = 0.48 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            10
+        ],
+        "pred_position": 295,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "1.6\\times0.3=0.48",
+        "norm_pred": "1.6\\times0.3=0.48",
+        "gt_cdm": "1. 6 \\times0. 3=0. 4 8",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 17,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            13
+        ],
+        "gt": "$$\n9. 3 \\times6 0=5 5 8\n$$",
+        "pred_idx": [
+            11
+        ],
+        "pred": "\\[ 9.3 \\times 60 = 558 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            12
+        ],
+        "pred_position": 345,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "9.3\\times60=558",
+        "norm_pred": "9.3\\times60=558",
+        "gt_cdm": "9. 3 \\times6 0=5 5 8",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            14
+        ],
+        "gt": "$$\n{\\frac{1}{6}}+{\\frac{3}{5}}={\\frac{23}{30}}\n$$",
+        "pred_idx": [
+            12
+        ],
+        "pred": "\\[ \\frac{1}{6} + \\frac{3}{5} = \\frac{23}{30} \\]",
+        "edit": 0.1935483870967742,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            13
+        ],
+        "pred_position": 372,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "{\\frac16}+{\\frac35}={\\frac2330}",
+        "norm_pred": "\\frac16+\\frac35=\\frac2330",
+        "gt_cdm": "{\\frac{1}{6}}+{\\frac{3}{5}}={\\frac{23}{30}}",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 31,
+        "metric": {
+            "Edit_dist": 0.1935483870967742
+        },
+        "Edit_num": 6
+    },
+    {
+        "gt_idx": [
+            15
+        ],
+        "gt": "$$\n2. 3 \\times5=1 1. 5\n$$",
+        "pred_idx": [
+            13
+        ],
+        "pred": "\\[ 2.3 \\times 5 = 11.5 \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            14
+        ],
+        "pred_position": 421,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "norm_gt": "2.3\\times5=11.5",
+        "norm_pred": "2.3\\times5=11.5",
+        "gt_cdm": "2. 3 \\times5=1 1. 5",
+        "image_name": "jiaocaineedrop_jiaocai_needrop_en_541.jpg",
+        "upper_len": 15,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            5
+        ],
+        "gt": "$$ \\det \\left( \\begin{array}{ll} u_n & u_{n+1} \\\\ u_{n+2} & u_{n+3} \\end{array} \\right) = n! $$",
+        "pred_idx": [
+            4
+        ],
+        "pred": "\\[ \\det\\begin{pmatrix}u_{n}&u_{n+1}\\\\u_{n+2}&u_{n+3}\\end{pmatrix}=n! \\]",
+        "edit": 0.06896551724137931,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            6
+        ],
+        "pred_position": 934,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\det(u_nu_n+1\\\\u_n+2u_n+3)=n!",
+        "norm_pred": "\\detu_nu_n+1\\\\u_n+2u_n+3=n!",
+        "gt_cdm": "\\det \\left( \\begin{array}{ll} u_n & u_{n+1} \\\\ u_{n+2} & u_{n+3} \\end{array} \\right) = n!",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 29,
+        "metric": {
+            "Edit_dist": 0.06896551724137931
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            8
+        ],
+        "gt": "$$x_{1}x_{2}\\cdots x_{n} = \\sum_{i=1}^{N} c_{i}(a_{i1}x_{1} + a_{i2}x_{2} + \\cdots + a_{in}x_{n})^{n}$$",
+        "pred_idx": [
+            7
+        ],
+        "pred": "\\[ x_{1}x_{2}\\cdots x_{n}=\\sum_{i=1}^{N}c_{i}(a_{i1}x_{1}+a_{i2}x_{2}+\\cdots+a_{in}x_{n})^{n} \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            9
+        ],
+        "pred_position": 1273,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "x_1x_2\\cdotsx_n=\\sum_i=1^nc_i(a_i1x_1+a_i2x_2+\\cdots+a_inx_n)^n",
+        "norm_pred": "x_1x_2\\cdotsx_n=\\sum_i=1^nc_i(a_i1x_1+a_i2x_2+\\cdots+a_inx_n)^n",
+        "gt_cdm": "x_{1}x_{2}\\cdots x_{n} = \\sum_{i=1}^{N} c_{i}(a_{i1}x_{1} + a_{i2}x_{2} + \\cdots + a_{in}x_{n})^{n}",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 63,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            12
+        ],
+        "gt": "\\[\\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dx \\right)^{2} dy + \\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dy \\right)^{2} dx\\]",
+        "pred_idx": [
+            11
+        ],
+        "pred": "\\[& \\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dx \\right)^2 dy + \\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dy \\right)^2 dx\\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            13.001
+        ],
+        "pred_position": 2102,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\int_0^1(\\int_0^1f(x,y)dx)^2dy+\\int_0^1(\\int_0^1f(x,y)dy)^2dx",
+        "norm_pred": "\\int_0^1(\\int_0^1f(x,y)dx)^2dy+\\int_0^1(\\int_0^1f(x,y)dy)^2dx",
+        "gt_cdm": "\\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dx \\right)^{2} dy + \\int_{0}^{1} \\left( \\int_{0}^{1} f(x,y)dy \\right)^{2} dx",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 61,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            13
+        ],
+        "gt": "\\[\\le \\left( \\int_{0}^{1}\\int_{0}^{1} f(x,y)dxdy \\right)^{2} + \\int_{0}^{1}\\int_{0}^{1} [f(x,y)]^{2} dxdy.\\]",
+        "pred_idx": [
+            12
+        ],
+        "pred": "\\[& \\leq \\left( \\int_{0}^{1} \\int_{0}^{1} f(x,y)dxdy \\right)^2 + \\int_{0}^{1} \\int_{0}^{1} [f(x,y)]^2 dx dy.\\]",
+        "edit": 0.015384615384615385,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            13.002
+        ],
+        "pred_position": 2218,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\le(\\int_0^1\\int_0^1f(x,y)dxdy)^2+\\int_0^1\\int_0^1[f(x,y)]^2dxdy",
+        "norm_pred": "\\leq(\\int_0^1\\int_0^1f(x,y)dxdy)^2+\\int_0^1\\int_0^1[f(x,y)]^2dxdy",
+        "gt_cdm": "\\le \\left( \\int_{0}^{1}\\int_{0}^{1} f(x,y)dxdy \\right)^{2} + \\int_{0}^{1}\\int_{0}^{1} [f(x,y)]^{2} dxdy.",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 65,
+        "metric": {
+            "Edit_dist": 0.015384615384615385
+        },
+        "Edit_num": 1
+    },
+    {
+        "gt_idx": [
+            15
+        ],
+        "gt": "\\[c_{n} r, c_{n} r^{2}+c_{n-1} r, c_{n} r^{3}+c_{n-1} r^{2}+c_{n-2} r,\\]",
+        "pred_idx": [
+            14
+        ],
+        "pred": "\\[c_{n}r, & c_{n}r^{2} + c_{n - 1}r, c_{n}r^{3} + c_{n - 1}r^{2} + c_{n - 2}r,\\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            15.001
+        ],
+        "pred_position": 2554,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "c_nr,c_nr^2+c_n-1r,c_nr^3+c_n-1r^2+c_n-2r,",
+        "norm_pred": "c_nr,c_nr^2+c_n-1r,c_nr^3+c_n-1r^2+c_n-2r,",
+        "gt_cdm": "c_{n} r, c_{n} r^{2}+c_{n-1} r, c_{n} r^{3}+c_{n-1} r^{2}+c_{n-2} r,",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 42,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            16
+        ],
+        "gt": "\\[\\ldots, c_{n} r^{n}+c_{n-1} r^{n-1}+\\cdots+c_{1} r\\]",
+        "pred_idx": [
+            15
+        ],
+        "pred": "\\[& \\ldots, c_{n}r^{n} + c_{n - 1}r^{n - 1} + \\cdots + c_{1}r\\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            15.002
+        ],
+        "pred_position": 2633,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\ldots,c_nr^n+c_n-1r^n-1+\\cdots+c_1r",
+        "norm_pred": "\\ldots,c_nr^n+c_n-1r^n-1+\\cdots+c_1r",
+        "gt_cdm": "\\ldots, c_{n} r^{n}+c_{n-1} r^{n-1}+\\cdots+c_{1} r",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 36,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            19
+        ],
+        "gt": "$$\n\\frac{(m+n)!}{(m+n)^{m+n}} < \\frac{m!}{m^m}\\frac{n!}{n^n}.\n$$",
+        "pred_idx": [
+            18
+        ],
+        "pred": "\\[ \\frac{(m + n)!}{(m + n)^{m + n}} < \\frac{m!}{m^m} \\frac{n!}{n^n}. \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            18
+        ],
+        "pred_position": 2773,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\frac(m+n)!(m+n)^m+n<\\frac{m!}m^m\\frac{n!}n^n",
+        "norm_pred": "\\frac(m+n)!(m+n)^m+n<\\frac{m!}m^m\\frac{n!}n^n",
+        "gt_cdm": "\\frac{(m+n)!}{(m+n)^{m+n}} < \\frac{m!}{m^m}\\frac{n!}{n^n}.",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 45,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            21
+        ],
+        "gt": "$$R = \\{(x, y); 0 \\leq x \\leq a, 0 \\leq y \\leq f(x)\\}$$",
+        "pred_idx": [
+            20
+        ],
+        "pred": "\\[ R = \\left\\{ (x,y); 0 \\leq x \\leq a, 0 \\leq y \\leq f(x) \\right\\} \\]",
+        "edit": 0.0,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            20
+        ],
+        "pred_position": 3009,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "r=(x,y);0\\leqx\\leqa,0\\leqy\\leqf(x)",
+        "norm_pred": "r=(x,y);0\\leqx\\leqa,0\\leqy\\leqf(x)",
+        "gt_cdm": "R = \\{(x, y); 0 \\leq x \\leq a, 0 \\leq y \\leq f(x)\\}",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 34,
+        "metric": {
+            "Edit_dist": 0.0
+        },
+        "Edit_num": 0
+    },
+    {
+        "gt_idx": [
+            25
+        ],
+        "gt": "$$ \\lim_{x \\to 1^{-}} \\prod_{n=0}^{\\infty} \\left( \\frac{1+x^{n+1}}{1+x^{n}} \\right)^{x^{n}} . $$",
+        "pred_idx": [
+            24
+        ],
+        "pred": "\\[ \\operatorname* { l i m } _ { x \\to 1 ^ { - } } \\prod _ { n = 0 } ^ { \\infty } \\left( { \\frac { 1 + x ^ { n + 1 } } { 1 + x ^ { n } } } \\right) ^ { x ^ { n } } . \\]",
+        "edit": 0.037037037037037035,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            24
+        ],
+        "pred_position": 3657,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\lim_x\\to1^-\\prod_n=0^{\\infty}(\\frac1+x^n+11+x^n)^x^n",
+        "norm_pred": "*lim_x\\to1^-\\prod_n=0^{\\infty}({\\frac1+x^n+11+x^n)^x^n",
+        "gt_cdm": "\\lim_{x \\to 1^{-}} \\prod_{n=0}^{\\infty} \\left( \\frac{1+x^{n+1}}{1+x^{n}} \\right)^{x^{n}} .",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 54,
+        "metric": {
+            "Edit_dist": 0.037037037037037035
+        },
+        "Edit_num": 2
+    },
+    {
+        "gt_idx": [
+            27
+        ],
+        "gt": "$$ \\lim_{x \\to \\infty} N(x)/x = 0. $$",
+        "pred_idx": [
+            26
+        ],
+        "pred": "\\[ { \\operatorname* { l i m } _ { x \\to \\infty } } N ( x ) / x = 0 . \\]",
+        "edit": 0.07692307692307693,
+        "gt_category_type": "equation_isolated",
+        "gt_position": [
+            26
+        ],
+        "pred_position": 4338,
+        "pred_category_type": "equation_isolated",
+        "gt_attribute": [
+            {}
+        ],
+        "img_id": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "norm_gt": "\\lim_{x\\to\\infty}n(x)/x=0",
+        "norm_pred": "{*lim_{x\\to\\infty}n(x)/x=0",
+        "gt_cdm": "\\lim_{x \\to \\infty} N(x)/x = 0.",
+        "image_name": "exam_paper_en-file-putnam-archive_2004_Problems_2004_page_001.png",
+        "upper_len": 26,
+        "metric": {
+            "Edit_dist": 0.07692307692307693
+        },
+        "Edit_num": 2
+    }
+]

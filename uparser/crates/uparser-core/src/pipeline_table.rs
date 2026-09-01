@@ -1382,6 +1382,34 @@ fn matched_text_count(candidate: &TableCandidate, ocr_texts: &[String]) -> usize
         .count()
 }
 
+/// Returns true when the wired decoder introduces merged cells while the
+/// wireless decoder independently predicts a regular grid.
+pub fn wired_merges_unsupported_by_wireless(
+    wired: &TableCandidate,
+    wireless: &TableCandidate,
+) -> bool {
+    wired
+        .cells
+        .iter()
+        .any(|cell| cell.row_span > 1 || cell.column_span > 1)
+        && wireless
+            .cells
+            .iter()
+            .all(|cell| cell.row_span <= 1 && cell.column_span <= 1)
+}
+
+fn wired_has_unlikely_large_merge(wired: &TableCandidate, wireless: &TableCandidate) -> bool {
+    wireless.cells.len() > wired.cells.len()
+        && wireless
+            .cells
+            .iter()
+            .all(|cell| cell.row_span <= 1 && cell.column_span <= 1)
+        && wired
+            .cells
+            .iter()
+            .any(|cell| cell.row_span.saturating_mul(cell.column_span) >= 3)
+}
+
 /// Reproduce MinerU 3.4.5's wired-to-wireless fallback rules. The caller
 /// supplies decoded cells, so selection does not need a Python HTML parser.
 pub fn select_candidate(
@@ -1401,6 +1429,13 @@ pub fn select_candidate(
         .iter()
         .filter(|cell| !cell.text.trim().is_empty())
         .count();
+
+    if wired_has_unlikely_large_merge(wired, wireless) {
+        return TableSelection {
+            model: SelectedTableModel::Wireless,
+            reason: "wireless_regular_grid_resolves_large_wired_merge",
+        };
+    }
 
     let mut structure_switch = false;
     if wireless_non_blank > wired_non_blank {
@@ -1538,6 +1573,31 @@ mod tests {
     fn wired_remains_default_when_fallback_rules_do_not_fire() {
         let selection = select_candidate(&candidate(12, 1, "same"), &candidate(10, 3, "same"), &[]);
         assert_eq!(selection.model, SelectedTableModel::Wired);
+    }
+
+    #[test]
+    fn detects_wired_merges_not_supported_by_regular_wireless_structure() {
+        let mut wired = candidate(20, 0, "wired");
+        wired.cells[0].row_span = 2;
+        let wireless = candidate(20, 0, "wireless");
+
+        assert!(wired_merges_unsupported_by_wireless(&wired, &wireless));
+        assert!(!wired_merges_unsupported_by_wireless(&wireless, &wired));
+    }
+
+    #[test]
+    fn regular_wireless_grid_resolves_large_wired_merge() {
+        let mut wired = candidate(13, 0, "wired");
+        wired.cells[0].column_span = 3;
+        let wireless = candidate(15, 0, "wireless");
+
+        let selection = select_candidate(&wired, &wireless, &[]);
+
+        assert_eq!(selection.model, SelectedTableModel::Wireless);
+        assert_eq!(
+            selection.reason,
+            "wireless_regular_grid_resolves_large_wired_merge"
+        );
     }
 
     #[test]

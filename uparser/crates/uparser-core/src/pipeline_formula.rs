@@ -38,6 +38,27 @@ pub struct FormulaDecoder {
     tokenizer: Tokenizer,
 }
 
+fn tokens_through_eos(row: &[i64]) -> &[i64] {
+    row.iter()
+        .position(|&id| id == 2)
+        .map_or(row, |eos| &row[..=eos])
+}
+
+fn is_degenerate_repetition(text: &str) -> bool {
+    let compact: Vec<char> = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if compact.len() < 128 {
+        return false;
+    }
+    let max_period = 32.min(compact.len() / 16);
+    (1..=max_period).any(|period| {
+        let compared = compact.len() - period;
+        let matches = (period..compact.len())
+            .filter(|&index| compact[index] == compact[index % period])
+            .count();
+        matches * 100 >= compared * 98
+    })
+}
+
 impl FormulaDecoder {
     pub fn from_inference_yaml(path: impl AsRef<Path>) -> Result<Self, FormulaError> {
         let source = std::fs::read_to_string(path)?;
@@ -78,11 +99,8 @@ impl FormulaDecoder {
         }
         ids.chunks(sequence)
             .map(|row| {
-                let end = row
-                    .iter()
-                    .position(|&id| id == 2)
-                    .map_or(row.len(), |index| index + 1);
-                let ids: Result<Vec<u32>, FormulaError> = row[..end]
+                let row = tokens_through_eos(row);
+                let ids: Result<Vec<u32>, FormulaError> = row
                     .iter()
                     .map(|&id| {
                         u32::try_from(id)
@@ -93,7 +111,12 @@ impl FormulaDecoder {
                     .tokenizer
                     .decode(&ids?, true)
                     .map_err(|error| FormulaError::Tokenizer(error.to_string()))?;
-                Ok(fix_latex(&remove_chinese_text_wrapping(&text)))
+                let text = fix_latex(&remove_chinese_text_wrapping(&text));
+                Ok(if is_degenerate_repetition(&text) {
+                    String::new()
+                } else {
+                    text
+                })
             })
             .collect()
     }
@@ -248,5 +271,20 @@ mod tests {
         assert_eq!(fix_latex(r"\left(x+1"), "(x+1");
         assert_eq!(fix_latex(r"\upalpha+\uparrow"), r"\alpha+\uparrow");
         assert_eq!(remove_chinese_text_wrapping(r#"\text{速度 v}"#), "速度 v");
+    }
+
+    #[test]
+    fn generation_uses_eos_when_present_and_accepts_unterminated_output() {
+        assert_eq!(tokens_through_eos(&[7, 8, 2, 0]), &[7, 8, 2]);
+        assert_eq!(tokens_through_eos(&[7, 8, 9]), &[7, 8, 9]);
+    }
+
+    #[test]
+    fn generation_rejects_only_clear_periodic_degeneration() {
+        assert!(is_degenerate_repetition(&r"\bullet ".repeat(80)));
+        assert!(is_degenerate_repetition(&"abc".repeat(80)));
+        assert!(!is_degenerate_repetition(
+            r"\begin{matrix}a_{11}&a_{12}\\a_{21}&a_{22}\end{matrix}"
+        ));
     }
 }
