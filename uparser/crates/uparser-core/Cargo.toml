@@ -12,11 +12,6 @@ name = "uparser_core"
 name = "uparser"
 path = "src/main.rs"
 
-[[bin]]
-name = "uparser-native"
-path = "src/bin/uparser-native.rs"
-required-features = ["native"]
-
 [features]
 # Not default-on: `liteparse-pdfium-sys`'s build script downloads a
 # prebuilt PDFium binary from GitHub on first build, which isn't reliable
@@ -32,17 +27,10 @@ pdfium = ["dep:pdfium"]
 # so `--features native` builds fully offline. Not default-on only to keep
 # the default build minimal.
 native = ["dep:uparser-native-engine"]
-# Local ONNX inference for the `pipeline` protocol's `table` stage
-# (ARCHITECTURE.md §11.2). Not default-on: `ort`'s `download-binaries`
-# feature fetches a prebuilt ONNX Runtime binary on first build, same
-# network-availability caveat as `pdfium` above. Confirmed in this repo's
-# dev sandbox (Ubuntu 22.04 / glibc 2.35): the crate itself compiles
-# (`cargo build --lib --features pipeline-local-table` succeeds) but
-# linking a binary/test target fails — the prebuilt static ONNX Runtime
-# archive references glibc >=2.38 symbols. See `adapters/onnx_table.rs`'s
-# module doc for the full investigation; expected to work unmodified on
-# glibc >=2.38.
-pipeline-local-table = ["dep:ort"]
+# Test/diagnostic surface: re-exports the transport, tensor-wire and
+# pipeline decoder modules that `examples/*` smoke runners drive directly.
+# Not for library consumers — the supported API is `api`/`runner`/`types`.
+internals = []
 
 [dependencies]
 async-trait = "0.1"
@@ -67,7 +55,41 @@ file-format = { version = "0.29.0", features = ["reader"] }
 calamine = "0.26"
 csv = "1"
 tempfile = "3"
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["download-binaries", "tls-rustls", "std", "api-24"], optional = true }
+
+[[example]]
+name = "bare_formula_smoke"
+path = "examples/bare_formula_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "bare_model_smoke"
+path = "examples/bare_model_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "bare_ocr_smoke"
+path = "examples/bare_ocr_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "bare_unet_smoke"
+path = "examples/bare_unet_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "dots_ocr_smoke"
+path = "examples/dots_ocr_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "mineru_vlm_smoke"
+path = "examples/mineru_vlm_smoke.rs"
+required-features = ["internals"]
+
+[[example]]
+name = "monkeyocrv2_smoke"
+path = "examples/monkeyocrv2_smoke.rs"
+required-features = ["internals"]
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

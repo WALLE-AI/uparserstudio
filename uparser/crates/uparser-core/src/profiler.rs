@@ -84,21 +84,6 @@ pub fn profile_l1(format: DocumentFormat) -> DocumentProfile {
     }
 }
 
-/// L2 for source-semantic formats. The document engine remains the owner of
-/// parsing; this function only summarizes its canonical output for routing.
-pub fn profile_structured(
-    bytes: &[u8],
-    format: DocumentFormat,
-) -> Result<DocumentProfile, crate::ingest::IngestError> {
-    let document = uparser_document_engine::parse_document(
-        bytes,
-        format,
-        &uparser_document_engine::ParseOptions::default(),
-    )
-    .map_err(|error| crate::ingest::IngestError::Profiling(error.to_string()))?;
-    Ok(profile_structured_document(&document))
-}
-
 pub fn profile_structured_document(
     document: &uparser_document_engine::CanonicalDocument,
 ) -> DocumentProfile {
@@ -456,7 +441,6 @@ fn starts_with_numbered_clause(line: &str) -> bool {
 #[cfg(feature = "native")]
 mod l2 {
     use super::*;
-    use crate::ingest::IngestError;
     use crate::types::{ChartSubtype, TableSubtype};
     use std::collections::HashSet;
     use uparser_native_engine::PdfType;
@@ -465,17 +449,9 @@ mod l2 {
     /// pass, via the native engine's `process_pdf_mem()` classification
     /// (`opendataloader`-style: pdf_type + per-page table/column/OCR
     /// signals). Pure computation once the engine's output is in hand —
-    /// no model/network calls. Replaces the earlier `liteparse::is_complex`
-    /// path (native no longer depends on liteparse; see native.rs).
-    pub async fn profile_l2(
-        pdf_bytes: &[u8],
-        format: DocumentFormat,
-    ) -> Result<DocumentProfile, IngestError> {
-        let result = uparser_native_engine::process_pdf_mem(pdf_bytes)
-            .map_err(|e| IngestError::Profiling(e.to_string()))?;
-        Ok(profile_l2_result(&result, format))
-    }
-
+    /// no model/network calls. The runner always has that artifact
+    /// already (`runner::analyze_inner`), so this takes it by reference
+    /// rather than re-parsing the bytes.
     pub fn profile_l2_result(
         result: &uparser_native_engine::PdfProcessResult,
         format: DocumentFormat,
@@ -716,7 +692,7 @@ fn legacy_genre(kind: DocumentKind) -> DocumentGenre {
 }
 
 #[cfg(feature = "native")]
-pub use l2::{profile_l2, profile_l2_result};
+pub use l2::profile_l2_result;
 
 #[cfg(test)]
 mod tests {
@@ -881,6 +857,7 @@ mod tests {
             markdown: &str,
         ) -> PdfProcessResult {
             PdfProcessResult {
+                structure_hints: Default::default(),
                 pdf_type,
                 markdown: Some(markdown.to_owned()),
                 page_count,
@@ -977,8 +954,8 @@ mod tests {
             .to_string()
         }
 
-        #[tokio::test]
-        async fn l2_profiles_a_real_digitally_native_pdf() {
+        #[test]
+        fn l2_profiles_a_real_digitally_native_pdf() {
             let path = fixture_pdf_path();
             if !std::path::Path::new(&path).exists() {
                 eprintln!("skipping: no fixture PDF at {path}");
@@ -986,9 +963,9 @@ mod tests {
             }
             let bytes = std::fs::read(&path).expect("read fixture PDF");
 
-            let profile = profile_l2(&bytes, DocumentFormat::Pdf)
-                .await
-                .expect("profile_l2 succeeds");
+            let artifact =
+                uparser_native_engine::process_pdf_mem(&bytes).expect("engine parses fixture");
+            let profile = profile_l2_result(&artifact, DocumentFormat::Pdf);
 
             // T-8.1 (engine-backed L2): a genuine digitally-native PDF is
             // classified from the engine's real per-page table/OCR signals,
@@ -1007,8 +984,8 @@ mod tests {
             assert_eq!(profile.dominant_content, ContentMix::TableDense);
         }
 
-        #[tokio::test]
-        async fn l2_text_dominant_synthetic_no_tables_profiles_as_report() {
+        #[test]
+        fn l2_text_dominant_synthetic_no_tables_profiles_as_report() {
             // Directly exercises the TextDominant→Report branch without
             // depending on a specific corpus doc: a TextBased doc with no
             // table pages and no OCR pages must land TextDominant/Report.
@@ -1025,9 +1002,9 @@ mod tests {
                 return;
             }
             let bytes = std::fs::read(path).expect("read fixture");
-            let profile = profile_l2(&bytes, DocumentFormat::Pdf)
-                .await
-                .expect("profile_l2 succeeds");
+            let artifact =
+                uparser_native_engine::process_pdf_mem(&bytes).expect("engine parses fixture");
+            let profile = profile_l2_result(&artifact, DocumentFormat::Pdf);
             assert!(!profile.page_profiles.is_empty());
             assert!(
                 profile
@@ -1037,12 +1014,11 @@ mod tests {
             );
         }
 
-        #[tokio::test]
-        async fn l2_empty_document_is_unknown_not_a_panic() {
-            // Malformed/empty PDF bytes: is_complex should error cleanly,
-            // not panic.
-            let result = profile_l2(b"not a pdf", DocumentFormat::Pdf).await;
-            assert!(result.is_err());
+        #[test]
+        fn l2_empty_document_is_an_engine_error_not_a_panic() {
+            // Malformed/empty PDF bytes: the engine call that feeds L2
+            // (and `runner::analyze_inner`) must error cleanly, not panic.
+            assert!(uparser_native_engine::process_pdf_mem(b"not a pdf").is_err());
         }
     }
 }

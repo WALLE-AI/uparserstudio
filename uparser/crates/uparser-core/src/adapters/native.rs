@@ -23,8 +23,8 @@
 use super::{ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat};
 use crate::ingest::RenderedPage;
 use crate::types::{
-    AssetCaption, Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, Page, PageError,
-    ParseResult, RoutedBy, Span,
+    AssetCaption, Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, Page,
+    PageError, ParseResult, RoutedBy, Span,
 };
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -67,6 +67,7 @@ impl NativeAdapter {
             positioned_items,
             &artifact.struct_roles,
             &artifact.page_sizes,
+            &artifact.structure_hints,
         );
         let mut hasher = Sha256::new();
         hasher.update(pdf_bytes);
@@ -88,214 +89,6 @@ impl NativeAdapter {
         };
         (result, artifact.markdown)
     }
-
-    /// Parse once, whatever the input is.
-    ///
-    /// This is the entry point callers should use when they may need more
-    /// than one output format from the same file: the returned value carries
-    /// enough to render Markdown, `document-json` and the compatibility
-    /// `ParseResult` without touching the source bytes again.
-    pub async fn parse_native(
-        &self,
-        source_path: &str,
-        bytes: &[u8],
-        options: &uparser_document_engine::ParseOptions,
-    ) -> Result<NativeParse, PageError> {
-        let format = uparser_document_engine::detect_format(bytes, Some(source_path));
-        if format == uparser_document_engine::DocumentFormat::Pdf {
-            return Ok(NativeParse::Pdf(self.parse_pdf(source_path, bytes)?));
-        }
-        Ok(NativeParse::Structured(parse_structured(
-            bytes, format, options,
-        )?))
-    }
-
-    /// Parse a whole PDF via the native engine's positioned-text extraction —
-    /// zero model calls, zero external services, no PDFium.
-    pub async fn parse_document(
-        &self,
-        source_path: &str,
-        pdf_bytes: &[u8],
-    ) -> Result<ParseResult, PageError> {
-        match self
-            .parse_native(
-                source_path,
-                pdf_bytes,
-                &uparser_document_engine::ParseOptions::default(),
-            )
-            .await?
-        {
-            NativeParse::Pdf(result) => Ok(result),
-            NativeParse::Structured(parsed) => {
-                Ok(structured_to_parse_result(&parsed, source_path, pdf_bytes))
-            }
-        }
-    }
-
-    fn parse_pdf(&self, source_path: &str, pdf_bytes: &[u8]) -> Result<ParseResult, PageError> {
-        let items = uparser_native_engine::extractor::extract_text_with_positions_mem(pdf_bytes)
-            .map_err(|e| PageError {
-                page_num: 0,
-                message: format!("native engine extraction failed: {e}"),
-                stage: Some("native".into()),
-            })?;
-
-        let pages = build_pages(items, &HashMap::new(), &HashMap::new());
-
-        let mut hasher = Sha256::new();
-        hasher.update(pdf_bytes);
-        let source_sha256 = format!("{:x}", hasher.finalize());
-
-        Ok(ParseResult {
-            source_path: source_path.to_string(),
-            source_sha256,
-            protocol: "native".to_string(),
-            routed_by: RoutedBy::Explicit,
-            document_profile: None,
-            route_decision: None,
-            preprocess_plan: None,
-            model_endpoint: None,
-            model_name: None,
-            pages,
-            page_errors: vec![],
-            capability_notes: vec![],
-            warnings: vec![],
-            timing: Default::default(),
-        })
-    }
-
-    /// Render the document as the native engine's OWN markdown — its full
-    /// pipeline output (heading levels, paragraph grouping, three-strategy
-    /// tables). Coordinate-free; the bench-critical `--format markdown` path.
-    ///
-    /// Currently passes the engine markdown through verbatim (so it is
-    /// byte-identical to upstream pdf-inspector). The uparser enhancement
-    /// layer (design doc §4.6) is intentionally *not* wired here yet: the
-    /// opendataloader-bench MHS metric is heading-*level*-agnostic (it
-    /// treats all `#`/`##`/… as one "heading" tag), so the obvious
-    /// level-flattening tweak is a no-op; the real levers (heading
-    /// over-detection — engine emits 280 vs GT's 193 — and table TEDS) are
-    /// engine-core tuning, tracked in the design doc's §6.5/§6.6.
-    pub async fn native_markdown(
-        &self,
-        source_path: &str,
-        pdf_bytes: &[u8],
-    ) -> Result<String, PageError> {
-        let format = uparser_document_engine::detect_format(pdf_bytes, Some(source_path));
-        if format != uparser_document_engine::DocumentFormat::Pdf {
-            let document = uparser_document_engine::parse_document(
-                pdf_bytes,
-                format,
-                &uparser_document_engine::ParseOptions::default(),
-            )
-            .map_err(|error| PageError {
-                page_num: 0,
-                message: format!("native structured document parsing failed: {error}"),
-                stage: Some("native_document".into()),
-            })?;
-            return Ok(uparser_document_engine::render::markdown(&document));
-        }
-
-        let result = uparser_native_engine::process_pdf_mem(pdf_bytes).map_err(|e| PageError {
-            page_num: 0,
-            message: format!("native engine markdown rendering failed: {e}"),
-            stage: Some("native".into()),
-        })?;
-        Ok(result.markdown.unwrap_or_default())
-    }
-
-    pub async fn native_document_json(
-        &self,
-        source_path: &str,
-        bytes: &[u8],
-    ) -> Result<String, PageError> {
-        let format = uparser_document_engine::detect_format(bytes, Some(source_path));
-        if format == uparser_document_engine::DocumentFormat::Pdf {
-            return Err(PageError {
-                page_num: 0,
-                message:
-                    "document-json is currently available for structured native documents, not PDF"
-                        .to_owned(),
-                stage: Some("native_document".into()),
-            });
-        }
-        let document = uparser_document_engine::parse_document(
-            bytes,
-            format,
-            &uparser_document_engine::ParseOptions::default(),
-        )
-        .map_err(|error| PageError {
-            page_num: 0,
-            message: format!("native structured document parsing failed: {error}"),
-            stage: Some("native_document".into()),
-        })?;
-        uparser_document_engine::render::document_json(&document).map_err(|error| PageError {
-            page_num: 0,
-            message: format!("document-json serialization failed: {error}"),
-            stage: Some("native_document".into()),
-        })
-    }
-}
-
-/// A structured (non-PDF) document, parsed exactly once.
-///
-/// Every output surface — Markdown, `document-json`, and the compatibility
-/// `ParseResult` — is derived from this one value. Each used to re-parse the
-/// source independently, so asking for `document-json` parsed the same bytes
-/// twice.
-pub struct StructuredDocument {
-    pub document: uparser_document_engine::CanonicalDocument,
-    pub format: uparser_document_engine::DocumentFormat,
-}
-
-/// What a native parse produced: PDFs go through the PDF engine, everything
-/// else through the structured-document engine.
-pub enum NativeParse {
-    Pdf(ParseResult),
-    Structured(StructuredDocument),
-}
-
-/// Machine-readable failure kind, carried on `PageError::stage`.
-///
-/// The CLI turns this into a semantic exit code. Without it every structured
-/// failure surfaced as "internal error", which told an agent to retry — the
-/// wrong advice for an encrypted file or an input over its size budget.
-pub fn document_error_stage(error: &uparser_document_engine::DocumentError) -> &'static str {
-    use uparser_document_engine::DocumentError as E;
-    match error {
-        E::UnsupportedFormat(_) => "native_document.unsupported_format",
-        E::Encrypted => "native_document.encrypted",
-        E::ResourceLimit { .. } => "native_document.resource_limit",
-        E::MissingPart { .. } => "native_document.missing_part",
-        E::Malformed { .. } => "native_document.malformed",
-        E::Io(_) => "native_document.io",
-        _ => "native_document",
-    }
-}
-
-fn parse_structured(
-    bytes: &[u8],
-    format: uparser_document_engine::DocumentFormat,
-    options: &uparser_document_engine::ParseOptions,
-) -> Result<StructuredDocument, PageError> {
-    let document =
-        uparser_document_engine::parse_document(bytes, format, options).map_err(|error| {
-            PageError {
-                page_num: 0,
-                message: format!("native structured document parsing failed: {error}"),
-                stage: Some(document_error_stage(&error).into()),
-            }
-        })?;
-    Ok(StructuredDocument { document, format })
-}
-
-/// Lower a structured document onto the page/block `ParseResult` contract.
-pub fn structured_to_parse_result(
-    parsed: &StructuredDocument,
-    source_path: &str,
-    bytes: &[u8],
-) -> ParseResult {
-    crate::structured::to_parse_result(&parsed.document, source_path, bytes)
 }
 
 /// Group all pages' positioned items into `Page`s of coherent line-`Block`s.
@@ -303,6 +96,7 @@ fn build_pages(
     items: Vec<TextItem>,
     struct_roles: &HashMap<u32, HashMap<i64, StructRole>>,
     page_sizes: &HashMap<u32, [f32; 2]>,
+    hints: &uparser_native_engine::StructureHints,
 ) -> Vec<Page> {
     let mut by_page: BTreeMap<u32, Vec<TextItem>> = BTreeMap::new();
     for it in items {
@@ -322,6 +116,7 @@ fn build_pages(
                 items,
                 struct_roles.get(&page_num),
                 page_sizes.get(&page_num).copied(),
+                hints,
             )
         })
         .collect()
@@ -338,6 +133,7 @@ fn build_page(
     items: Vec<TextItem>,
     struct_roles: Option<&HashMap<i64, StructRole>>,
     page_size: Option<[f32; 2]>,
+    hints: &uparser_native_engine::StructureHints,
 ) -> Page {
     // Prefer the source MediaBox and retain the item-derived extent as a
     // defensive floor for malformed page dictionaries.
@@ -360,41 +156,99 @@ fn build_page(
             .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    // Cluster into lines by vertical proximity of adjacent (already sorted)
-    // items — same line when the y-centers are within ~0.6× the glyph height.
-    let mut lines: Vec<Vec<TextItem>> = Vec::new();
-    for it in items {
-        let center = it.y + it.height / 2.0;
-        let same_line = lines.last().and_then(|l| l.last()).is_some_and(|last| {
-            let lc = last.y + last.height / 2.0;
-            let tol = (it.height.max(last.height) * 0.6).max(1.0);
-            (lc - center).abs() <= tol
-        });
-        if same_line {
-            lines.last_mut().unwrap().push(it);
-        } else {
-            lines.push(vec![it]);
-        }
-    }
+    let lines = group_lines(page_num, items, hints);
 
-    let mut blocks: Vec<Block> = lines
+    // Lines the engine already claimed for a table are not paragraphs: drop
+    // them here and emit one table block per hint below, so the IR carries the
+    // table the Markdown pipeline detected instead of its shredded rows.
+    let mut table_blocks: Vec<Block> = Vec::new();
+    let mut claimed_tables: std::collections::HashSet<usize> = Default::default();
+    let blocks: Vec<Block> = lines
         .into_iter()
-        .map(|mut line| {
+        .enumerate()
+        .filter_map(|(order, mut line)| {
             line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-            build_line_block(&line, page_top, struct_roles)
+            let line_bbox = pdf_bbox(&line);
+            let line_text: String = line.iter().map(|item| item.text.as_str()).collect();
+            if let Some((index, table)) = line_bbox.and_then(|bbox| {
+                hints
+                    .tables
+                    .iter()
+                    .position(|hint| {
+                        hint.page == page_num
+                            && hints
+                                .table_at(page_num, bbox, &line_text)
+                                .is_some_and(|found| std::ptr::eq(found, hint))
+                    })
+                    .map(|index| (index, &hints.tables[index]))
+            }) {
+                if claimed_tables.insert(index) {
+                    table_blocks.extend(build_table_blocks(table, page_top));
+                }
+                return None;
+            }
+            let mut block = build_line_block(&line, page_top, struct_roles);
+            // A heading the engine committed to in its Markdown pass. Only
+            // applied when the struct tree did not already say otherwise —
+            // an explicit PDF tag outranks a visual heuristic.
+            if block.category.as_deref() != Some("title")
+                && let Some(bbox) = line_bbox
+                && let Some(heading) = hints.heading_at(page_num, bbox)
+            {
+                block.category_raw = "Title".to_owned();
+                block.category = Some("title".to_owned());
+                block.merge_hint = Some(MergeHint::TitleLevel(heading.level));
+            }
+            block.reading_order = Some(order as u32);
+            Some(block)
         })
         .collect();
+    // A table's recorded order is the position of the line it was emitted
+    // *before*, so it has to sort ahead of that line at the same order.
+    // Carrying the distinction alongside the block keeps it out of the IR,
+    // where a doubled or fractional `reading_order` would be a rank nothing
+    // else in the codebase means.
+    let mut blocks: Vec<(bool, Block)> =
+        blocks.into_iter().map(|block| (false, block)).collect();
+    blocks.extend(table_blocks.into_iter().map(|block| (true, block)));
 
     blocks.extend(
         images
             .iter()
-            .map(|image| build_image_block(image, page_top)),
+            .map(|image| (false, build_image_block(image, page_top))),
     );
-    blocks.sort_by(|a, b| {
-        let a_box = a.bbox_px.unwrap_or([0; 4]);
-        let b_box = b.bbox_px.unwrap_or([0; 4]);
-        a_box[1].cmp(&b_box[1]).then(a_box[0].cmp(&b_box[0]))
-    });
+    // Reading order beats geometry on a multi-column page: sorting by
+    // top-to-bottom/left-to-right interleaves the columns, which is exactly
+    // the error the engine's column detection exists to avoid.
+    //
+    // Blocks without an order (tables, images) are anchored to the last
+    // ordered block above them, so they keep their place in the flow. This
+    // has to be one key for every block: comparing some pairs by order and
+    // others by geometry is not a total order, and `sort_by` aborts the
+    // process when it detects that.
+    let mut anchors: Vec<(u32, i32)> = blocks
+        .iter()
+        .filter_map(|(_, block)| Some((block.reading_order?, block.bbox_px.unwrap_or([0; 4])[1])))
+        .collect();
+    anchors.sort_by_key(|(order, _)| *order);
+    let sort_key = |(is_table, block): &(bool, Block)| -> (u32, u8, i32, i32) {
+        let bbox = block.bbox_px.unwrap_or([0; 4]);
+        match block.reading_order {
+            Some(order) if *is_table => (order, 0, bbox[1], bbox[0]),
+            Some(order) => (order, 1, bbox[1], bbox[0]),
+            None => match anchors
+                .iter()
+                .filter(|(_, top)| *top <= bbox[1])
+                .map(|(order, _)| *order)
+                .max()
+            {
+                Some(anchor) => (anchor, 2, bbox[1], bbox[0]),
+                None => (0, 0, bbox[1], bbox[0]),
+            },
+        }
+    };
+    blocks.sort_by_key(sort_key);
+    let mut blocks: Vec<Block> = blocks.into_iter().map(|(_, block)| block).collect();
     demote_inferred_formulas_inside_assets(&mut blocks);
     bind_asset_captions(&mut blocks);
 
@@ -498,6 +352,167 @@ fn vector_chart_item(page: u32, region: [f32; 4], page_size: [f32; 2]) -> TextIt
 
 /// Assemble one coherent line (its already-x-sorted items) into a `Block`,
 /// flipping PDF coords to top-left pixel space via `page_top`.
+/// Group a page's items into lines.
+///
+/// Prefers the engine's own grouping (`StructureHints::lines`), which is
+/// column-aware: clustering by vertical proximity alone fuses the left and
+/// right columns of a two-column page into one line, which corrupts the text
+/// itself rather than merely mislabelling it. Items the engine did not place
+/// — and every item when no hints exist, e.g. `ProcessMode::Analyze` — fall
+/// back to the proximity clustering this used to do exclusively.
+fn group_lines(
+    page_num: u32,
+    items: Vec<TextItem>,
+    hints: &uparser_native_engine::StructureHints,
+) -> Vec<Vec<TextItem>> {
+    let mut hinted: BTreeMap<usize, Vec<TextItem>> = BTreeMap::new();
+    let mut unplaced: Vec<TextItem> = Vec::new();
+    for item in items {
+        let center = [item.x + item.width / 2.0, item.y + item.height / 2.0];
+        match hints.line_at(page_num, center) {
+            Some(line) => hinted.entry(line.order).or_default().push(item),
+            None => unplaced.push(item),
+        }
+    }
+
+    let mut lines: Vec<Vec<TextItem>> = hinted.into_values().collect();
+    // Proximity fallback for whatever the engine did not account for.
+    let mut current: Vec<TextItem> = Vec::new();
+    for item in unplaced {
+        let center = item.y + item.height / 2.0;
+        let same_line = current.last().is_some_and(|last| {
+            let last_center = last.y + last.height / 2.0;
+            let tolerance = (item.height.max(last.height) * 0.6).max(1.0);
+            (last_center - center).abs() <= tolerance
+        });
+        if same_line {
+            current.push(item);
+        } else {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            current.push(item);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Bounding box of a line in PDF coordinates (origin bottom-left), which is
+/// the frame `structure_export`'s hints are expressed in.
+fn pdf_bbox(line: &[TextItem]) -> Option<[f32; 4]> {
+    let first = line.first()?;
+    let mut bbox = [
+        first.x,
+        first.y,
+        first.x + first.width,
+        first.y + first.height,
+    ];
+    for item in &line[1..] {
+        bbox[0] = bbox[0].min(item.x);
+        bbox[1] = bbox[1].min(item.y);
+        bbox[2] = bbox[2].max(item.x + item.width);
+        bbox[3] = bbox[3].max(item.y + item.height);
+    }
+    Some(bbox)
+}
+
+/// One `table`-category block carrying the engine-detected grid as HTML.
+///
+/// The IR has no table type of its own; `html` is how every other protocol
+/// carries a table, so the same renderer handles all of them.
+/// Blocks for one engine-detected table.
+///
+/// A table of contents is not a data table: the engine renders it as a flat
+/// tab-aligned list because a two-column Markdown table drifts the page
+/// numbers away from their titles. `TableKind` already carries that
+/// distinction, so the IR honours it rather than flattening both into a grid.
+fn build_table_blocks(hint: &uparser_native_engine::TableHint, page_top: f32) -> Vec<Block> {
+    if hint.kind == uparser_native_engine::tables::TableKind::Toc {
+        return hint
+            .cells
+            .iter()
+            .filter(|row| row.iter().any(|cell| !cell.trim().is_empty()))
+            .map(|row| {
+                let text = row
+                    .iter()
+                    .map(|cell| cell.trim())
+                    .filter(|cell| !cell.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                Block {
+                    category_raw: "TocEntry".to_owned(),
+                    category: Some("text".to_owned()),
+                    text: Some(text),
+                    ..table_block_skeleton(hint, page_top)
+                }
+            })
+            .collect();
+    }
+    vec![build_table_block(hint, page_top)]
+}
+
+/// Geometry and provenance shared by every block derived from a table hint.
+fn table_block_skeleton(hint: &uparser_native_engine::TableHint, page_top: f32) -> Block {
+    let bbox_px = [
+        hint.bbox[0].round() as i32,
+        (page_top - hint.bbox[3]).round() as i32,
+        hint.bbox[2].round() as i32,
+        (page_top - hint.bbox[1]).round() as i32,
+    ];
+    Block {
+        geom: Geometry::Rect([
+            bbox_px[0] as f32,
+            bbox_px[1] as f32,
+            bbox_px[2] as f32,
+            bbox_px[3] as f32,
+        ]),
+        geom_frame: CoordFrame::Page,
+        bbox_px: Some(bbox_px),
+        category_raw: String::new(),
+        category: None,
+        // Where the engine's writer put this table in the flow. A table's
+        // own geometry does not say where it is read: on a two-column page
+        // sorting by `y` moves every table to the bottom of the page, which
+        // is what the engine's own column-aware placement exists to avoid.
+        reading_order: hint.order.map(|order| order as u32),
+        text: None,
+        html: None,
+        latex: None,
+        spans: Vec::new(),
+        merge_hint: None,
+        confidence: None,
+        source: BlockSource::NativeTextLayer,
+        error: None,
+        asset_bytes: None,
+        asset_path: None,
+        asset_caption: None,
+    }
+}
+
+fn build_table_block(hint: &uparser_native_engine::TableHint, page_top: f32) -> Block {
+    let mut html = String::from("<table>");
+    for row in &hint.cells {
+        html.push_str("<tr>");
+        for cell in row {
+            html.push_str("<td>");
+            html.push_str(&crate::otsl::escape_html(cell));
+            html.push_str("</td>");
+        }
+        html.push_str("</tr>");
+    }
+    html.push_str("</table>");
+
+    Block {
+        category_raw: "Table".to_owned(),
+        category: Some("table".to_owned()),
+        html: Some(html),
+        ..table_block_skeleton(hint, page_top)
+    }
+}
+
 fn build_line_block(
     line: &[TextItem],
     page_top: f32,
@@ -549,6 +564,15 @@ fn build_line_block(
             let sy0 = page_top - (it.y + it.height);
             let sy1 = page_top - it.y;
             Span {
+                // The PDF font's own flags — the only place inline styling
+                // exists in a PDF, and until now discarded on the way into
+                // the IR.
+                style: crate::types::SpanStyle {
+                    bold: it.is_bold,
+                    italic: it.is_italic,
+                    underline: it.is_underline,
+                    strike: it.is_strikeout,
+                },
                 text: it.text.clone(),
                 bbox_px: Some([
                     it.x.round() as i32,
@@ -569,6 +593,14 @@ fn build_line_block(
             ("text", "text")
         }
     });
+    // A tagged PDF names its heading level; carry it so the IR (and every
+    // renderer driven by it) can reproduce the hierarchy. Untagged PDFs —
+    // most of a real corpus — have no such tag, and the engine's own
+    // visual heading heuristic lives in its Markdown pipeline rather than
+    // in the item stream, so those still arrive here as plain text. That
+    // gap is why `--markdown-source canonical` scores far below `engine`
+    // on opendataloader-bench; see O5.3.
+    let merge_hint = heading_level(line, struct_roles).map(MergeHint::TitleLevel);
 
     Block {
         geom: Geometry::Rect([x0, y0, x1, y1]),
@@ -581,7 +613,7 @@ fn build_line_block(
         html: None,
         latex: None,
         spans,
-        merge_hint: None,
+        merge_hint,
         confidence: inferred_formula_confidence,
         source: BlockSource::NativeTextLayer,
         error: None,
@@ -1092,6 +1124,22 @@ fn item_struct_role<'a>(
     struct_roles?.get(&item.mcid?)
 }
 
+/// The heading level a tagged PDF declares for this line, if any.
+/// A bare `H` (level-less heading tag) is reported as level 1.
+fn heading_level(line: &[TextItem], struct_roles: Option<&HashMap<i64, StructRole>>) -> Option<u8> {
+    line.iter()
+        .filter_map(|item| item_struct_role(item, struct_roles))
+        .find_map(|role| match role {
+            StructRole::H | StructRole::H1 => Some(1),
+            StructRole::H2 => Some(2),
+            StructRole::H3 => Some(3),
+            StructRole::H4 => Some(4),
+            StructRole::H5 => Some(5),
+            StructRole::H6 => Some(6),
+            _ => None,
+        })
+}
+
 fn line_semantic_category<'a>(
     line: &[TextItem],
     struct_roles: Option<&'a HashMap<i64, StructRole>>,
@@ -1114,6 +1162,22 @@ fn line_semantic_category<'a>(
             "caption",
         ),
         (|role| matches!(role, StructRole::Code), "Code", "code"),
+        (
+            |role| {
+                matches!(
+                    role,
+                    StructRole::H
+                        | StructRole::H1
+                        | StructRole::H2
+                        | StructRole::H3
+                        | StructRole::H4
+                        | StructRole::H5
+                        | StructRole::H6
+                )
+            },
+            "Title",
+            "title",
+        ),
         (
             |role| matches!(role, StructRole::LI | StructRole::Lbl | StructRole::LBody),
             "List-item",
@@ -1279,45 +1343,124 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Regression guard for the line clustering in `build_page`: native must
+    /// map one `Block` per coherent *line*, not one per raw span, or every
+    /// downstream consumer sees a page shredded into fragments.
+    ///
+    /// Retargeted in O5 from the deleted `NativeAdapter::parse_document`
+    /// wrapper onto `parse_pdf_artifact`, which is the path the runner
+    /// actually takes.
     #[test]
-    fn document_errors_have_stable_machine_readable_stages() {
-        use uparser_document_engine::{DocumentError, DocumentFormat};
-
-        let cases = [
-            (
-                DocumentError::UnsupportedFormat(DocumentFormat::Unknown),
-                "native_document.unsupported_format",
-            ),
-            (DocumentError::Encrypted, "native_document.encrypted"),
-            (
-                DocumentError::ResourceLimit {
-                    limit: "bytes",
-                    detail: "too large".to_owned(),
-                },
-                "native_document.resource_limit",
-            ),
-            (
-                DocumentError::MissingPart {
-                    part: "document.xml".to_owned(),
-                },
-                "native_document.missing_part",
-            ),
-            (
-                DocumentError::Malformed {
-                    part: Some("document.xml".to_owned()),
-                    detail: "bad XML".to_owned(),
-                },
-                "native_document.malformed",
-            ),
-            (
-                DocumentError::Io(std::io::Error::other("read failed")),
-                "native_document.io",
-            ),
-        ];
-
-        for (error, expected) in cases {
-            assert_eq!(document_error_stage(&error), expected);
+    fn pdf_artifact_yields_coherent_multiword_lines_not_span_fragments() {
+        let path = fixture_pdf_path();
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("skipping: no fixture PDF at {path}");
+            return;
         }
+        let bytes = std::fs::read(&path).expect("read fixture PDF");
+        let artifact = uparser_native_engine::process_pdf_mem(&bytes).expect("engine parses");
+        let (result, markdown) = NativeAdapter::parse_pdf_artifact(&path, &bytes, artifact);
+
+        assert!(markdown.is_some(), "engine markdown must come back too");
+        let blocks: Vec<&Block> = result
+            .pages
+            .iter()
+            .flat_map(|page| &page.blocks)
+            .filter(|block| block.text.is_some())
+            .collect();
+        assert!(!blocks.is_empty());
+        let multiword = blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.split_whitespace().count() > 1)
+            })
+            .count();
+        assert!(
+            multiword * 2 > blocks.len(),
+            "most blocks must be whole lines, got {multiword}/{}",
+            blocks.len()
+        );
+    }
+
+    /// EPUB is the one structured format whose units are chapters rather
+    /// than pages or sheets; the lowering must preserve that, since it is
+    /// what makes per-chapter reading order meaningful.
+    ///
+    /// Retargeted in O5 onto the live `document engine -> structured::to_parse_result`
+    /// path that the runner uses.
+    #[test]
+    fn epub_lowers_chapter_units_through_the_live_structured_path() {
+        let bytes = zip_package(&[
+            ("mimetype", "application/epub+zip"),
+            (
+                "META-INF/container.xml",
+                "<container><rootfiles><rootfile full-path=\"book.opf\"/></rootfiles></container>",
+            ),
+            (
+                "book.opf",
+                "<package><manifest><item id=\"c1\" href=\"c1.xhtml\"                  media-type=\"application/xhtml+xml\"/></manifest>                 <spine><itemref idref=\"c1\"/></spine></package>",
+            ),
+            (
+                "c1.xhtml",
+                "<html><body><h1>Chapter One</h1><p>Body text.</p></body></html>",
+            ),
+        ]);
+        let document = uparser_document_engine::parse_document(
+            &bytes,
+            uparser_document_engine::DocumentFormat::Epub,
+            &uparser_document_engine::ParseOptions::default(),
+        )
+        .expect("epub parses");
+        assert_eq!(
+            document.units[0].kind,
+            uparser_document_engine::UnitKind::Chapter
+        );
+
+        let result = crate::structured::to_parse_result(&document, "book.epub", &bytes);
+        assert_eq!(result.protocol, "native:epub");
+        assert!(
+            result.pages[0]
+                .blocks
+                .iter()
+                .any(|block| block.category.as_deref() == Some("title"))
+        );
+    }
+
+    /// Blocks carry a reading order only when the engine placed their line;
+    /// tables and images do not. Comparing ordered pairs by order and mixed
+    /// pairs by geometry is not a total order, and Rust's sort detects that
+    /// and aborts the process — this reproduces the shape that crashed.
+    #[test]
+    fn mixed_ordered_and_unordered_blocks_sort_without_panicking() {
+        let page_size = HashMap::from([(1u32, [612.0_f32, 792.0_f32])]);
+        let mut items = Vec::new();
+        for row in 0..12 {
+            let y = 700.0 - row as f32 * 20.0;
+            items.push(text_item(
+                &format!("line {row}"),
+                50.0,
+                y,
+                10.0,
+                1,
+                ItemType::Text,
+            ));
+            items.push(text_item(
+                "[Image: fig]",
+                300.0,
+                y,
+                40.0,
+                1,
+                ItemType::Image,
+            ));
+        }
+        // No hints: every text block falls back to proximity clustering and
+        // gets an order, while every image block has none.
+        let pages = build_pages(items, &HashMap::new(), &page_size, &Default::default());
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].blocks.len() > 1);
     }
 
     #[test]
@@ -1340,6 +1483,7 @@ mod tests {
             ],
             &HashMap::new(),
             &HashMap::new(),
+            &Default::default(),
         );
 
         assert_eq!(pages.len(), 2);
@@ -1371,6 +1515,7 @@ mod tests {
             vec![image, caption_label, caption_body],
             &HashMap::new(),
             &HashMap::from([(1, [420.0, 500.0])]),
+            &Default::default(),
         );
         let asset = pages[0]
             .blocks
@@ -1400,6 +1545,7 @@ mod tests {
             vec![image, caption],
             &roles,
             &HashMap::from([(1, [420.0, 500.0])]),
+            &Default::default(),
         );
         let asset = pages[0]
             .blocks
@@ -1425,6 +1571,7 @@ mod tests {
             vec![image, table_caption],
             &HashMap::new(),
             &HashMap::from([(1, [420.0, 500.0])]),
+            &Default::default(),
         );
         let asset = pages[0]
             .blocks
@@ -1484,6 +1631,7 @@ mod tests {
             ],
             &HashMap::new(),
             &HashMap::from([(1, [460.0, 500.0])]),
+            &Default::default(),
         );
         let mut links: Vec<_> = pages[0]
             .blocks
@@ -1536,6 +1684,7 @@ mod tests {
             vec![left, right, caption, continuation],
             &HashMap::new(),
             &HashMap::from([(1, [400.0, 500.0])]),
+            &Default::default(),
         );
         let links: Vec<_> = pages[0]
             .blocks
@@ -1550,6 +1699,35 @@ mod tests {
         }));
     }
 
+    /// A tagged PDF's heading level reaches the IR (O5.2/O5.3): without it
+    /// the canonical renderer sees only paragraphs and every
+    /// heading-hierarchy metric collapses to zero.
+    #[test]
+    fn tagged_heading_roles_become_titles_carrying_their_level() {
+        let mut h1 = text_item("Chapter", 10.0, 120.0, 60.0, 1, ItemType::Text);
+        h1.mcid = Some(1);
+        let mut h3 = text_item("Subsection", 10.0, 90.0, 70.0, 1, ItemType::Text);
+        h3.mcid = Some(3);
+        let mut body = text_item("Body text", 10.0, 60.0, 60.0, 1, ItemType::Text);
+        body.mcid = Some(4);
+        let page_roles =
+            HashMap::from([(1, StructRole::H1), (3, StructRole::H3), (4, StructRole::P)]);
+        let pages = build_pages(
+            vec![h1, h3, body],
+            &HashMap::from([(1, page_roles)]),
+            &HashMap::new(),
+            &Default::default(),
+        );
+
+        let blocks = &pages[0].blocks;
+        assert_eq!(blocks[0].category.as_deref(), Some("title"));
+        assert_eq!(blocks[0].merge_hint, Some(MergeHint::TitleLevel(1)));
+        assert_eq!(blocks[1].category.as_deref(), Some("title"));
+        assert_eq!(blocks[1].merge_hint, Some(MergeHint::TitleLevel(3)));
+        assert_eq!(blocks[2].category.as_deref(), Some("text"));
+        assert_eq!(blocks[2].merge_hint, None);
+    }
+
     #[test]
     fn tagged_pdf_roles_survive_in_block_and_span_ir() {
         let mut formula = text_item("E = mc2", 10.0, 90.0, 40.0, 1, ItemType::Text);
@@ -1561,7 +1739,12 @@ mod tests {
         page_roles.insert(8, StructRole::Note);
         let roles = HashMap::from([(1, page_roles)]);
 
-        let pages = build_pages(vec![formula, note], &roles, &HashMap::new());
+        let pages = build_pages(
+            vec![formula, note],
+            &roles,
+            &HashMap::new(),
+            &Default::default(),
+        );
 
         assert_eq!(pages[0].blocks[0].category_raw, "Formula");
         assert_eq!(pages[0].blocks[0].category.as_deref(), Some("equation"));
@@ -1591,6 +1774,7 @@ mod tests {
             vec![e, equals, m, c, squared],
             &HashMap::new(),
             &HashMap::from([(1, [300.0, 500.0])]),
+            &Default::default(),
         );
         let formula = &pages[0].blocks[0];
         assert_eq!(formula.category_raw, "Formula");
@@ -1623,6 +1807,7 @@ mod tests {
             items,
             &HashMap::new(),
             &HashMap::from([(1, [300.0, 500.0])]),
+            &Default::default(),
         );
         assert_eq!(pages[0].blocks[0].category.as_deref(), Some("equation"));
         assert!(
@@ -1671,6 +1856,7 @@ mod tests {
                 .collect(),
             &HashMap::new(),
             &HashMap::from([(1, [320.0, 500.0])]),
+            &Default::default(),
         );
         assert_eq!(pages[0].blocks.len(), 3);
         assert!(
@@ -1696,6 +1882,7 @@ mod tests {
             math_font_prose,
             &HashMap::new(),
             &HashMap::from([(1, [320.0, 500.0])]),
+            &Default::default(),
         );
         assert_eq!(pages[0].blocks[0].category.as_deref(), Some("text"));
     }
@@ -1715,6 +1902,7 @@ mod tests {
             vec![image, x, equals, value],
             &HashMap::new(),
             &HashMap::from([(1, [320.0, 500.0])]),
+            &Default::default(),
         );
         let label = pages[0]
             .blocks
@@ -1733,6 +1921,7 @@ mod tests {
             vec![image],
             &HashMap::new(),
             &HashMap::from([(1, [612.0, 792.0])]),
+            &Default::default(),
         );
 
         assert_eq!((pages[0].width_px, pages[0].height_px), (612, 792));
@@ -1751,6 +1940,7 @@ mod tests {
             vec![item],
             &HashMap::new(),
             &HashMap::from([(3, [612.0, 792.0])]),
+            &Default::default(),
         );
 
         assert_eq!(pages[0].page_num, 3);
@@ -1762,6 +1952,7 @@ mod tests {
     fn scanned_reason_materializes_but_blank_no_text_reason_does_not() {
         use uparser_native_engine::{LayoutComplexity, PageOcrReasons, PdfProcessResult, PdfType};
         let artifact = PdfProcessResult {
+            structure_hints: Default::default(),
             pdf_type: PdfType::Mixed,
             markdown: None,
             page_count: 2,
@@ -1801,244 +1992,12 @@ mod tests {
             vec![item],
             &HashMap::new(),
             &HashMap::from([(1, [612.0, 792.0])]),
+            &Default::default(),
         );
 
         let block = &pages[0].blocks[0];
         assert_eq!(block.category_raw, "VectorChart");
         assert_eq!(block.category.as_deref(), Some("chart"));
         assert_eq!(block.bbox_px, Some([80, 372, 320, 612]));
-    }
-
-    #[tokio::test]
-    async fn malformed_native_inputs_return_typed_errors() {
-        let adapter = NativeAdapter;
-        let pdf = b"%PDF-1.7\nnot a valid PDF";
-
-        let parse_error = adapter
-            .parse_document("broken.pdf", pdf)
-            .await
-            .expect_err("broken PDF must fail");
-        assert_eq!(parse_error.stage.as_deref(), Some("native"));
-
-        let markdown_error = adapter
-            .native_markdown("broken.pdf", pdf)
-            .await
-            .expect_err("broken PDF markdown must fail");
-        assert_eq!(markdown_error.stage.as_deref(), Some("native"));
-
-        let json_error = adapter
-            .native_document_json("broken.pdf", pdf)
-            .await
-            .expect_err("PDF document-json must be rejected");
-        assert_eq!(json_error.stage.as_deref(), Some("native_document"));
-
-        let structured_error = adapter
-            .parse_document("broken.docx", b"not a zip package")
-            .await
-            .expect_err("broken DOCX must fail");
-        assert!(
-            structured_error
-                .stage
-                .as_deref()
-                .is_some_and(|stage| stage.starts_with("native_document"))
-        );
-    }
-
-    #[tokio::test]
-    async fn structured_parse_enforces_caller_resource_limits() {
-        let mut options = uparser_document_engine::ParseOptions::default();
-        options.limits.max_input_bytes = 4;
-        let error = match NativeAdapter
-            .parse_native("large.csv", b"name,value\nalpha,42\n", &options)
-            .await
-        {
-            Ok(_) => panic!("input over the configured limit must fail"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            error.stage.as_deref(),
-            Some("native_document.resource_limit")
-        );
-    }
-
-    #[tokio::test]
-    async fn parse_document_extracts_real_pdf_text() {
-        let path = fixture_pdf_path();
-        if !std::path::Path::new(&path).exists() {
-            eprintln!("skipping: no fixture PDF at {path}");
-            return;
-        }
-        let bytes = std::fs::read(&path).expect("read fixture PDF");
-        let result = NativeAdapter
-            .parse_document(&path, &bytes)
-            .await
-            .expect("native parse succeeds");
-
-        assert_eq!(result.protocol, "native");
-        assert!(!result.pages.is_empty());
-        let total_text: usize = result
-            .pages
-            .iter()
-            .flat_map(|p| &p.blocks)
-            .filter_map(|b| b.text.as_ref())
-            .map(|t| t.len())
-            .sum();
-        assert!(total_text > 0, "expected non-empty extracted text");
-        assert!(
-            result
-                .pages
-                .iter()
-                .flat_map(|p| &p.blocks)
-                .all(|b| b.source == BlockSource::NativeTextLayer)
-        );
-    }
-
-    /// Regression guard: native maps one Block per coherent *line* (not per
-    /// raw span), so a prose PDF must yield multi-word, multi-span blocks.
-    #[tokio::test]
-    async fn parse_document_yields_coherent_multiword_lines_not_span_fragments() {
-        let path = fixture_pdf_path();
-        if !std::path::Path::new(&path).exists() {
-            eprintln!("skipping: no fixture PDF at {path}");
-            return;
-        }
-        let bytes = std::fs::read(&path).expect("read fixture PDF");
-        let result = NativeAdapter
-            .parse_document(&path, &bytes)
-            .await
-            .expect("native parse succeeds");
-
-        let multiword = result
-            .pages
-            .iter()
-            .flat_map(|p| &p.blocks)
-            .filter(|b| b.text.as_deref().is_some_and(|t| t.trim().contains(' ')))
-            .count();
-        assert!(multiword > 0, "expected coherent multi-word line blocks");
-
-        let multi_span = result
-            .pages
-            .iter()
-            .flat_map(|p| &p.blocks)
-            .any(|b| b.spans.len() > 1);
-        assert!(
-            multi_span,
-            "expected at least one line grouping multiple spans"
-        );
-    }
-
-    #[tokio::test]
-    async fn native_markdown_has_structure() {
-        let path = fixture_pdf_path();
-        if !std::path::Path::new(&path).exists() {
-            eprintln!("skipping: no fixture PDF at {path}");
-            return;
-        }
-        let bytes = std::fs::read(&path).expect("read fixture PDF");
-        let md = NativeAdapter
-            .native_markdown(&path, &bytes)
-            .await
-            .expect("native markdown succeeds");
-        assert!(!md.trim().is_empty(), "expected non-empty markdown");
-        // A real report yields at least one heading via the engine's
-        // font-histogram heading detection.
-        assert!(md.contains('#'), "expected at least one markdown heading");
-    }
-
-    #[tokio::test]
-    async fn structured_csv_uses_source_semantic_native_path() {
-        let bytes = b"name,value\nalpha,42\nbeta,7\n";
-        let result = NativeAdapter
-            .parse_document("sample.csv", bytes)
-            .await
-            .expect("native CSV parse succeeds");
-        assert_eq!(result.protocol, "native:csv");
-        assert_eq!(result.pages.len(), 1);
-        let block = &result.pages[0].blocks[0];
-        assert_eq!(block.source, BlockSource::StructuredNative);
-        assert_eq!(block.category_raw, "table");
-        // Source order is the reading order for a document with no geometry.
-        assert_eq!(block.reading_order, Some(0));
-        // A table lowers to `html`, not `text`: the compatibility renderer
-        // prefers `html`, and only HTML can carry a merged cell.
-        assert!(block.text.is_none(), "{:?}", block.text);
-        assert!(block.html.as_deref().unwrap().contains("alpha"));
-
-        let markdown = NativeAdapter
-            .native_markdown("sample.csv", bytes)
-            .await
-            .expect("native CSV markdown succeeds");
-        // Delimited text has one anonymous table; naming it "Sheet 1" would
-        // inject a heading the source does not contain.
-        assert!(!markdown.contains("# Sheet 1"), "{markdown}");
-        assert!(markdown.contains("| name | value |"), "{markdown}");
-    }
-
-    #[tokio::test]
-    async fn structured_tsv_is_detected_from_filename_hint() {
-        let markdown = NativeAdapter
-            .native_markdown("sample.tsv", b"name\tvalue\nalpha\t42\n")
-            .await
-            .expect("native TSV markdown succeeds");
-        assert!(markdown.contains("| alpha | 42 |"));
-    }
-
-    #[tokio::test]
-    async fn structured_document_json_preserves_canonical_contract() {
-        let json = NativeAdapter
-            .native_document_json("sample.csv", b"name,value\nalpha,42\n")
-            .await
-            .expect("canonical JSON succeeds");
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["schema_version"], "uparser.document.v1");
-        assert_eq!(value["units"][0]["kind"], "sheet");
-        assert_eq!(value["units"][0]["blocks"][0]["type"], "table");
-    }
-
-    #[tokio::test]
-    async fn epub_uses_chapter_units_through_native_adapter() {
-        let bytes = zip_package(&[
-            ("mimetype", "application/epub+zip"),
-            (
-                "META-INF/container.xml",
-                "<container><rootfiles><rootfile full-path=\"book.opf\"/></rootfiles></container>",
-            ),
-            (
-                "book.opf",
-                "<package><manifest><item id=\"chapter\" href=\"chapter.xhtml\" media-type=\"application/xhtml+xml\"/></manifest><spine><itemref idref=\"chapter\"/></spine></package>",
-            ),
-            (
-                "chapter.xhtml",
-                "<html><body><h1>Chapter</h1><p>Native EPUB</p></body></html>",
-            ),
-        ]);
-        let result = NativeAdapter
-            .parse_document("book.epub", &bytes)
-            .await
-            .expect("native EPUB parse succeeds");
-        assert_eq!(result.protocol, "native:epub");
-        assert_eq!(result.pages.len(), 1);
-        // The first block carries the chapter-start anchor, so a link to the
-        // whole chapter file resolves once the spine is flattened; the
-        // heading's own text follows it.
-        let first = result.pages[0].blocks[0].text.as_deref().unwrap();
-        assert!(first.contains("<a id="), "{first}");
-        assert!(first.ends_with("Chapter"), "{first}");
-    }
-
-    #[tokio::test]
-    async fn rtf_uses_source_semantic_native_adapter() {
-        let result = NativeAdapter
-            .parse_document("sample.rtf", br#"{\rtf1\ansi Native \b RTF\b0\par}"#)
-            .await
-            .expect("native RTF parse succeeds");
-        assert_eq!(result.protocol, "native:rtf");
-        assert_eq!(result.pages.len(), 1);
-        assert!(
-            result.pages[0].blocks[0]
-                .text
-                .as_deref()
-                .is_some_and(|text| text.contains("Native") && text.contains("RTF"))
-        );
     }
 }

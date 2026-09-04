@@ -2,6 +2,36 @@
 
 use super::{Table, TableKind};
 
+/// The cells `table_to_markdown` actually renders: caption row removed,
+/// spanning header repaired, continuation rows merged, empty rows dropped.
+///
+/// `Table::cells` is the raw detection output; formatting does real work on
+/// top of it. A consumer rebuilding the table from the raw cells gets blank
+/// rows between every real row and wrapped cells split across two rows — so
+/// the export has to be taken from the same place the Markdown is.
+pub fn rendered_table_cells(table: &Table) -> Vec<Vec<String>> {
+    if table.cells.is_empty() || table.cells[0].is_empty() {
+        return Vec::new();
+    }
+    if table.kind == TableKind::Toc {
+        return table.cells.clone();
+    }
+    let leading_caption = leading_table_caption(&table.cells);
+    let repaired_cells = if leading_caption.is_none() {
+        repair_spanning_header(table)
+    } else {
+        None
+    };
+    let cells = if leading_caption.is_some() {
+        &table.cells[1..]
+    } else if let Some(repaired) = repaired_cells.as_deref() {
+        repaired
+    } else {
+        &table.cells[..]
+    };
+    clean_table_cells(cells).0
+}
+
 pub fn table_to_markdown(table: &Table) -> String {
     if table.cells.is_empty() || table.cells[0].is_empty() {
         return String::new();

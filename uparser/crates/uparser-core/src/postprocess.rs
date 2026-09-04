@@ -53,10 +53,16 @@ pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
 
 fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
     if let Some(next_text) = &next.text {
-        last.text = Some(match &last.text {
+        let joined = match &last.text {
             Some(existing) => join_wrapped_lines(existing, next_text),
             None => next_text.clone(),
-        });
+        };
+        // Spans have to follow the text: a consumer rebuilding inline styling
+        // checks that the spans still concatenate to the block's text, so
+        // merging text without merging spans silently discards every
+        // emphasis in the merged paragraph.
+        merge_spans(last, next, &joined);
+        last.text = Some(joined);
     }
     let combined_bbox = [
         a[0].min(b[0]),
@@ -96,7 +102,51 @@ fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
 ///    a lowercase ASCII letter — deliberately narrow so it doesn't
 ///    misfire on a genuine trailing "-" (e.g. a bullet marker or a
 ///    number range) or on an acronym/proper-noun continuation.
+/// Concatenate two blocks' spans and reconcile them with the joined text.
+///
+/// The join can insert a space or drop a hyphen, so the spans are only kept
+/// when their concatenation still reproduces the text exactly — otherwise a
+/// consumer would map styles onto the wrong characters, which is worse than
+/// losing them.
+fn merge_spans(last: &mut Block, next: &Block, joined: &str) {
+    if last.spans.is_empty() && next.spans.is_empty() {
+        return;
+    }
+    let mut spans = std::mem::take(&mut last.spans);
+    let joined_so_far: String = spans.iter().map(|span| span.text.as_str()).collect();
+    let separator = joined
+        .strip_prefix(joined_so_far.trim_end())
+        .map(|rest| rest.len() - rest.trim_start().len())
+        .unwrap_or(0);
+    if let Some(tail) = spans.last_mut() {
+        tail.text = tail.text.trim_end().to_owned();
+    }
+    if separator > 0 {
+        spans.push(crate::types::Span {
+            text: " ".repeat(separator),
+            bbox_px: None,
+            font_size: None,
+            is_inline_formula: false,
+            style: Default::default(),
+        });
+    }
+    let mut tail = next.spans.clone();
+    if let Some(head) = tail.first_mut() {
+        head.text = head.text.trim_start().to_owned();
+    }
+    spans.extend(tail);
+
+    let rebuilt: String = spans.iter().map(|span| span.text.as_str()).collect();
+    last.spans = if rebuilt == joined { spans } else { Vec::new() };
+}
+
 fn join_wrapped_lines(existing: &str, next: &str) -> String {
+    // A line's own text usually carries the trailing space that separated it
+    // from the next glyph run; joining without trimming leaves a double space
+    // at every wrap, which is visible in the rendered Markdown and costs edit
+    // distance on every merged paragraph.
+    let existing = existing.trim_end();
+    let next = next.trim_start();
     let last_char = existing.chars().next_back();
     let next_first_char = next.chars().next();
 
@@ -160,6 +210,57 @@ mod tests {
         b.text = None;
         b.html = Some("<table></table>".into());
         b
+    }
+
+    /// A line's text keeps the trailing space that separated it from the next
+    /// glyph run. Joining without trimming leaves a double space at every
+    /// wrap — visible in the output and costly on every merged paragraph.
+    /// Merging must carry the spans too, or every emphasis inside a merged
+    /// paragraph is lost — the consumer drops spans that no longer
+    /// concatenate to the block's text.
+    #[test]
+    fn merging_carries_spans_so_inline_styles_survive() {
+        fn styled(text: &str, italic: bool) -> crate::types::Span {
+            crate::types::Span {
+                text: text.to_owned(),
+                bbox_px: None,
+                font_size: None,
+                is_inline_formula: false,
+                style: crate::types::SpanStyle {
+                    italic,
+                    ..Default::default()
+                },
+            }
+        }
+
+        let mut first = text_block([0, 0, 100, 10], "GreenComp is");
+        first.spans = vec![styled("GreenComp", true), styled(" is", false)];
+        let mut second = text_block([0, 12, 100, 22], "a framework");
+        second.spans = vec![styled("a framework", false)];
+
+        let merged = merge_paragraphs_by_geometry(vec![first, second]);
+        assert_eq!(merged.len(), 1);
+        let block = &merged[0];
+        assert_eq!(block.text.as_deref(), Some("GreenComp is a framework"));
+        let rebuilt: String = block.spans.iter().map(|span| span.text.as_str()).collect();
+        assert_eq!(
+            rebuilt, "GreenComp is a framework",
+            "spans must rebuild the text"
+        );
+        assert!(block.spans[0].style.italic);
+    }
+
+    #[test]
+    fn wrapped_lines_join_with_exactly_one_space() {
+        let merged = merge_paragraphs_by_geometry(vec![
+            text_block([0, 0, 100, 10], "of the identified "),
+            text_block([0, 12, 100, 22], " competences, within"),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].text.as_deref(),
+            Some("of the identified competences, within")
+        );
     }
 
     #[test]

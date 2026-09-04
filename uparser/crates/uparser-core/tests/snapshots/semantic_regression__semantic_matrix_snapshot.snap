@@ -1,0 +1,36 @@
+---
+source: crates/uparser-core/tests/semantic_regression.rs
+expression: "rows.join(\"\\n\")"
+---
+text.pdf         json      plain               exit=0 out=72f89c03e03c
+text.pdf         json      no-cache            exit=0 out=72f89c03e03c
+text.pdf         json      no-assets           exit=0 out=72f89c03e03c
+text.pdf         json      no-cache+no-assets  exit=0 out=72f89c03e03c
+text.pdf         markdown  plain               exit=0 out=ad6dfeb503d0
+text.pdf         markdown  no-cache            exit=0 out=ad6dfeb503d0
+text.pdf         markdown  no-assets           exit=0 out=ad6dfeb503d0
+text.pdf         markdown  no-cache+no-assets  exit=0 out=ad6dfeb503d0
+image_only.pdf   json      plain               exit=1 out=ae46f8d0ab53
+image_only.pdf   json      no-cache            exit=1 out=ae46f8d0ab53
+image_only.pdf   json      no-assets           exit=1 out=ae46f8d0ab53
+image_only.pdf   json      no-cache+no-assets  exit=1 out=ae46f8d0ab53
+image_only.pdf   markdown  plain               exit=1 out=e3b0c44298fc
+image_only.pdf   markdown  no-cache            exit=1 out=e3b0c44298fc
+image_only.pdf   markdown  no-assets           exit=1 out=e3b0c44298fc
+image_only.pdf   markdown  no-cache+no-assets  exit=1 out=e3b0c44298fc
+doc.rtf          json      plain               exit=0 out=4637773a4168
+doc.rtf          json      no-cache            exit=0 out=4637773a4168
+doc.rtf          json      no-assets           exit=0 out=4637773a4168
+doc.rtf          json      no-cache+no-assets  exit=0 out=4637773a4168
+doc.rtf          markdown  plain               exit=0 out=b73e12a62267
+doc.rtf          markdown  no-cache            exit=0 out=b73e12a62267
+doc.rtf          markdown  no-assets           exit=0 out=b73e12a62267
+doc.rtf          markdown  no-cache+no-assets  exit=0 out=b73e12a62267
+rows.csv         json      plain               exit=0 out=c2e2ee6a0275
+rows.csv         json      no-cache            exit=0 out=c2e2ee6a0275
+rows.csv         json      no-assets           exit=0 out=c2e2ee6a0275
+rows.csv         json      no-cache+no-assets  exit=0 out=c2e2ee6a0275
+rows.csv         markdown  plain               exit=0 out=73e0110f434e
+rows.csv         markdown  no-cache            exit=0 out=73e0110f434e
+rows.csv         markdown  no-assets           exit=0 out=73e0110f434e
+rows.csv         markdown  no-cache+no-assets  exit=0 out=73e0110f434e

@@ -22,14 +22,6 @@ pub fn should_escalate(report: &AnalysisReport) -> bool {
     report.profile.genre.confidence < CONFIDENCE_THRESHOLD && !sample_text(report).trim().is_empty()
 }
 
-pub async fn enrich_from_environment(report: &mut AnalysisReport) {
-    let _ = enrich_from_environment_with_cancellation(
-        report,
-        crate::frontend::CancellationToken::default(),
-    )
-    .await;
-}
-
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SemanticEnrichmentError {
     #[error("semantic classification cancelled")]
@@ -183,6 +175,7 @@ mod tests {
                 warnings: vec![],
             },
             artifacts: AnalysisArtifacts::None,
+            document_options: Default::default(),
         }
     }
 

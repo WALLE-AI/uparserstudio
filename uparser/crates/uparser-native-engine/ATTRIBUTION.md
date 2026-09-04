@@ -30,6 +30,14 @@ rationale and execution plan.
 - `external/bcmaps/` retained (loaded at runtime relative to
   `CARGO_MANIFEST_DIR` by `tounicode.rs` on non-wasm builds).
 - Upstream `README.md` kept as `UPSTREAM_README.md`.
+- `src/detector.rs`: `get_document_title` was decoding any non-UTF-16BE
+  `/Title` with `String::from_utf8_lossy`, so a GBK-encoded title (common
+  from Chinese producers) surfaced as mojibake in the rendered Markdown's
+  first line. Split out `decode_pdf_text_string`, which additionally
+  handles the UTF-16LE BOM and PDFDocEncoding and returns `None` for an
+  undecodable single-byte codepage rather than emitting replacement
+  characters. Added `pdf_text_strings_decode_by_bom_and_reject_unknown_codepages`.
+  (uparser O2.3 — the only local change inside the vendored core.)
 
 Enhancements that make `native` *exceed* pdf-inspector on
 `opendataloader-bench` live in the uparser side (adapter + `postprocess`/

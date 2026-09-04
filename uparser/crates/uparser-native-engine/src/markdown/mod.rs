@@ -584,10 +584,21 @@ fn is_sparse_page_fragment_table(table: &crate::tables::Table) -> bool {
         && longest.chars().count() * 2 >= total_chars
 }
 
+/// Format a detected table, recording its structure on the way through.
+///
+/// Every table the writer emits passes here, which makes it the one place
+/// that can guarantee "the hints and the Markdown describe the same tables"
+/// (see `structure_export`). `sink` collects; it never influences output.
 fn positioned_table(
     table: &crate::tables::Table,
     chart_order: Option<ChartProseOrder>,
+    page: u32,
+    sink: &mut Vec<crate::structure_export::TableHint>,
+    // The slice `table.item_indices` refers to — each detector is handed a
+    // different subset, so only the caller knows which one.
+    items: &[TextItem],
 ) -> PositionedMarkdown {
+    sink.push(crate::structure_export::table_hint(table, page, items));
     PositionedMarkdown::new(
         table.rows.first().copied().unwrap_or(0.0),
         table.columns.first().copied().unwrap_or(0.0),
@@ -1102,6 +1113,9 @@ pub fn to_markdown_from_items_with_rects_and_page_count(
             prefiltered_page_number_mask: None,
         },
     )
+    // This public overload keeps its `String` signature: structure hints are
+    // consumed through `process_pdf_mem`'s `PdfProcessResult`, not here.
+    .0
 }
 
 pub(crate) struct MarkdownDocumentContext<'a> {
@@ -1123,13 +1137,16 @@ pub(crate) struct MarkdownDocumentContext<'a> {
 ///
 /// Line-based detection runs first (strongest structural evidence), then rect-based,
 /// then heuristic fallback on unclaimed items.
+/// Render Markdown and, alongside it, the structure decisions taken on the
+/// way (see `crate::structure_export`). The hints are a by-product of this
+/// single rendering pass — there is no second path that could disagree.
 pub(crate) fn to_markdown_from_items_with_rects_and_lines(
     items: Vec<TextItem>,
     options: MarkdownOptions,
     rects: &[crate::types::PdfRect],
     pdf_lines: &[crate::types::PdfLine],
     context: MarkdownDocumentContext<'_>,
-) -> String {
+) -> (String, crate::structure_export::StructureHints) {
     use crate::tables::{
         detect_tables, detect_tables_from_lines, detect_tables_from_rects,
         detect_tables_from_struct_tree, try_build_rect_guided_table,
@@ -1146,7 +1163,10 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
     } = context;
 
     if items.is_empty() {
-        return String::new();
+        return (
+            String::new(),
+            crate::structure_export::StructureHints::default(),
+        );
     }
 
     // Table detection must retain the original collection because short
@@ -1202,6 +1222,15 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
 
     // Detect tables on each page
     let mut table_items: HashSet<usize> = HashSet::new();
+    // Structure hints are always collected: a second, hint-free code path
+    // could drift from this one, and the whole point is that the hints
+    // describe exactly the document this function rendered.
+    let mut collected_tables: Vec<crate::structure_export::TableHint> = Vec::new();
+    let mut collected_headings: Vec<crate::structure_export::HeadingHint> = Vec::new();
+    let mut collected_lines: Vec<crate::structure_export::LineHint> = Vec::new();
+    // `(page, index within that page, flow position)` for every table the
+    // writer actually emitted.
+    let mut emitted_table_positions: Vec<(u32, usize, usize)> = Vec::new();
     let mut page_tables: HashMap<u32, Vec<PositionedMarkdown>> = HashMap::new();
 
     // Pre-group items by page with their global indices (O(n) instead of O(pages*n))
@@ -1419,10 +1448,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                             }
                         }
                     }
-                    page_tables
-                        .entry(page)
-                        .or_default()
-                        .push(positioned_table(table, chart_prose_order));
+                    page_tables.entry(page).or_default().push(positioned_table(
+                        table,
+                        chart_prose_order,
+                        page,
+                        &mut collected_tables,
+                        band_items,
+                    ));
                 }
             }
 
@@ -1449,10 +1481,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                         }
                     }
                 }
-                page_tables
-                    .entry(page)
-                    .or_default()
-                    .push(positioned_table(table, chart_prose_order));
+                page_tables.entry(page).or_default().push(positioned_table(
+                    table,
+                    chart_prose_order,
+                    page,
+                    &mut collected_tables,
+                    band_items,
+                ));
             }
 
             // 2. Line-based detection on unclaimed items (when rects didn't find tables)
@@ -1470,10 +1505,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                             }
                         }
                     }
-                    page_tables
-                        .entry(page)
-                        .or_default()
-                        .push(positioned_table(table, chart_prose_order));
+                    page_tables.entry(page).or_default().push(positioned_table(
+                        table,
+                        chart_prose_order,
+                        page,
+                        &mut collected_tables,
+                        band_items,
+                    ));
                 }
             }
 
@@ -1514,10 +1552,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                                 }
                             }
                         }
-                        page_tables
-                            .entry(page)
-                            .or_default()
-                            .push(positioned_table(&table, chart_prose_order));
+                        page_tables.entry(page).or_default().push(positioned_table(
+                            &table,
+                            chart_prose_order,
+                            page,
+                            &mut collected_tables,
+                            &inside_items,
+                        ));
                         for &band_idx in &inside_map {
                             rect_claimed.insert(band_idx);
                         }
@@ -1561,10 +1602,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                                 }
                             }
                         }
-                        page_tables
-                            .entry(page)
-                            .or_default()
-                            .push(positioned_table(&table, chart_prose_order));
+                        page_tables.entry(page).or_default().push(positioned_table(
+                            &table,
+                            chart_prose_order,
+                            page,
+                            &mut collected_tables,
+                            subset_items,
+                        ));
                     }
                 };
 
@@ -1630,10 +1674,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                             }
                         }
                     }
-                    page_tables
-                        .entry(page)
-                        .or_default()
-                        .push(positioned_table(&table, chart_prose_order));
+                    page_tables.entry(page).or_default().push(positioned_table(
+                        &table,
+                        chart_prose_order,
+                        page,
+                        &mut collected_tables,
+                        band_items,
+                    ));
                 }
             }
         }
@@ -1695,10 +1742,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                             table_items.insert(global_idx);
                         }
                     }
-                    page_tables
-                        .entry(page)
-                        .or_default()
-                        .push(positioned_table(table, chart_prose_order));
+                    page_tables.entry(page).or_default().push(positioned_table(
+                        table,
+                        chart_prose_order,
+                        page,
+                        &mut collected_tables,
+                        &page_text,
+                    ));
                 }
             }
         }
@@ -1753,10 +1803,13 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
                         }
                     }
                 }
-                page_tables
-                    .entry(page)
-                    .or_default()
-                    .push(positioned_table(table, chart_prose_order));
+                page_tables.entry(page).or_default().push(positioned_table(
+                    table,
+                    chart_prose_order,
+                    page,
+                    &mut collected_tables,
+                    &chart_free,
+                ));
             }
         }
     }
@@ -2018,7 +2071,7 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
     // Convert to markdown, inserting tables and images at appropriate positions
     let mut band_split_page_set: HashSet<u32> = page_band_splits.keys().copied().collect();
     band_split_page_set.extend(page_chart_prose_splits.keys().copied());
-    to_markdown_from_lines_with_tables_and_images(
+    let markdown = to_markdown_from_lines_with_tables_and_images(
         lines,
         options,
         page_tables,
@@ -2026,6 +2079,26 @@ pub(crate) fn to_markdown_from_items_with_rects_and_lines(
         &page_chart_map,
         &band_split_page_set,
         effective_struct_roles,
+        &mut collected_headings,
+        &mut collected_lines,
+        &mut emitted_table_positions,
+    );
+    crate::structure_export::assign_table_orders(&mut collected_tables, &emitted_table_positions);
+    // Headings are decided in two places — the writer, and the Markdown
+    // post-pass that promotes/demotes on the finished string. Reconciling
+    // against the output makes the export describe what was actually emitted.
+    let headings = crate::structure_export::reconcile_headings(
+        &markdown,
+        &collected_lines,
+        collected_headings,
+    );
+    (
+        markdown,
+        crate::structure_export::StructureHints {
+            headings,
+            tables: collected_tables,
+            lines: collected_lines,
+        },
     )
 }
 
@@ -2151,7 +2224,7 @@ mod tests {
         // short numeric item if applied before structural table detection.
         let removal_mask = vec![true; items.len()];
         let removed_pages = HashSet::from([1]);
-        let markdown = to_markdown_from_items_with_rects_and_lines(
+        let (markdown, _hints) = to_markdown_from_items_with_rects_and_lines(
             items,
             MarkdownOptions::default(),
             &rects,

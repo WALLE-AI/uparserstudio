@@ -23,6 +23,21 @@ const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// override it. See D7 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
 pub const DEFAULT_RASTER_DPI: u16 = 200;
 
+/// Rasterization DPI for the hybrid local-OCR pass over pages the native
+/// engine flagged as scanned/garbled. Higher than `DEFAULT_RASTER_DPI`
+/// because Tesseract's accuracy is strongly resolution-dependent and its
+/// own documentation recommends ~300 DPI for body text; this pass runs on
+/// a handful of pages, so the extra cost is bounded.
+#[cfg(all(feature = "native", feature = "pdfium"))]
+const RASTER_DPI_OCR: f32 = 300.0;
+
+/// Rasterization DPI for cropping native image/chart regions out to asset
+/// files. Lower than `DEFAULT_RASTER_DPI` on purpose: these crops are
+/// preview/attachment artifacts, not model input, and the DPI multiplies
+/// the memory held for a full-page bitmap per extracted region.
+#[cfg(feature = "pdfium")]
+const RASTER_DPI_ASSET_CROP: f32 = 150.0;
+
 pub enum AnalysisArtifacts {
     None,
     Structured(uparser_document_engine::CanonicalDocument),
@@ -33,6 +48,12 @@ pub enum AnalysisArtifacts {
 pub struct AnalysisReport {
     pub profile: DocumentProfile,
     pub artifacts: AnalysisArtifacts,
+    /// The options `artifacts` was produced with. `execute` re-parses only
+    /// when the caller's options differ from these — before O4.3 `analyze`
+    /// always used `ParseOptions::default()`, so any non-default
+    /// `--no-notes`/`--headers-footers`/`--max-input-mib` silently parsed
+    /// the whole document a second time.
+    pub document_options: uparser_document_engine::ParseOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +124,15 @@ pub struct ExecutionOptions {
     /// all. See D7 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`.
     pub raster_dpi: Option<u16>,
     pub document_options: uparser_document_engine::ParseOptions,
+    /// The caller only wants the engine's own Markdown, so the compatibility
+    /// `Page`/`Block` IR and image-asset materialization can be skipped.
+    ///
+    /// This replaces the pre-O2 CLI-level "native markdown fast path", a
+    /// 95-line branch that bypassed routing entirely and therefore reached a
+    /// *different* conclusion than the runner on image-only PDFs (it printed
+    /// a placeholder and exited 0 where the runner correctly refuses). The
+    /// saving is kept; the divergent decision is not.
+    pub markdown_only: bool,
     pub cancellation: crate::frontend::CancellationToken,
 }
 
@@ -121,6 +151,7 @@ impl Default for ExecutionOptions {
             no_assets: false,
             raster_dpi: None,
             document_options: uparser_document_engine::ParseOptions::default(),
+            markdown_only: false,
             cancellation: crate::frontend::CancellationToken::default(),
         }
     }
@@ -167,8 +198,15 @@ pub enum ExecutionError {
 pub enum PrepareError {
     #[error("unsupported or unknown input format")]
     UnknownFormat,
-    #[error("document analysis failed: {0}")]
-    Analysis(String),
+    #[error("document analysis failed: {message}")]
+    Analysis {
+        message: String,
+        /// Machine-readable failure kind for structured sources
+        /// (`native_document.encrypted`, `.resource_limit`, …). An agent
+        /// branches on this instead of matching English prose; `None` for a
+        /// PDF-engine failure, which has no such taxonomy.
+        stage: Option<&'static str>,
+    },
     #[error("document preparation cancelled")]
     Cancelled,
     #[error("unknown protocol: {0}")]
@@ -189,17 +227,33 @@ pub async fn analyze_with_cancellation(
     source: &PreflightSource,
     cancellation: &crate::frontend::CancellationToken,
 ) -> Result<AnalysisReport, PrepareError> {
+    analyze_with_options(
+        source,
+        cancellation,
+        &uparser_document_engine::ParseOptions::default(),
+    )
+    .await
+}
+
+pub async fn analyze_with_options(
+    source: &PreflightSource,
+    cancellation: &crate::frontend::CancellationToken,
+    document_options: &uparser_document_engine::ParseOptions,
+) -> Result<AnalysisReport, PrepareError> {
     if cancellation.is_cancelled() {
         return Err(PrepareError::Cancelled);
     }
-    let report = analyze_inner(source)?;
+    let report = analyze_inner(source, document_options)?;
     if cancellation.is_cancelled() {
         return Err(PrepareError::Cancelled);
     }
     Ok(report)
 }
 
-fn analyze_inner(source: &PreflightSource) -> Result<AnalysisReport, PrepareError> {
+fn analyze_inner(
+    source: &PreflightSource,
+    document_options: &uparser_document_engine::ParseOptions,
+) -> Result<AnalysisReport, PrepareError> {
     let format = source.format();
     if format == DocumentFormat::Unknown {
         return Err(PrepareError::UnknownFormat);
@@ -207,12 +261,18 @@ fn analyze_inner(source: &PreflightSource) -> Result<AnalysisReport, PrepareErro
     if format == DocumentFormat::Pdf {
         #[cfg(feature = "native")]
         {
-            let artifact = uparser_native_engine::process_pdf_mem(source.bytes())
-                .map_err(|error| PrepareError::Analysis(error.to_string()))?;
+            let artifact =
+                uparser_native_engine::process_pdf_mem(source.bytes()).map_err(|error| {
+                    PrepareError::Analysis {
+                        message: error.to_string(),
+                        stage: None,
+                    }
+                })?;
             let profile = crate::profiler::profile_l2_result(&artifact, format);
             return Ok(AnalysisReport {
                 profile,
                 artifacts: AnalysisArtifacts::Pdf(artifact),
+                document_options: document_options.clone(),
             });
         }
         #[cfg(not(feature = "native"))]
@@ -220,25 +280,28 @@ fn analyze_inner(source: &PreflightSource) -> Result<AnalysisReport, PrepareErro
             return Ok(AnalysisReport {
                 profile: crate::profiler::profile_l1(format),
                 artifacts: AnalysisArtifacts::None,
+                document_options: document_options.clone(),
             });
         }
     }
     if is_structured(format) {
-        let document = uparser_document_engine::parse_document(
-            source.bytes(),
-            format,
-            &uparser_document_engine::ParseOptions::default(),
-        )
-        .map_err(|error| PrepareError::Analysis(error.to_string()))?;
+        let document =
+            uparser_document_engine::parse_document(source.bytes(), format, document_options)
+                .map_err(|error| PrepareError::Analysis {
+                    stage: Some(crate::structured::document_error_stage(&error)),
+                    message: error.to_string(),
+                })?;
         let profile = crate::profiler::profile_structured_document(&document);
         return Ok(AnalysisReport {
             profile,
             artifacts: AnalysisArtifacts::Structured(document),
+            document_options: document_options.clone(),
         });
     }
     Ok(AnalysisReport {
         profile: crate::profiler::profile_l1(format),
         artifacts: AnalysisArtifacts::None,
+        document_options: document_options.clone(),
     })
 }
 
@@ -269,7 +332,27 @@ pub async fn prepare_with_preference_and_cancellation(
     preference: RoutePreference,
     cancellation: crate::frontend::CancellationToken,
 ) -> Result<PreparedRun, PrepareError> {
-    let mut analysis = analyze_with_cancellation(&source, &cancellation).await?;
+    prepare_with_options(
+        source,
+        requested_protocol,
+        preference,
+        cancellation,
+        &uparser_document_engine::ParseOptions::default(),
+    )
+    .await
+}
+
+/// Same as [`prepare_with_preference_and_cancellation`], but analyzes the
+/// document with the caller's own `ParseOptions` so `execute` can reuse the
+/// artifact instead of parsing it again (O4.3).
+pub async fn prepare_with_options(
+    source: PreflightSource,
+    requested_protocol: Option<&str>,
+    preference: RoutePreference,
+    cancellation: crate::frontend::CancellationToken,
+    document_options: &uparser_document_engine::ParseOptions,
+) -> Result<PreparedRun, PrepareError> {
+    let mut analysis = analyze_with_options(&source, &cancellation, document_options).await?;
     if requested_protocol.is_none() || requested_protocol == Some("auto") {
         crate::semantic::enrich_from_environment_with_cancellation(
             &mut analysis,
@@ -321,10 +404,6 @@ pub async fn execute_with_hooks(
         RouteOrigin::Auto => RoutedBy::Auto,
     };
 
-    if protocol == "native" {
-        return execute_native(source, analysis, plan, options, source_path, routed_by).await;
-    }
-
     let fingerprint = cache::ParamFingerprint {
         protocol: protocol.clone(),
         endpoint: options.endpoint.clone(),
@@ -333,16 +412,42 @@ pub async fn execute_with_hooks(
     };
     let cache_key = cache::cache_key(source.bytes(), &fingerprint);
     let cache_dir = cache::default_cache_dir();
+    // O3.2: the cache is consulted before dispatch for *every* mode. `native`
+    // used to return above this point, so it re-parsed on every invocation.
     if !options.no_cache
-        && let Some(mut result) = cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL)
+        && let Some(cached) = cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL)
     {
+        let cache::CachedOutcome {
+            mut result,
+            engine_markdown,
+            document,
+        } = cached;
         attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
         return Ok(ParseOutcome {
             result,
-            document: None,
-            engine_markdown: None,
+            document,
+            engine_markdown,
             cache_hit: true,
         });
+    }
+
+    if protocol == "native" {
+        let mut outcome =
+            execute_native(source, analysis, plan, options, source_path, routed_by).await?;
+        if !options.no_cache {
+            cache::put(
+                &cache_dir,
+                &cache_key,
+                cache::CachedOutcome {
+                    result: outcome.result.clone(),
+                    engine_markdown: outcome.engine_markdown.clone(),
+                    document: outcome.document.clone(),
+                },
+            )
+            .map_err(|error| ExecutionError::Cache(error.to_string()))?;
+        }
+        outcome.cache_hit = false;
+        return Ok(outcome);
     }
 
     let registry = adapters::Registry::with_builtins();
@@ -435,8 +540,16 @@ pub async fn execute_with_hooks(
     };
     write_result_assets(&mut result, &source_path, options)?;
     if !options.no_cache {
-        cache::put(&cache_dir, &cache_key, &result)
-            .map_err(|error| ExecutionError::Cache(error.to_string()))?;
+        cache::put(
+            &cache_dir,
+            &cache_key,
+            cache::CachedOutcome {
+                result: result.clone(),
+                engine_markdown: None,
+                document: None,
+            },
+        )
+        .map_err(|error| ExecutionError::Cache(error.to_string()))?;
     }
     Ok(ParseOutcome {
         result,
@@ -464,6 +577,9 @@ fn execution_fingerprint(options: &ExecutionOptions, plan: &RunPlan) -> String {
         "max_concurrency": options.max_concurrency,
         "pipeline": options.pipeline_config,
         "no_postprocess": options.no_postprocess,
+        // A markdown-only run carries no Page/Block IR, so its entry must
+        // never be served to a `--format json` request for the same file.
+        "markdown_only": options.markdown_only,
         "pages": options.pages,
         "assets_dir": options.assets_dir,
         "no_assets": options.no_assets,
@@ -513,7 +629,10 @@ async fn execute_native(
 ) -> Result<ParseOutcome, ExecutionError> {
     match analysis.artifacts {
         AnalysisArtifacts::Structured(document) => {
-            let mut document = if document_options_require_reparse(&options.document_options) {
+            let mut document = if document_options_require_reparse(
+                &analysis.document_options,
+                &options.document_options,
+            ) {
                 uparser_document_engine::parse_document(
                     source.bytes(),
                     source.format(),
@@ -528,8 +647,19 @@ async fn execute_native(
                     asset.bytes = None;
                 }
             }
+            if options.markdown_only {
+                let mut result = markdown_only_result(&source_path, source.bytes());
+                attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+                return Ok(ParseOutcome {
+                    result,
+                    document: Some(document),
+                    engine_markdown: None,
+                    cache_hit: false,
+                });
+            }
             let mut result =
                 crate::structured::to_parse_result(&document, &source_path, source.bytes());
+            result.pages = postprocess_pages(result.pages, options.no_postprocess);
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
             write_result_assets(&mut result, &source_path, options)?;
             Ok(ParseOutcome {
@@ -543,6 +673,32 @@ async fn execute_native(
         AnalysisArtifacts::Pdf(artifact) => {
             #[cfg(feature = "pdfium")]
             let ocr_request = hybrid_ocr_request(&artifact, options.pages.as_deref());
+            #[cfg(not(feature = "pdfium"))]
+            let ocr_request: Option<()> = None;
+            if options.markdown_only && ocr_request.is_none() {
+                if let Some(markdown) = artifact
+                    .markdown
+                    .as_deref()
+                    .filter(|markdown| !markdown.trim().is_empty())
+                {
+                    let markdown = markdown.to_owned();
+                    let mut result = markdown_only_result(&source_path, source.bytes());
+                    attach_execution_metadata(
+                        &mut result,
+                        analysis.profile,
+                        plan,
+                        routed_by,
+                        options,
+                    );
+                    return Ok(ParseOutcome {
+                        result,
+                        document: None,
+                        engine_markdown: Some(markdown),
+                        cache_hit: false,
+                    });
+                }
+            }
+            #[cfg_attr(not(feature = "pdfium"), allow(unused_mut))]
             let (mut result, mut engine_markdown) =
                 crate::adapters::native::NativeAdapter::parse_pdf_artifact(
                     &source_path,
@@ -555,6 +711,10 @@ async fn execute_native(
                 // CLI render the merged page IR instead when OCR replaced a page.
                 engine_markdown = None;
             }
+            // O3.3: the same paragraph-merge + CJK punctuation normalization
+            // every other mode has had since P1. Only reachable when the IR is
+            // actually built — a `markdown_only` run returned above.
+            result.pages = postprocess_pages(result.pages, options.no_postprocess);
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
             #[cfg(feature = "pdfium")]
             materialize_native_image_assets(
@@ -599,6 +759,31 @@ fn annotate_unavailable_native_image_assets(result: &mut ParseResult, no_assets:
     result.capability_notes.push(format!(
         "native image assets: materialized=0, unavailable={regions}, reason=pdfium_feature_disabled"
     ));
+}
+
+/// Metadata-only `ParseResult` for `markdown_only` runs: identity and
+/// routing provenance are still reported, but no `Page`/`Block` IR is built
+/// because the caller is going to render the engine's Markdown instead.
+fn markdown_only_result(source_path: &str, bytes: &[u8]) -> ParseResult {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    ParseResult {
+        source_path: source_path.to_owned(),
+        source_sha256: format!("{:x}", hasher.finalize()),
+        protocol: "native".to_owned(),
+        routed_by: RoutedBy::Explicit,
+        document_profile: None,
+        route_decision: None,
+        preprocess_plan: None,
+        model_endpoint: None,
+        model_name: None,
+        pages: Vec::new(),
+        page_errors: Vec::new(),
+        capability_notes: Vec::new(),
+        warnings: Vec::new(),
+        timing: Default::default(),
+    }
 }
 
 fn attach_execution_metadata(
@@ -715,21 +900,22 @@ fn is_annex_heading(text: &str) -> bool {
         (Some('附'), Some('录' | '錄'), Some(letter)) if letter.is_ascii_uppercase())
 }
 
-fn document_options_require_reparse(options: &uparser_document_engine::ParseOptions) -> bool {
-    let defaults = uparser_document_engine::ParseOptions::default();
-    options.include_notes != defaults.include_notes
-        || options.include_headers_footers != defaults.include_headers_footers
-        || options.limits.max_input_bytes != defaults.limits.max_input_bytes
-        || options.limits.max_entry_bytes != defaults.limits.max_entry_bytes
-        || options.limits.max_total_uncompressed_bytes
-            != defaults.limits.max_total_uncompressed_bytes
-        || options.limits.max_archive_entries != defaults.limits.max_archive_entries
-        || options.limits.max_xml_depth != defaults.limits.max_xml_depth
-        || options.limits.max_record_depth != defaults.limits.max_record_depth
-        || options.limits.max_xml_nodes != defaults.limits.max_xml_nodes
-        || options.limits.max_expansion != defaults.limits.max_expansion
-        || options.limits.max_asset_bytes != defaults.limits.max_asset_bytes
-        || options.limits.max_text_bytes != defaults.limits.max_text_bytes
+/// Whether the artifact produced by `analyze` under `analyzed` can still
+/// serve a request made with `wanted`.
+///
+/// Everything must match except `include_assets`: dropping already-parsed
+/// asset bytes is free (`execute_native` just clears them), so an artifact
+/// parsed *with* assets serves a request without them. The reverse needs a
+/// real re-parse — the bytes were never read.
+fn document_options_require_reparse(
+    analyzed: &uparser_document_engine::ParseOptions,
+    wanted: &uparser_document_engine::ParseOptions,
+) -> bool {
+    let mut analyzed = analyzed.clone();
+    if analyzed.include_assets && !wanted.include_assets {
+        analyzed.include_assets = false;
+    }
+    &analyzed != wanted
 }
 
 #[cfg(all(feature = "native", feature = "pdfium"))]
@@ -801,7 +987,7 @@ async fn apply_hybrid_ocr(
         ));
         return false;
     }
-    let rendered = match ingest::rasterize_pdf_page_numbers(pdf_bytes, 300.0, &pages) {
+    let rendered = match ingest::rasterize_pdf_page_numbers(pdf_bytes, RASTER_DPI_OCR, &pages) {
         Ok(rendered) => rendered,
         Err(error) => {
             result.warnings.push(format!(
@@ -960,6 +1146,7 @@ fn reconcile_ocr_toc_with_native(
         block.category_raw = "toc_entry".to_owned();
         block.category = Some("list".to_owned());
         block.spans = vec![crate::types::Span {
+            style: Default::default(),
             text: repaired,
             bbox_px: block.bbox_px,
             font_size: None,
@@ -1011,6 +1198,7 @@ fn reconcile_ocr_toc_with_native(
             block.category_raw = "toc_entry".to_owned();
             block.category = Some("list".to_owned());
             block.spans = vec![crate::types::Span {
+                style: Default::default(),
                 text: repaired,
                 bbox_px: block.bbox_px,
                 font_size: None,
@@ -1120,7 +1308,11 @@ fn materialize_native_image_assets(
     if pages.is_empty() {
         return;
     }
-    let rendered = match ingest::rasterize_pdf_page_numbers(pdf_bytes, 150.0, &pages) {
+    let rendered = match ingest::rasterize_pdf_page_numbers(
+        pdf_bytes,
+        RASTER_DPI_ASSET_CROP,
+        &pages,
+    ) {
         Ok(rendered) => rendered,
         Err(error) => {
             result.warnings.push(format!(
@@ -1610,12 +1802,29 @@ mod tests {
 
     #[test]
     fn asset_bytes_can_be_dropped_without_reparsing_the_document() {
-        let mut options = uparser_document_engine::ParseOptions::default();
-        options.include_assets = false;
-        assert!(!document_options_require_reparse(&options));
+        let analyzed = uparser_document_engine::ParseOptions::default();
 
-        options.include_notes = false;
-        assert!(document_options_require_reparse(&options));
+        let mut wanted = analyzed.clone();
+        wanted.include_assets = false;
+        assert!(!document_options_require_reparse(&analyzed, &wanted));
+
+        wanted.include_notes = false;
+        assert!(document_options_require_reparse(&analyzed, &wanted));
+
+        // The reverse direction is a real re-parse: assets were never read.
+        let mut analyzed_without_assets = analyzed.clone();
+        analyzed_without_assets.include_assets = false;
+        assert!(document_options_require_reparse(
+            &analyzed_without_assets,
+            &analyzed
+        ));
+
+        // O4.3: when `analyze` ran with the caller's own options — the CLI
+        // path now — nothing is re-parsed at all.
+        let mut custom = analyzed.clone();
+        custom.include_notes = false;
+        custom.limits.max_input_bytes = 1234;
+        assert!(!document_options_require_reparse(&custom, &custom));
     }
 
     #[cfg(all(feature = "native", not(feature = "pdfium")))]

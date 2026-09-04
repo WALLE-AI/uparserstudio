@@ -11,8 +11,13 @@ pub struct CtcRecognition {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DetectionInput {
     pub tensors: TensorBundle,
+    // `original_size`/`resized_size` are carried for the coordinate
+    // back-projection the detector postprocessing will need once box
+    // rescaling moves out of the adapter; declared with the bundle so the
+    // producer/consumer contract stays in one struct.
     pub original_size: (u32, u32),
     pub resized_size: (u32, u32),
 }
@@ -371,6 +376,8 @@ impl CtcDictionary {
         self.characters.len()
     }
 
+    /// Companion to `len()` — clippy's `len_without_is_empty` requires it.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.characters.is_empty()
     }
@@ -394,6 +401,10 @@ fn bilinear_sample(image: &image::RgbImage, x: f32, y: f32, channel: usize) -> u
     (top * (1.0 - wy) + bottom * wy).round().clamp(0.0, 255.0) as u8
 }
 
+/// Only `CounterClockwise` is selected by the current V2 crop policy;
+/// the other two are the policy's declared alternatives, kept so the
+/// rotation decision stays a total match rather than an implicit default.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerticalCropRotation {
     None,

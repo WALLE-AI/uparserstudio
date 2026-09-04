@@ -712,6 +712,10 @@ fn flush_page_tables_and_images(
     inserted_images: &mut HashSet<(u32, usize)>,
     output: &mut String,
     in_paragraph: &mut bool,
+    // Write-only, same discipline as the other sinks: the flow position a
+    // flushed table lands at, which is wherever the line stream had reached.
+    table_order_sink: &mut Vec<(u32, usize, usize)>,
+    flow_position: usize,
 ) {
     let Some(blocks) = page_blocks.get(&page) else {
         return;
@@ -734,6 +738,7 @@ fn flush_page_tables_and_images(
         match kind {
             PositionedBlockKind::Table => {
                 inserted_tables.insert((page, idx));
+                table_order_sink.push((page, idx, flow_position));
             }
             PositionedBlockKind::Image => {
                 inserted_images.insert((page, idx));
@@ -743,6 +748,31 @@ fn flush_page_tables_and_images(
 }
 
 /// Convert text lines to markdown, inserting tables and images at appropriate Y positions
+/// Record a heading the writer just committed to.
+///
+/// Called at the emit site rather than at the classifier so a heading the
+/// writer later vetoes never reaches the hints — the hints and the Markdown
+/// describe the same document by construction.
+fn record_heading(
+    sink: &mut Vec<crate::structure_export::HeadingHint>,
+    line: &TextLine,
+    level: usize,
+    text: &str,
+) {
+    let Some(bbox) = crate::structure_export::items_bbox(&line.items) else {
+        return;
+    };
+    sink.push(crate::structure_export::HeadingHint {
+        page: line.page,
+        bbox,
+        level: level.clamp(1, 6) as u8,
+        text: text.to_owned(),
+    });
+}
+
+// The parameter list mirrors everything one Markdown pass needs; splitting it
+// into a context struct would only move the same fields behind one more name.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn to_markdown_from_lines_with_tables_and_images(
     lines: Vec<TextLine>,
     options: MarkdownOptions,
@@ -753,6 +783,16 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
     struct_roles: Option<
         &std::collections::HashMap<u32, std::collections::HashMap<i64, StructRole>>,
     >,
+    // `heading_sink` collects the heading decisions this function commits
+    // to. Write-only: nothing here reads it back, so it cannot influence the
+    // Markdown that gets produced.
+    heading_sink: &mut Vec<crate::structure_export::HeadingHint>,
+    // `line_sink` records the writer's own line grouping, in reading order.
+    // Same write-only discipline as `heading_sink`.
+    line_sink: &mut Vec<crate::structure_export::LineHint>,
+    // `table_order_sink` records where in that same order space each emitted
+    // table landed, as `(page, index within the page, flow position)`.
+    table_order_sink: &mut Vec<(u32, usize, usize)>,
 ) -> String {
     if lines.is_empty() && page_tables.is_empty() && page_images.is_empty() {
         return String::new();
@@ -873,6 +913,17 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
         .collect();
 
     for (line_idx, line) in lines.iter().enumerate() {
+        // Record the grouping before any per-line branch can `continue`: a
+        // line the writer skips is still a line the consumer must not fuse
+        // with its neighbours.
+        if let Some(bbox) = crate::structure_export::items_bbox(&line.items) {
+            line_sink.push(crate::structure_export::LineHint {
+                page: line.page,
+                bbox,
+                order: line_sink.len(),
+                text: line.text(),
+            });
+        }
         // Page break
         if line.page != current_page {
             // Flush current page's remaining tables and images
@@ -888,6 +939,8 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                     &mut inserted_images,
                     &mut output,
                     &mut in_paragraph,
+                    table_order_sink,
+                    line_sink.len(),
                 );
                 if in_paragraph {
                     output.push_str("\n\n");
@@ -912,6 +965,8 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                     &mut inserted_images,
                     &mut output,
                     &mut in_paragraph,
+                    table_order_sink,
+                    line_sink.len(),
                 );
                 if in_paragraph {
                     output.push_str("\n\n");
@@ -951,6 +1006,14 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                     match kind {
                         PositionedBlockKind::Table => {
                             inserted_tables.insert((current_page, idx));
+                            // This line has already been recorded, so the
+                            // table precedes it: its flow position is the
+                            // line's own index.
+                            table_order_sink.push((
+                                current_page,
+                                idx,
+                                line_sink.len().saturating_sub(1),
+                            ));
                         }
                         PositionedBlockKind::Image => {
                             inserted_images.insert((current_page, idx));
@@ -1184,6 +1247,7 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                 in_paragraph = false;
                 paragraph_in_wrapped_bold_run = false;
             }
+            record_heading(heading_sink, line, level, plain_trimmed);
             let prefix = "#".repeat(level);
             // Plain text for headers (no redundant bold/italic inside `#`),
             // but underline is preserved: `<u>` carries meaning `#` doesn't.
@@ -1330,6 +1394,8 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
         &mut inserted_images,
         &mut output,
         &mut in_paragraph,
+        table_order_sink,
+        line_sink.len(),
     );
     for &p in &all_content_pages {
         if p <= current_page {
@@ -1342,6 +1408,8 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             &mut inserted_images,
             &mut output,
             &mut in_paragraph,
+            table_order_sink,
+            line_sink.len(),
         );
     }
 
@@ -1355,6 +1423,11 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
 }
 
 /// Convert text lines to markdown
+/// Simplified entry for callers that already grouped lines themselves.
+///
+/// Produces no `structure_export` hints — `process_pdf_mem` does not use this
+/// path, and inventing a second hint-producing writer would be exactly the
+/// duplication the hints exist to remove.
 pub fn to_markdown_from_lines(lines: Vec<TextLine>, options: MarkdownOptions) -> String {
     if lines.is_empty() {
         return String::new();
@@ -1783,6 +1856,9 @@ mod tests {
             &HashMap::new(),
             &HashSet::from([1]),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
         let positions = [
             "Left column upper prose.",
@@ -1859,6 +1935,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -1888,6 +1967,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -1930,6 +2012,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -1967,6 +2052,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -2003,6 +2091,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(md.contains("# Title"), "H1 → #: {md}");
@@ -2033,6 +2124,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -2075,6 +2169,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -2124,6 +2221,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         // The bold heading should be detected
@@ -2226,6 +2326,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -2274,6 +2377,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             Some(&roles),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         // Should produce a single fenced block, not three separate ones
@@ -2414,6 +2520,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         assert!(
@@ -2450,6 +2559,9 @@ mod tests {
             &HashMap::new(),
             &std::collections::HashSet::new(),
             None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
         assert!(
             md.starts_with("1. "),

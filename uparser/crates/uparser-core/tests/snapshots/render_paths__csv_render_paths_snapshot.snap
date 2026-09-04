@@ -1,0 +1,14 @@
+---
+source: crates/uparser-core/tests/render_paths.rs
+expression: "side_by_side(\"rows.csv\", &path)"
+---
+=== rows.csv · engine ===
+| name | value |
+| --- | --- |
+| alpha | 42 |
+| beta | 7 |
+=== rows.csv · canonical ===
+| name | value |
+| --- | --- |
+| alpha | 42 |
+| beta | 7 |

@@ -160,7 +160,11 @@ pub async fn parse_canonical_document(
         return Err(ApiError::FileNotFound(path.to_owned()));
     }
     let bytes = std::fs::read(path).map_err(|error| ApiError::ReadFailed(error.to_string()))?;
-    let format = uparser_document_engine::detect_format(&bytes, Some(path));
+    // Detection happens once, in the frontend, for every entry point (O4.2).
+    let source =
+        crate::frontend::PreflightSource::new(std::sync::Arc::<[u8]>::from(bytes), Some(path));
+    let format = source.format();
+    let bytes = source.bytes();
     if format == uparser_document_engine::DocumentFormat::Pdf {
         return Err(ApiError::NativeParseFailed(
             "canonical document output is currently limited to structured source formats"
@@ -201,6 +205,9 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         no_assets: options.no_assets,
         raster_dpi: options.raster_dpi,
         document_options: uparser_document_engine::ParseOptions::default(),
+        // The library API returns a `ParseResult`, so the IR is the product
+        // here — never the engine-Markdown-only shortcut the CLI can take.
+        markdown_only: false,
         cancellation: options.cancellation.clone(),
     };
     crate::runner::execute(prepared, &execution)

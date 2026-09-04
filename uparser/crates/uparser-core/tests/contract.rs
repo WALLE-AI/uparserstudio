@@ -122,8 +122,19 @@ async fn mineru_vlm_and_monkeyocrv2_agree_on_markdown_for_equivalent_text_block(
         blocks: monkeyocr_blocks,
     };
 
-    let mineru_md = render::to_markdown(&wrap_as_parse_result("mineru-vlm", mineru_page));
-    let monkeyocr_md = render::to_markdown(&wrap_as_parse_result("monkeyocr-v2", monkeyocr_page));
+    let markdown = |result: &uparser_core::types::ParseResult| {
+        render::render_markdown(
+            &render::RenderInput {
+                result,
+                engine_markdown: None,
+                document: None,
+                source_format: uparser_document_engine::DocumentFormat::Pdf,
+            },
+            render::MarkdownSource::Canonical,
+        )
+    };
+    let mineru_md = markdown(&wrap_as_parse_result("mineru-vlm", mineru_page));
+    let monkeyocr_md = markdown(&wrap_as_parse_result("monkeyocr-v2", monkeyocr_page));
 
     assert_eq!(mineru_md, monkeyocr_md);
     assert_eq!(mineru_md, "Hello contract test");

@@ -1,35 +1,41 @@
 # Pipeline V2 超越 MinerU 3.4.5 执行方案
 
-## 0. 当前执行状态（2026-08-28）
+## 0. 当前执行状态（2026-09-01）
 
-结论：方案已经开始执行，但最终目标尚未完成，当前不能宣称精度超过 MinerU 3.4.5 Pipeline。
+结论：Rust 产品边界和两套全量评测已经落地，但最终硬门禁仍为 **FAIL**，当前不能宣称已经超过 MinerU 3.4.5 Pipeline。
 
-已完成：
+### 0.1 已完成
 
-- 建立 ODL/OmniDocBench Pareto 自动门禁及单元测试；当前历史结果仍为 FAIL，主要差距是 ODL TEDS 和 Omni Table/Text/Order。
-- 修复 CLI partial failure 缺少 stderr 明细的问题，现会输出 page、stage 和 message。
-- 对历史 9 个 OmniDocBench 失败页使用真实服务连续复测三轮，27/27 次成功；还需完成新实现的 1,651 页全量零失败验收。
-- 实现 Rust/Python 对称的版本化二进制 tensor envelope，以及 Rust binary HTTP transport。
-- 建立仅接受准备好 tensor、仅返回 raw tensor/token ID 的裸模型服务；不导入页面分析、Markdown、table binding 或 finalize 后端。
-- 已验证真实/合成 forward：PP-DocLayoutV2、PP-OCRv6 detector、PP-OCRv6 recognizer、PP-FormulaNet-plus-M、table classifier、SLANet+、wired-table UNet。
-- PP-DocLayoutV2 的 resize/normalize、raw top-k 解码、reading order、PaddleX filter、公式重标和页眉页脚修正已迁入 Rust。
-- 真实 Omni 页面对照得到与 MinerU wrapper 相同的 9 个 region，类别、顺序和 bbox 一致。
-- `pipeline_v2.rs` 已支持 `--bare-layout-endpoint`：一次裸 forward 在 Rust 同时生成 layout 和 MFD，不再需要这两个 Python structured endpoint。
-- PP-OCRv6 detector 的 limit/normalize 输入、DB bitmap 连通域/旋转框/unclip 解码、四点旋转裁图，以及 recognizer 动态宽度输入和 CTC 词表解码已迁入 Rust；真实图与 MinerU 对拍 12/12 文本一致，框坐标差异约 1 px。
-- PP-FormulaNet-plus-M 的 crop-margin、双阶段 resize、padding、normalize、HuggingFace tokenizer 解码和 LaTeX 修复已迁入 Rust；真实权重输出与 MinerU 3.4.5 逐字符串一致。
-- SLANet+ 的 488 resize/pad、50 类 structure token、cell bbox、rowspan/colspan 解码已迁入 Rust；wired UNet 的 normalize、segmentation、morph close、线网格和 cell/span 恢复已迁入 Rust。
-- 表格分类输入/logits、OCR span 按多边形交叠唯一绑定、Rust HTML 生成，以及 MinerU 3.4.5 wired/wireless 候选选择规则已迁入 Rust并有回归测试。
-- 真实 wired-table 图上 Rust 与 MinerU 均恢复 13 个 cell 和完全相同的逻辑坐标；全裸 CLI 路径已输出正确的 13-cell HTML，`page_errors=[]`。
-- `pipeline_v2.rs` 已支持裸 layout、OCR det/rec、formula、table classifier/SLANet/UNet；配置这些 endpoint 后，产品路径不再调用 Python structured stage。
+- 裸模型服务只接收 Rust 准备的 tensor，只执行模型 forward/generate，只返回 raw tensor/token ID。图像预处理、layout/OCR/formula/table 解码、候选选择、reading order、Markdown/HTML 和文档编排均在 Rust。
+- `pipeline_v2.rs` 的全裸路径已覆盖 PP-DocLayoutV2、PP-OCRv6 det/rec、PP-FormulaNet-plus-M、table classifier、SLANet+ 和 wired-table UNet，不依赖 Python structured stage/finalize。
+- OmniDocBench 最终预测完成 `1651/1651`，0 失败、0 空 Markdown；正式 evaluator 为 0 page fallback、TEDS 0 error/timeout、CDM 0 exception/timeout。
+- OpenDataLoader Bench 全量 200 文档精度四项全部超过 MinerU 3.4.5：Overall `0.893923 > 0.856821`、NID `0.924960 > 0.874540`、TEDS `0.915801 > 0.910738`、MHS `0.808672 > 0.791773`。
+- OmniDocBench 的 Formula CDM `89.0919 > 88.5788`、Table structure TEDS `89.1591 > 88.8515`、Reading Order Edit `0.146457 < 0.147369`。
+- 新增 `benchmark/run_pipeline_v2_final_evaluation.sh`，一次命令执行官方 Omni 匹配/指标、完整性校验、MinerU Pareto 精度门禁和性能门禁；同名任务带文件锁，支持 `--reuse-metrics`。
+- 修复 Omni evaluator 在 TEDS 线程池内并发 `fork` 的进程生命周期竞态，改用隔离 `spawn` worker；最终 `665/665` TEDS 在 120 秒上限内完成，无内部错误。
+- 验证通过：Rust 单元测试 `422/422`、benchmark/门禁测试 `10/10`、裸模型服务测试 `6/6`、`cargo fmt --check` 和 `git diff --check`。
 
-仍未完成（按当前关键路径排序）：
+### 0.2 当前未通过项
 
-1. 完成 OCR `merge_det_boxes`/`update_det_boxes` 的 Rust parity、表格方向分类、旋转 wired-table 修正及表内公式/图片绑定。
-2. 将裸 endpoint profile 固化为默认生产配置，并增加启动时模型 revision/SHA 一致性校验；structured endpoint 只保留兼容模式。
-3. 对开发集做精度差异定位，重点修正当前 ODL TEDS 差距，不以单页 parity 代替全量成绩。
-4. 完成 ODL 200 文档和 OmniDocBench 1,651 页的精度、稳定性及同机五轮性能 A/B。
+| 门禁 | Pipeline V2 | MinerU 3.4.5 | 结果 |
+|---|---:|---:|---|
+| Omni Overall | 88.2569 | 88.5123 | FAIL，低 0.2554 |
+| Omni Text Edit | 0.064523 | 0.054230 | FAIL，高 0.010294 |
+| Omni Table TEDS | 82.1310 | 82.3811 | FAIL，低 0.2501 |
+| ODL 性能 | 1.369917 s/篇 | 0.715631 s/篇 | FAIL |
+| Omni 性能 | 3.038788 s/页 | 1.003 s/页 | FAIL |
 
-当前硬门禁状态：FAIL。只有本文第 2 节全部指标通过后，状态才能改为完成。
+综合证据：`benchmark/results/pipeline-v2-bare-rust-final-full-20260901_final_gate.json`。最终预测摘要：`benchmark/results/pipeline-v2-bare-rust-final-full-20260901/summary.json`。Omni 指标：`benchmark/OmniDocBench/result/pipeline-v2-bare-rust-final-full-20260901_quick_match_metric_result.json`。
+
+### 0.3 下一阶段关键路径
+
+1. 对 Omni Text Edit 的页面级差值做类别分层，优先补齐 OCR `merge_det_boxes`/`update_det_boxes`、段落合并和标题/页眉页脚 parity；每项修改先过 held-out，再跑一次全量。
+2. 对 Table TEDS 做逐表候选归因，分别统计 wired/wireless 选择错误、cell span、内容绑定和 HTML 序列化差值；保持已经领先的 structure-only 指标不回退。
+3. 将当前逐文档 CLI 进程模型改为常驻 Rust 多文档调度器，按 tensor shape 稳定分桶并跨页面合批，消除进程启动、重复模型元数据请求和 JSON/base64 传输开销。
+4. 将裸 endpoint profile 固化为默认生产配置，启动时强制校验模型 revision/SHA；structured endpoint 只保留显式兼容模式。
+5. 达到精度门禁后，在同一 GPU、服务生命周期、并发和输入顺序下执行 MinerU/Pipeline V2 五轮交错 A/B；未达到至少快 5% 前不得宣布完成。
+
+当前硬门禁状态：**FAIL**。只有本文第 2 节全部指标通过后，状态才能改为完成。
 
 ## 1. 目标与约束
 

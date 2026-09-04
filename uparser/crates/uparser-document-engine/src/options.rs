@@ -1,5 +1,5 @@
 /// Hard budgets for untrusted document input.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
     pub max_input_bytes: u64,
     pub max_entry_bytes: u64,
@@ -34,7 +34,7 @@ impl Default for ResourceLimits {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseOptions {
     pub limits: ResourceLimits,
     pub include_assets: bool,

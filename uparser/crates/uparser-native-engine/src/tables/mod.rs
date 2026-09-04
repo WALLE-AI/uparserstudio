@@ -18,7 +18,7 @@ pub(crate) use detect_lines::detect_vector_grid_tables_from_lines;
 pub(crate) use detect_rects::cluster_rects;
 pub use detect_rects::{detect_chart_regions, detect_tables_from_rects, RectHintRegion};
 pub use detect_struct::detect_tables_from_struct_tree;
-pub use format::table_to_markdown;
+pub use format::{rendered_table_cells, table_to_markdown};
 pub use structured::{cells_to_markdown, StructuredCell};
 
 use crate::types::TextItem;

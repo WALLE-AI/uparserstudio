@@ -39,6 +39,27 @@ pub struct Span {
     pub bbox_px: Option<[i32; 4]>,
     pub font_size: Option<f32>,
     pub is_inline_formula: bool,
+    /// Character styling, where the source carries it (a PDF font's bold /
+    /// italic flags, an OOXML run's properties). Without this the IR cannot
+    /// distinguish `*emphasis*` from plain text, and any renderer driven by
+    /// it silently flattens the document's inline formatting.
+    ///
+    /// `#[serde(default)]` so a `ParseResult` cached before this field
+    /// existed still deserializes.
+    #[serde(default)]
+    pub style: SpanStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpanStyle {
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strike: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +68,20 @@ pub enum MergeHint {
     SameParagraph,
     NewParagraph,
     TitleLevel(u8),
+    /// One item of a list, carrying what the renderer needs to reproduce the
+    /// marker: ordered vs bulleted, the item's number, and its nesting depth
+    /// (0 = top level).
+    ///
+    /// Added in O5.2. Structured sources used to collapse a whole `List`
+    /// into a single `category: "text"` block holding pre-rendered Markdown,
+    /// which read correctly but left the IR with no list semantics at all —
+    /// a consumer could not tell a list from a paragraph that happened to
+    /// start with "1.".
+    ListItem {
+        ordered: bool,
+        number: Option<u64>,
+        level: u8,
+    },
 }
 
 /// Provenance of a block — which protocol path produced it.
@@ -374,6 +409,7 @@ mod tests {
             html: None,
             latex: None,
             spans: vec![Span {
+                style: Default::default(),
                 text: "hello".into(),
                 bbox_px: Some([0, 0, 10, 10]),
                 font_size: Some(12.0),

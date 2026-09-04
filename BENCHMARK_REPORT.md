@@ -1,22 +1,22 @@
 # uparser 解析引擎基准评测报告
 
-> 最后更新：2026-08-26；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
+> 最后更新：2026-09-02；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
 > PP-OCRv6 + PP-FormulaNet-plus-M。
 > 该默认指整页 `documents/pages:analyze` 后端；`pipeline_v2.rs` 使用的 standalone
 > stage endpoints 当前仍是 legacy-compatible 模型链，两者必须分开报分。
 
-本报告包含**两个互相独立、不可直接比较的评测语料/榜单**,分属两套评测体系(不同数据集、不同官方评测器、不同指标定义)——阅读时请对照下表先确认在看哪一个:
+本报告包含**两个互相独立的精度评测榜单**，以及**一个无真值的大文档性能测试**。三者的语料、评测器和指标口径不同，阅读时请先确认所在分区：
 
-| | Part A:opendataloader-bench(§1–§6) | Part B:OmniDocBench(§1–§2) |
-|---|---|---|
-| 语料位置 | `opensource/opendataloader-bench/pdfs` | `benchmark/OmniDocBenchData` |
-| 语料规模 | 200 篇单页真实 PDF | 1651 页(全量)/ 290 页分层子集(prompt 实验) |
-| 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) |
-| 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 |
-| 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 |
-| 结论一句话 | 服务内部 finalize 路径为 0.85789；本次 `pipeline_v2.rs` Rust CLI 分阶段路径为 0.74323，表格内容装配明显回退 | 服务内部 finalize 路径为 88.4489；本次 Rust CLI 分阶段路径仅 58.6162，同样受表格内容装配拖累 |
+| | Part A:opendataloader-bench(§1–§6) | Part B:OmniDocBench(§1–§2) | Part C:大文档 OCR 性能 |
+|---|---|---|---|
+| 语料位置 | `opensource/opendataloader-bench/pdfs` | `benchmark/OmniDocBenchData` | `datasets/pdf/all_pdf/PDFs/data/黄陂…上册.pdf` |
+| 语料规模 | 200 篇单页真实 PDF | 1651 页(全量)/ 290 页分层子集(prompt 实验) | 1 份、544 页、45,119,340 bytes |
+| 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) | 无；`/usr/bin/time` 端到端计时 |
+| 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 | 墙钟、吞吐、峰值 RSS、输出覆盖；**不评精度** |
+| 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 | Rust Pipeline V2 分阶段路径 vs MinerU-VLM 2605 |
+| 结论一句话 | 服务内部 finalize 路径为 0.85789；本次 `pipeline_v2.rs` Rust CLI 分阶段路径为 0.74323，表格内容装配明显回退 | 服务内部 finalize 路径为 88.4489；本次 Rust CLI 分阶段路径仅 58.6162，同样受表格内容装配拖累 | 两路径均 544/544 成功；当前配置下 VLM 墙钟快 4.314×，但并发不对称且服务端 `>=1000` 门槛未通过 |
 
-两个 Part 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
+Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。Part C 只是性能/稳定性测试，不得用其输出大小或结构数量代替精度指标。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
 
 ---
 
@@ -392,3 +392,55 @@ python3 benchmark/run_uparser_omnidoc.py \
 根因两次一致:新增指令在真正困难的类目(`layout_hard`、`table_hard`)上确实让模型更仔细、分数上涨,但在本来就简单规整的类目(`watermark`/`fuzzy_scan`/`magazine` 等)上让模型对规整表格过度分析、反而做坏——子集抽样的分层标签没有覆盖到这些受害类目,导致子集判断方向性错误。纯净端点上模型本身更强,"做坏"的幅度小了很多(不再像混用端点时 `watermark` 类目暴跌 0.53),但简单类目的损失量级仍然和难例类目的收益量级相当,net 结果打平偏负,**不构成一个值得采纳的改进**。
 
 **结论(在混用端点和纯净端点上都成立):Qwen3.8-27B 在 OmniDocBench 上继续用官方基线 prompt(§1),不采纳任何测试过的变体(B/C/BC)。** 完整实验过程、门槛判定、后端拆分复核、逐类目诊断表、纯净端点复测细节、复现命令见 `BENCHMARK_DEV_LOG.md` §3;实验方案见 `QWEN_PROMPT_IMPROVEMENT_PLAN.md`。
+
+---
+
+# Part C:大文档 OCR Pipeline 性能与稳定性
+
+> 测试日期：2026-09-02。本 Part 没有标注真值，**不是精度榜单**，不能用于证明任一路径的 OCR 精度更高。
+
+## 1. 语料与配置
+
+- 输入：`/home/dataset1/gaojing/datasets/pdf/all_pdf/PDFs/data/黄陂污水治理项目东北片区报告书上册.pdf`
+- 规模：544 页，45,119,340 bytes。
+- 两路径共同参数：200 DPI、禁用缓存、禁用资产写出、release `uparser`。
+- Rust Pipeline V2：窗口 16，最大并发 4；Rust 负责 layout→OCR→table→assemble 编排，外部服务只提供裸模推理。
+- MinerU-VLM：`MinerU2.5-Pro-2605-1.2B`，窗口 1024，客户端最大并发 1024。
+- 计时：`/usr/bin/time`端到端墙钟，包含 PDF 栅格化、模型请求、Rust 后处理和 Markdown 写出。服务均已预热。
+
+## 2. 完整结果
+
+| 指标 | Rust Pipeline V2 | MinerU-VLM c1024 |
+|---|---:|---:|
+| 成功页 | 544/544 | 544/544 |
+| 退出码 | 0 | 0 |
+| 墙钟时间 | 1,258.80 s | 291.77 s |
+| 每页耗时 | 2.3140 s | 0.5363 s |
+| 吞吐 | 0.4322 page/s | 1.8645 page/s |
+| 客户端峰值 RSS | 16.360 GiB | 29.998 GiB |
+| Markdown 大小 | 1,898,817 bytes | 1,587,318 bytes |
+| Markdown 行数 | 20,727 | 7,843 |
+| Markdown 标题 | 497 | 340 |
+| HTML 表格 | 514 | 441 |
+| SHA-256 | `c6def7dcc3933ada8dfc97590cb4a6adb7aa015445b0c0eb804894ad7b458a31` | `25c976a83cedc34a1d57192e7b0872231e4b83f4cdd61242c06afe0f131786b7` |
+
+在这两个**当前运行 profile**下，MinerU-VLM 的墙钟速度是 Pipeline V2 的
+`4.314×`，耗时减少 `76.822%`；代价是客户端峰值 RSS 从 `16.360 GiB`
+增至 `29.998 GiB`。两路径的并发分别为 4 和 1024，因此该 `4.314×` 是实际配置下的端到端结果，**不是单请求模型速度的严格同并发 A/B**。
+
+Markdown 大小、行数、标题数和表格数只用于证明输出非空并呈现结构差异。由于该 PDF 无真值，不得从这些数量推导召回率、TEDS、标题精度或“超过 MinerU 3.4.5”。后者仍以 Part A/B 的 ODL 和 OmniDocBench 官方指标为准。
+
+## 3. 1024 并发边界
+
+`uparser --max-concurrency 1024` 是全文档共享的 HTTP 在途请求许可预算，调度窗口也已提升为 1024；该配置下 544/544 页完成。但当前 `:19122` vLLM 启动命令未显式设置 `--max-num-seqs`。已安装 vLLM 在小于 70 GiB GPU 上的 OpenAI API Server 默认值为 `256`，所以本轮证明的是“1024 客户端请求预算下稳定完成”，不是“模型引擎同时执行 1024 序列”。
+
+因此，“客户端并发配置 `>=1000`”已通过；“模型引擎执行并发 `>=1000`”当前为 **FAIL**。要验证后者，需以 `--max-num-seqs 1024` 重启服务，并使用至少 1024 个可同时产生请求的工作单元采样 `vllm:num_requests_running`峰值。单份 544 页 PDF 的第一阶段最多只能产生 544 个页级请求。
+
+## 4. 产物与复现
+
+- Pipeline Markdown：`output/黄陂污水治理项目东北片区报告书上册.pipeline-benchmark.md`
+- Pipeline 计时：`output/黄陂污水治理项目东北片区报告书上册.pipeline-timing.txt`
+- MinerU-VLM Markdown：`output/黄陂污水治理项目东北片区报告书上册.mineru-vlm-c1024.md`
+- MinerU-VLM 计时：`output/黄陂污水治理项目东北片区报告书上册.mineru-vlm-c1024-timing.txt`
+- 独立详细报告：`output/黄陂污水治理项目东北片区报告书上册.performance-comparison.md`
+- 无 Python 复测脚本：`benchmark/run_mineru_vlm_pdf_benchmark.sh`；脚本强制要求客户端并发和声明的服务端 `max-num-seqs` 均不小于 1000，否则拒绝运行。

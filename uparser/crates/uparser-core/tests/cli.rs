@@ -349,7 +349,7 @@ fn image_only_pdf_fixture(title: Option<&str>) -> tempfile::NamedTempFile {
 
 #[cfg(feature = "native")]
 #[test]
-fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
+fn native_markdown_handles_structured_pdf_and_malformed_inputs() {
     let mut csv = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
     csv.write_all(b"name,value\nalpha,42\n").unwrap();
     Command::cargo_bin("uparser")
@@ -385,6 +385,9 @@ fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
         .success()
         .stdout(predicate::str::is_empty().not());
 
+    // A structurally broken PDF fails at preflight like every other
+    // undecodable input: EXIT_USAGE, not the EXIT_DEPENDENCY the deleted
+    // CLI-level fast path used to report for the same file (O2.2).
     let mut broken = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
     broken.write_all(b"%PDF-1.7\nnot a valid PDF").unwrap();
     Command::cargo_bin("uparser")
@@ -400,57 +403,79 @@ fn native_markdown_fast_path_handles_structured_pdf_and_malformed_inputs() {
             "--no-cache",
         ])
         .assert()
-        .failure()
-        .code(2)
+        .code(1)
         .stderr(predicate::str::contains("Invalid PDF structure"));
 }
 
+/// C2 (semantic uniqueness): `--no-cache` is a performance switch and must
+/// not change *whether* a parse succeeds.
+///
+/// Before O2 it did: a 9-condition CLI branch bypassed routing whenever
+/// `--no-cache` was present, so an image-only PDF printed a
+/// `[Image-only PDF: OCR required]` placeholder and exited 0, while the
+/// same command without `--no-cache` went through `explicit_route` and
+/// correctly refused — `native` has no OCR. Both forms now refuse.
 #[cfg(feature = "native")]
 #[test]
-fn native_markdown_fast_path_reports_image_only_pdf_metadata() {
-    let pdf = image_only_pdf_fixture(Some("INFOGRAPHIC- 10 Things to Know about Copyright"));
-
-    Command::cargo_bin("uparser")
-        .unwrap()
-        .args([
-            "parse",
-            pdf.path().to_str().unwrap(),
-            "--protocol",
-            "native",
-            "--format",
-            "markdown",
-            "--no-assets",
-            "--no-cache",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "INFOGRAPHIC- 10 Things to Know about Copyright",
-        ))
-        .stdout(predicate::str::contains("[Image-only PDF: OCR required]"));
+fn image_only_pdf_is_refused_by_native_identically_with_and_without_no_cache() {
+    for title in [Some("INFOGRAPHIC- 10 Things to Know about Copyright"), None] {
+        let pdf = image_only_pdf_fixture(title);
+        let cache = tempfile::tempdir().unwrap();
+        for extra in [vec![], vec!["--no-cache"]] {
+            let mut args = vec![
+                "parse",
+                pdf.path().to_str().unwrap(),
+                "--protocol",
+                "native",
+                "--format",
+                "markdown",
+                "--no-assets",
+            ];
+            args.extend_from_slice(&extra);
+            Command::cargo_bin("uparser")
+                .unwrap()
+                .env("UPARSER_CACHE_DIR", cache.path())
+                .args(&args)
+                .assert()
+                .code(1)
+                .stdout(predicate::str::contains("Image-only PDF").not())
+                .stderr(predicate::str::contains(
+                    "no reliable native text or source semantics",
+                ));
+        }
+    }
 }
 
-#[cfg(feature = "native")]
+/// The same document routed by `auto` is not refused — the router picks a
+/// protocol that can actually read pixels. This is what makes the refusal
+/// above an honest capability boundary rather than a dead end.
+#[cfg(all(feature = "native", feature = "pdfium"))]
 #[test]
-fn native_markdown_fast_path_reports_image_only_pdf_without_metadata() {
+fn image_only_pdf_routed_by_auto_does_not_pick_native() {
     let pdf = image_only_pdf_fixture(None);
-
-    Command::cargo_bin("uparser")
+    let output = Command::cargo_bin("uparser")
         .unwrap()
         .args([
             "parse",
             pdf.path().to_str().unwrap(),
             "--protocol",
-            "native",
+            "auto",
             "--format",
-            "markdown",
+            "json",
             "--no-assets",
             "--no-cache",
         ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("[Image-only PDF: OCR required]"))
-        .stdout(predicate::str::contains("INFOGRAPHIC").not());
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("auto: routed to"),
+        "auto routing must report its decision, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("auto: routed to \"native\""),
+        "auto must not route an image-only PDF to the zero-OCR protocol: {stderr}"
+    );
 }
 
 #[test]
@@ -512,9 +537,12 @@ fn output_write_failure_is_a_dependency_error() {
 
 #[cfg(feature = "native")]
 #[test]
-fn native_pdf_rejects_document_json_and_native_flags_warn_when_ignored() {
+fn native_pdf_supports_document_json_and_native_flags_warn_when_ignored() {
+    // A PDF has no structured frontend, so `document-json` used to be a
+    // usage error for it. O5.2's ascending map builds the canonical document
+    // from the page IR instead, one `page` unit per page.
     let pdf = native_pdf_fixture();
-    Command::cargo_bin("uparser")
+    let output = Command::cargo_bin("uparser")
         .unwrap()
         .args([
             "parse",
@@ -526,11 +554,14 @@ fn native_pdf_rejects_document_json_and_native_flags_warn_when_ignored() {
             "--no-cache",
         ])
         .assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains(
-            "document-json is available for structured native documents",
-        ));
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["schema_version"], "uparser.document.v1");
+    assert_eq!(parsed["metadata"]["format"], "pdf");
+    assert_eq!(parsed["units"][0]["kind"], "page");
 
     let mut csv = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
     csv.write_all(b"name,value\nalpha,42\n").unwrap();
@@ -1290,7 +1321,7 @@ fn csv_input_auto_routes_to_native_document_engine() {
 }
 
 #[test]
-fn document_json_outputs_canonical_contract_and_rejects_non_native_protocol() {
+fn document_json_outputs_canonical_contract_for_structured_and_ascended_sources() {
     let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
     file.write_all(b"Name,Age\nAlice,30\n").unwrap();
     let output = Command::cargo_bin("uparser")
@@ -1312,21 +1343,35 @@ fn document_json_outputs_canonical_contract_and_rejects_non_native_protocol() {
     assert_eq!(parsed["schema_version"], "uparser.document.v1");
     assert_eq!(parsed["units"][0]["kind"], "sheet");
 
-    Command::cargo_bin("uparser")
+    // Since O5.2 a non-structured protocol is no longer refused: its
+    // `Page`/`Block` IR is lifted into a canonical document instead. `mock`
+    // emits two mergeable text blocks per page, so the ascended document
+    // must carry paragraphs — not be empty, and not error. Uses a PNG
+    // because a page protocol on a CSV would need LibreOffice to rasterize.
+    let mut image = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+    image.write_all(&fixture_png()).unwrap();
+    let output = Command::cargo_bin("uparser")
         .unwrap()
+        .env("UPARSER_CACHE_DIR", isolated_cache_dir().path())
         .args([
             "parse",
-            file.path().to_str().unwrap(),
+            image.path().to_str().unwrap(),
             "--protocol",
             "mock",
             "--format",
             "document-json",
+            "--no-cache",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "document-json requires the native protocol",
-        ));
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["schema_version"], "uparser.document.v1");
+    assert_eq!(parsed["metadata"]["variant"], "mock");
+    assert_eq!(parsed["units"][0]["kind"], "page");
+    assert_eq!(parsed["units"][0]["blocks"][0]["type"], "paragraph");
 }
 
 /// A minimal real ZIP archive containing a `word/` entry — the

@@ -32,6 +32,7 @@ benchmark/*
 !benchmark/run_native_ocr_distribution.py
 !benchmark/run_pipeline_v2_benchmarks.py
 !benchmark/run_pipeline_v2_final_evaluation.sh
+!benchmark/run_mineru_vlm_pdf_benchmark.sh
 !benchmark/run_original_mineru_pipeline.py
 !benchmark/run_mineru_345_pipeline.py
 !benchmark/tests/test_pipeline_v2_benchmarks.py

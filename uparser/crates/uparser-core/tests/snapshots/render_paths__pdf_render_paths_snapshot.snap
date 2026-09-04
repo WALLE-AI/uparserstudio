@@ -1,0 +1,8 @@
+---
+source: crates/uparser-core/tests/render_paths.rs
+expression: "side_by_side(\"text.pdf\", &path)"
+---
+=== text.pdf · engine ===
+## Hello uparser
+=== text.pdf · canonical ===
+## Hello uparser

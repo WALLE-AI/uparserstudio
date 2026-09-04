@@ -8,11 +8,20 @@ use crate::adapters::ParseCtx;
 use crate::ingest::RenderedPage;
 use crate::transport::ChatCompletionRequest;
 use crate::types::PageError;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
 use std::time::Duration;
+
+/// A base64-encoded PNG carried in a REST stage request body — the whole
+/// page or a cropped region. Shared by every non-chat-completions stage
+/// contract (`paddleocr`, and previously `pipeline`'s V1 serving shape).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageImage {
+    pub png_base64: String,
+}
 
 pub async fn chat_stage(
     page: &RenderedPage,

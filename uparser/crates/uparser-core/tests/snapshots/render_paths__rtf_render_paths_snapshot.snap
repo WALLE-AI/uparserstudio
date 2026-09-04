@@ -1,0 +1,22 @@
+---
+source: crates/uparser-core/tests/render_paths.rs
+expression: "side_by_side(\"doc.rtf\", &path)"
+---
+=== doc.rtf · engine ===
+# Report title
+
+Body paragraph text.
+
+1. First item
+2. Second item
+
+Closing paragraph.
+=== doc.rtf · canonical ===
+# Report title
+
+Body paragraph text.
+
+1. First item
+2. Second item
+
+Closing paragraph.

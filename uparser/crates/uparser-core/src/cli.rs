@@ -50,9 +50,13 @@ pub enum Command {
         /// stdout. Errors continue to use the normal stdout/stderr contract.
         #[arg(long)]
         output: Option<String>,
-        /// Markdown rendering source. `engine` preserves native/document
-        /// engine output; `canonical` uses the shared ParseResult renderer
-        /// for G-N comparison. Ignored for non-Markdown output.
+        /// Which producer supplies Markdown for a native PDF. `engine`
+        /// (default) keeps the native engine's own Markdown, which is what
+        /// the published native benchmark score was measured on; `canonical`
+        /// renders that PDF from the canonical model instead, the same way
+        /// every other source is rendered. Has no effect on structured
+        /// sources or model protocols — those have one renderer either way —
+        /// nor on non-Markdown output.
         #[arg(long, value_enum, default_value_t = MarkdownSource::Engine)]
         markdown_source: MarkdownSource,
         /// Execution family. Omit for backward-compatible auto routing or
@@ -581,50 +585,6 @@ fn run_parse(
         document_options.limits.max_input_bytes = mib.saturating_mul(1024 * 1024);
     }
 
-    // The explicit native Markdown/no-assets mode needs no async services,
-    // routing enrichment, compatibility IR, or execution metadata. Keep this
-    // direct path aligned with lightweight converter CLIs used in benchmarks.
-    if protocol == "native"
-        && format == OutputFormat::Markdown
-        && markdown_source == MarkdownSource::Engine
-        && no_cache
-        && !stream
-        && !no_postprocess
-        && wanted_pages.is_none()
-        && assets_dir.is_none()
-        && no_assets
-        && window_size == DEFAULT_WINDOW_SIZE
-        && max_concurrency == DEFAULT_MAX_CONCURRENCY
-    {
-        match native_markdown_fast_path(&path, &file_bytes, &document_options) {
-            Ok(Some(markdown)) => {
-                let output = redact_output_if_requested(markdown, redact_pii);
-                return match emit_parse_output(&output, output_path.as_deref()) {
-                    Ok(()) => EXIT_SUCCESS,
-                    Err(error) => emit_error(
-                        format,
-                        EXIT_DEPENDENCY,
-                        "output_write_failed",
-                        &error.to_string(),
-                        &protocol,
-                        Some("output"),
-                    ),
-                };
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return emit_error(
-                    format,
-                    EXIT_DEPENDENCY,
-                    "native_parse_failed",
-                    &error,
-                    &protocol,
-                    Some("native"),
-                );
-            }
-        }
-    }
-
     let preflight_source = crate::frontend::PreflightSource::new(
         std::sync::Arc::<[u8]>::from(file_bytes),
         Some(&path),
@@ -656,25 +616,35 @@ fn run_parse(
             signal_cancellation.cancel();
         }
     });
-    let prepared =
-        match prepare_runtime.block_on(crate::runner::prepare_with_preference_and_cancellation(
-            preflight_source,
-            Some(&protocol),
-            crate::router::RoutePreference::Quality,
-            cancellation.clone(),
-        )) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                return emit_error(
-                    format,
-                    EXIT_USAGE,
-                    "preflight_failed",
-                    &error.to_string(),
-                    &protocol,
-                    Some("preflight"),
-                );
-            }
-        };
+    let prepared = match prepare_runtime.block_on(crate::runner::prepare_with_options(
+        preflight_source,
+        Some(&protocol),
+        crate::router::RoutePreference::Quality,
+        cancellation.clone(),
+        &document_options,
+    )) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            // A structured failure carries a machine-readable kind
+            // (`native_document.encrypted`, `.resource_limit`, …); report it
+            // as the error object's `stage` so an agent can branch on the
+            // cause instead of parsing the message.
+            let stage = match &error {
+                crate::runner::PrepareError::Analysis {
+                    stage: Some(stage), ..
+                } => stage,
+                _ => "preflight",
+            };
+            return emit_error(
+                format,
+                EXIT_USAGE,
+                "preflight_failed",
+                &error.to_string(),
+                &protocol,
+                Some(stage),
+            );
+        }
+    };
     let effective_protocol = prepared.plan.route.protocol.clone();
     if protocol == "auto" {
         eprintln!(
@@ -686,28 +656,11 @@ fn run_parse(
     let (endpoint, model) =
         crate::agent_config::resolve_endpoint_model(&effective_protocol, endpoint, model);
 
-    if format == OutputFormat::DocumentJson && effective_protocol != "native" {
-        return emit_error(
-            format,
-            EXIT_USAGE,
-            "unsupported_output_format",
-            "document-json requires the native protocol for a structured document",
-            &effective_protocol,
-            None,
-        );
-    }
-    if format == OutputFormat::DocumentJson
-        && detected_format == crate::frontend::DocumentFormat::Pdf
-    {
-        return emit_error(
-            format,
-            EXIT_USAGE,
-            "unsupported_output_format",
-            "document-json is available for structured native documents, not PDF",
-            &effective_protocol,
-            None,
-        );
-    }
+    // `document-json` used to be rejected here for every protocol but
+    // `native`, and for every format but a structured source, because the
+    // canonical document could only come from a structured frontend. Since
+    // O5.2 the IR can be lifted into one (`ascend`), so the format is
+    // available everywhere and this gate is gone.
 
     if protocol == "auto"
         && effective_protocol != "native"
@@ -749,6 +702,12 @@ fn run_parse(
         no_assets,
         raster_dpi,
         document_options,
+        // Engine Markdown is rendered straight from the native/document
+        // engine artifact, so the compatibility Page/Block IR and image
+        // materialization are pure overhead for this request shape.
+        markdown_only: effective_protocol == "native"
+            && format == OutputFormat::Markdown
+            && markdown_source == MarkdownSource::Engine,
         cancellation,
     };
 
@@ -850,64 +809,46 @@ fn run_parse(
 
     let has_errors = !outcome.result.page_errors.is_empty();
     if !stream || effective_protocol == "native" {
+        // Asset materialization has to happen before rendering, because the
+        // canonical renderer points `![](…)` at the path the asset was
+        // written to; it is a no-op for a document with no assets.
+        if !no_assets && let Some(document) = outcome.document.as_mut() {
+            let directory = execution
+                .assets_dir
+                .clone()
+                .unwrap_or_else(|| crate::assets::default_assets_dir(&path));
+            if let Err(error) = crate::assets::write_document_assets(document, &directory) {
+                eprintln!("warning: failed to write document assets: {error}");
+            }
+        }
+        let render_input = render::RenderInput {
+            result: &outcome.result,
+            engine_markdown: outcome.engine_markdown.as_deref(),
+            document: outcome.document.as_ref(),
+            source_format: detected_format,
+        };
         let output = match format {
             OutputFormat::Json => render::to_json(&outcome.result),
-            OutputFormat::Markdown => {
-                if markdown_source == MarkdownSource::Canonical {
-                    render::to_markdown(&outcome.result)
-                } else if let Some(markdown) = outcome.engine_markdown.take() {
-                    markdown
-                } else if let Some(document) = outcome.document.as_mut() {
-                    if !no_assets {
-                        let directory = execution
-                            .assets_dir
-                            .clone()
-                            .unwrap_or_else(|| crate::assets::default_assets_dir(&path));
-                        if let Err(error) =
-                            crate::assets::write_document_assets(document, &directory)
-                        {
-                            eprintln!("warning: failed to write document assets: {error}");
-                        }
-                    }
-                    uparser_document_engine::render::markdown(document)
-                } else {
-                    render::to_markdown(&outcome.result)
-                }
-            }
-            OutputFormat::DocumentJson => {
-                let Some(document) = outcome.document.as_mut() else {
+            OutputFormat::Markdown => render::render_markdown(
+                &render_input,
+                match markdown_source {
+                    MarkdownSource::Engine => render::MarkdownSource::Engine,
+                    MarkdownSource::Canonical => render::MarkdownSource::Canonical,
+                },
+            ),
+            OutputFormat::DocumentJson => match render::render_document_json(&render_input) {
+                Ok(json) => json,
+                Err(error) => {
                     return emit_error(
                         format,
-                        EXIT_USAGE,
-                        "unsupported_output_format",
-                        "document-json requires a structured native document",
+                        EXIT_INTERNAL,
+                        "serialization_failed",
+                        &error.to_string(),
                         &effective_protocol,
                         Some("render"),
                     );
-                };
-                if !no_assets {
-                    let directory = execution
-                        .assets_dir
-                        .clone()
-                        .unwrap_or_else(|| crate::assets::default_assets_dir(&path));
-                    if let Err(error) = crate::assets::write_document_assets(document, &directory) {
-                        eprintln!("warning: failed to write document assets: {error}");
-                    }
                 }
-                match uparser_document_engine::render::document_json(document) {
-                    Ok(json) => json,
-                    Err(error) => {
-                        return emit_error(
-                            format,
-                            EXIT_INTERNAL,
-                            "serialization_failed",
-                            &error.to_string(),
-                            &effective_protocol,
-                            Some("render"),
-                        );
-                    }
-                }
-            }
+            },
         };
         let output = redact_output_if_requested(output, redact_pii);
         if let Err(error) = emit_parse_output(&output, output_path.as_deref()) {
@@ -965,68 +906,6 @@ fn redact_output_if_requested(text: String, redact: bool) -> String {
     phone
         .replace_all(&text, "$1[REDACTED_PHONE]$2")
         .into_owned()
-}
-
-fn native_markdown_fast_path(
-    path: &str,
-    bytes: &[u8],
-    options: &uparser_document_engine::ParseOptions,
-) -> Result<Option<String>, String> {
-    let detected = uparser_document_engine::detect_format(bytes, Some(path));
-    if detected == uparser_document_engine::DocumentFormat::Pdf {
-        #[cfg(feature = "native")]
-        {
-            let artifact =
-                uparser_native_engine::process_pdf_mem(bytes).map_err(|error| error.to_string())?;
-            #[cfg(feature = "pdfium")]
-            if !artifact.positioned_items.is_empty()
-                && (artifact.ocr_reasons_by_page.iter().any(|entry| {
-                    entry.reasons.iter().any(|reason| {
-                        matches!(
-                            reason.as_str(),
-                            uparser_native_engine::OCR_REASON_SUSPECTED_GARBLED_TEXT
-                                | uparser_native_engine::OCR_REASON_SCANNED
-                        )
-                    })
-                }) || artifact
-                    .positioned_items
-                    .iter()
-                    .any(|item| uparser_native_engine::looks_like_gbk_utf8_mojibake(&item.text)))
-            {
-                return Ok(None);
-            }
-            if let Some(markdown) = artifact
-                .markdown
-                .as_deref()
-                .filter(|markdown| !markdown.trim().is_empty())
-            {
-                return Ok(Some(markdown.to_owned()));
-            }
-            if artifact.positioned_items.is_empty() {
-                let markdown = match artifact
-                    .title
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                {
-                    Some(title) => format!("# {title}\n\n[Image-only PDF: OCR required]\n"),
-                    None => "[Image-only PDF: OCR required]\n".to_owned(),
-                };
-                return Ok(Some(markdown));
-            }
-            return Ok(Some(uparser_native_engine::to_markdown_from_items(
-                artifact.positioned_items,
-                uparser_native_engine::MarkdownOptions::default(),
-            )));
-        }
-        #[cfg(not(feature = "native"))]
-        {
-            return Ok(None);
-        }
-    }
-    let document = uparser_document_engine::parse_document(bytes, detected, options)
-        .map_err(|error| error.to_string())?;
-    Ok(Some(uparser_document_engine::render::markdown(&document)))
 }
 
 /// Print a result line to stdout, treating a closed pipe as a normal end of

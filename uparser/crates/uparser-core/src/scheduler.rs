@@ -11,7 +11,7 @@ use tokio::sync::Semaphore;
 
 /// A page's adapter task panicked (or was cancelled) — isolate it into a
 /// `PageError` instead of letting the panic propagate out of `run`/
-/// `run_streaming` and abort every other in-flight/already-completed
+/// `run_source` and abort every other in-flight/already-completed
 /// page in the same call. Adapters process untrusted, possibly malformed
 /// model output; a single indexing bug reacting to one page's response
 /// should not discard every other page's already-successful result —
@@ -100,7 +100,7 @@ impl Scheduler {
 
     /// Same as `run`, but invokes `on_page` once per completed page
     /// (success or failure) — the finer, per-page-not-per-window
-    /// progress channel `run_streaming`'s `on_window` doesn't provide.
+    /// progress channel `run_source`'s `on_window` doesn't provide.
     /// `run` itself is just this with a no-op callback.
     pub async fn run_with_progress<F>(
         &self,
@@ -177,81 +177,6 @@ impl Scheduler {
             .expect("warnings mutex not poisoned")
             .clone();
         (out_pages, out_errors, warnings)
-    }
-
-    /// Same windowed/concurrency-bounded execution as `run`, but invokes
-    /// `on_window` with each window's results as soon as that window
-    /// completes, instead of collecting everything before returning
-    /// (T-9.2 / ARCHITECTURE.md §2.2's streaming mode) — lets a caller
-    /// emit NDJSON incrementally for a large document rather than
-    /// constructing one huge in-memory `ParseResult` first. Still
-    /// returns the full aggregate at the end for callers that want both
-    /// (e.g. a final cache write).
-    pub async fn run_streaming<F>(
-        &self,
-        adapter: Arc<dyn ProtocolAdapter>,
-        transport: Arc<Transport>,
-        permits: Arc<Semaphore>,
-        pages: Vec<RenderedPage>,
-        mut on_window: F,
-    ) -> (Vec<Page>, Vec<PageError>, Vec<String>)
-    where
-        F: FnMut(&[Page], &[PageError], &[String]),
-    {
-        let mut out_pages = Vec::new();
-        let mut out_errors = Vec::new();
-        let mut out_warnings = Vec::new();
-
-        for window in pages.chunks(self.window_size.max(1)) {
-            let window_warnings = Arc::new(Mutex::new(Vec::new()));
-            let mut handles = Vec::with_capacity(window.len());
-            for page in window {
-                let page_num = page.page_num;
-                let page = page.clone();
-                let adapter = Arc::clone(&adapter);
-                let ctx = ParseCtx::new_with_cancellation(
-                    Arc::clone(&transport),
-                    Arc::clone(&permits),
-                    Arc::clone(&window_warnings),
-                    self.cancellation.clone(),
-                );
-                handles.push((
-                    page_num,
-                    tokio::spawn(async move {
-                        let result = adapter.parse_page(&page, &ctx).await;
-                        (page, result)
-                    }),
-                ));
-            }
-
-            let mut window_pages = Vec::with_capacity(window.len());
-            let mut window_errors = Vec::new();
-            for (page_num, handle) in handles {
-                match handle.await {
-                    Ok((page, Ok(blocks))) => window_pages.push(Page {
-                        page_num: page.page_num,
-                        width_px: page.width,
-                        height_px: page.height,
-                        blocks,
-                    }),
-                    Ok((_, Err(err))) => window_errors.push(err),
-                    Err(join_err) => window_errors.push(page_panic_error(page_num, &join_err)),
-                }
-            }
-            window_pages.sort_by_key(|p| p.page_num);
-            let window_warnings = window_warnings
-                .lock()
-                .expect("warnings mutex not poisoned")
-                .clone();
-            on_window(&window_pages, &window_errors, &window_warnings);
-
-            out_pages.extend(window_pages);
-            out_errors.extend(window_errors);
-            out_warnings.extend(window_warnings);
-        }
-
-        out_pages.sort_by_key(|p| p.page_num);
-        (out_pages, out_errors, out_warnings)
     }
 
     /// Pulls bounded windows from a `PageSource` and schedules each window
@@ -597,7 +522,7 @@ mod tests {
     }
 
     /// An adapter that records a `ctx.warn()` per page — used to prove
-    /// `run`/`run_streaming` genuinely collect warnings across every
+    /// `run`/`run_source` genuinely collect warnings across every
     /// page into one document-level `Vec<String>` (T-9-era gap: this
     /// channel used to only ever reach a bare `eprintln!`, with no path
     /// into `ParseResult.warnings` for callers not watching stderr).
@@ -696,60 +621,55 @@ mod tests {
         assert_eq!(completed, vec![1, 2, 3, 4, 5]);
     }
 
+    /// Per-page failure isolation through the real windowed entry point:
+    /// one adapter error and one adapter panic must each surface as a single
+    /// `PageError` without taking down the other pages. Ported here from the
+    /// deleted `run_streaming` when that superseded method was removed (O1.4)
+    /// — `run_source` is now the only windowed execution path.
     #[tokio::test]
-    async fn run_streaming_invokes_callback_once_per_window_and_matches_run_aggregate() {
-        let adapter: Arc<dyn ProtocolAdapter> = Arc::new(MockAdapter { fail_on_page: None });
-        let scheduler = Scheduler::new(4);
-        let window_sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let window_sizes_clone = Arc::clone(&window_sizes);
+    async fn run_source_isolates_adapter_errors_and_panics() {
+        use crate::frontend::{CancellationToken, MemoryPageSource};
+        use crate::ingest::DocumentFormat;
 
-        let (pages, errors, _warnings) = scheduler
-            .run_streaming(
-                adapter,
-                Arc::new(Transport::new()),
-                Arc::new(Semaphore::new(8)),
-                fake_pages(10),
-                move |window_pages, _window_errors, _window_warnings| {
-                    window_sizes_clone.lock().unwrap().push(window_pages.len());
-                },
-            )
-            .await;
-
-        assert_eq!(pages.len(), 10);
-        assert!(errors.is_empty());
-        // 10 pages / window_size=4 -> windows of [4, 4, 2].
-        assert_eq!(*window_sizes.lock().unwrap(), vec![4, 4, 2]);
-    }
-
-    #[tokio::test]
-    async fn run_streaming_isolates_adapter_errors_and_panics() {
-        let scheduler = Scheduler::new(4);
-        let (_, errors, _) = scheduler
-            .run_streaming(
+        for (adapter, expected_stage) in [
+            (
                 Arc::new(MockAdapter {
                     fail_on_page: Some(2),
-                }),
-                Arc::new(Transport::new()),
-                Arc::new(Semaphore::new(2)),
+                }) as Arc<dyn ProtocolAdapter>,
+                None,
+            ),
+            (
+                Arc::new(PanicOnPageAdapter { panic_on_page: 2 }) as Arc<dyn ProtocolAdapter>,
+                Some("scheduler"),
+            ),
+        ] {
+            let cancellation = CancellationToken::default();
+            let mut source = MemoryPageSource::new(
+                DocumentFormat::Png,
+                "digest",
                 fake_pages(3),
-                |_, _, _| {},
-            )
-            .await;
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].page_num, 2);
+                cancellation.clone(),
+            );
+            let (pages, errors, _) = Scheduler::new(4)
+                .with_cancellation(cancellation)
+                .run_source(
+                    adapter,
+                    Arc::new(Transport::new()),
+                    Arc::new(Semaphore::new(2)),
+                    &mut source,
+                    |_, _, _| {},
+                    |_| {},
+                )
+                .await
+                .expect("memory page source succeeds");
 
-        let (_, errors, _) = scheduler
-            .run_streaming(
-                Arc::new(PanicOnPageAdapter { panic_on_page: 2 }),
-                Arc::new(Transport::new()),
-                Arc::new(Semaphore::new(2)),
-                fake_pages(3),
-                |_, _, _| {},
-            )
-            .await;
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].page_num, 2);
-        assert_eq!(errors[0].stage.as_deref(), Some("scheduler"));
+            assert_eq!(pages.len(), 2);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].page_num, 2);
+            if let Some(stage) = expected_stage {
+                assert_eq!(errors[0].stage.as_deref(), Some(stage));
+            }
+        }
     }
 
     #[tokio::test]

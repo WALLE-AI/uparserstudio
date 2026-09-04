@@ -8,12 +8,8 @@ pub mod mock;
 pub mod monkeyocr_v2;
 #[cfg(feature = "native")]
 pub mod native;
-#[cfg(feature = "pipeline-local-table")]
-pub mod onnx_table;
 pub mod paddleocr;
 pub mod paddlex_structure;
-pub mod pipeline;
-pub mod pipeline_serving;
 pub mod pipeline_v2;
 
 use crate::ingest::RenderedPage;

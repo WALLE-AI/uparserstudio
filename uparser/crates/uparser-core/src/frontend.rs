@@ -319,6 +319,36 @@ mod tests {
         assert_eq!(first.detection().warnings.len(), 1);
     }
 
+    /// Detection is signature-first with a filename fallback only where a
+    /// format has no reliable magic bytes (CSV/TSV). Moved here from
+    /// `ingest.rs` in O1 when its `detect_format` wrapper was removed —
+    /// `frontend` is now the single detection point.
+    #[test]
+    fn magic_bytes_and_extension_fallback_drive_detection() {
+        let png_signature = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..];
+        let jpeg_signature = &[0xFF, 0xD8, 0xFF, 0xE0][..];
+        assert_eq!(
+            PreflightSource::new(&b"%PDF-1.7\n"[..], None).format(),
+            DocumentFormat::Pdf
+        );
+        assert_eq!(
+            PreflightSource::new(png_signature, None).format(),
+            DocumentFormat::Png
+        );
+        assert_eq!(
+            PreflightSource::new(jpeg_signature, None).format(),
+            DocumentFormat::Jpeg
+        );
+        assert_eq!(
+            PreflightSource::new(&b"a,b\n1,2\n"[..], Some("data.csv")).format(),
+            DocumentFormat::Csv
+        );
+        assert_eq!(
+            PreflightSource::new(&[0, 1, 2, 3, 4][..], None).format(),
+            DocumentFormat::Unknown
+        );
+    }
+
     #[test]
     fn unknown_content_is_not_promoted_by_extension() {
         let source = PreflightSource::new(&b"not a pdf"[..], Some("report.pdf"));

@@ -1833,32 +1833,82 @@ fn collect_images_from_resources(
     }
 }
 
-/// Get document title from Info dictionary
+/// Get document title from Info dictionary.
+///
+/// PDF text strings are either UTF-16 (BOM-prefixed) or PDFDocEncoding,
+/// which coincides with Latin-1 over the printable range. A producer that
+/// wrote some other single-byte codepage (GBK is common on Chinese
+/// toolchains) cannot be decoded reliably, and `from_utf8_lossy` would turn
+/// it into replacement characters — a mojibake title is worse than no
+/// title, since callers surface it verbatim. Those are rejected instead.
 fn get_document_title(doc: &Document) -> Option<String> {
     let info_ref = doc.trailer.get(b"Info").ok()?.as_reference().ok()?;
     let info = doc.get_dictionary(info_ref).ok()?;
     let title_obj = info.get(b"Title").ok()?;
 
     match title_obj {
-        Object::String(bytes, _) => {
-            // Handle UTF-16BE encoding (BOM: 0xFE 0xFF)
-            if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-                let utf16: Vec<u16> = bytes[2..]
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-                    .collect();
-                Some(String::from_utf16_lossy(&utf16))
-            } else {
-                Some(String::from_utf8_lossy(bytes).to_string())
-            }
-        }
+        Object::String(bytes, _) => decode_pdf_text_string(bytes),
         _ => None,
     }
+}
+
+/// Decode a PDF text string: UTF-16BE/LE when BOM-prefixed, else UTF-8 if
+/// it happens to be valid, else PDFDocEncoding for pure-ASCII content.
+/// Returns `None` for anything else rather than guessing.
+fn decode_pdf_text_string(bytes: &[u8]) -> Option<String> {
+    let decoded = if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        String::from_utf16(&units).ok()?
+    } else if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        String::from_utf16(&units).ok()?
+    } else if let Ok(text) = std::str::from_utf8(bytes) {
+        text.to_owned()
+    } else if bytes.is_ascii() {
+        bytes.iter().map(|&b| b as char).collect()
+    } else {
+        // Unknown single-byte codepage — refuse rather than emit mojibake.
+        return None;
+    };
+    let trimmed = decoded.trim_matches(|c: char| c == '\u{0}' || c.is_whitespace());
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A GBK-encoded title (common from Chinese PDF producers) is not
+    /// representable as PDFDocEncoding/UTF-16 and must be rejected rather
+    /// than lossily decoded into replacement characters.
+    #[test]
+    fn pdf_text_strings_decode_by_bom_and_reject_unknown_codepages() {
+        assert_eq!(
+            decode_pdf_text_string(&[0xFE, 0xFF, 0x00, b'H', 0x00, b'i']),
+            Some("Hi".to_owned())
+        );
+        assert_eq!(
+            decode_pdf_text_string(&[0xFF, 0xFE, b'H', 0x00, b'i', 0x00]),
+            Some("Hi".to_owned())
+        );
+        assert_eq!(
+            decode_pdf_text_string(b"Plain ASCII"),
+            Some("Plain ASCII".to_owned())
+        );
+        assert_eq!(
+            decode_pdf_text_string("中文".as_bytes()),
+            Some("中文".to_owned())
+        );
+        // "\xBD\xA8\xD6\xFE" is GBK for 建筑 — neither UTF-8 nor BOM-marked.
+        assert_eq!(decode_pdf_text_string(&[0xBD, 0xA8, 0xD6, 0xFE]), None);
+        assert_eq!(decode_pdf_text_string(b"   "), None);
+    }
 
     fn fixture_path(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

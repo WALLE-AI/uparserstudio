@@ -1,7 +1,29 @@
 //! Baseline structured-document lowering, independent of the PDF native feature.
 
-use crate::types::{Block, BlockSource, CoordFrame, Geometry, Page, ParseResult, RoutedBy};
+use crate::types::{
+    Block, BlockSource, CoordFrame, Geometry, MergeHint, Page, ParseResult, RoutedBy,
+};
 use sha2::{Digest, Sha256};
+
+/// Machine-readable failure kind, carried on the error's `stage` field.
+///
+/// The CLI turns this into a semantic error object. Without it every
+/// structured failure surfaced as generic prose, which tells an agent
+/// nothing it can branch on — an encrypted file and an over-budget input
+/// need different responses. Lives here rather than in the `native` adapter
+/// so it is available in a build without the `native` feature too.
+pub fn document_error_stage(error: &uparser_document_engine::DocumentError) -> &'static str {
+    use uparser_document_engine::DocumentError as E;
+    match error {
+        E::UnsupportedFormat(_) => "native_document.unsupported_format",
+        E::Encrypted => "native_document.encrypted",
+        E::ResourceLimit { .. } => "native_document.resource_limit",
+        E::MissingPart { .. } => "native_document.missing_part",
+        E::Malformed { .. } => "native_document.malformed",
+        E::Io(_) => "native_document.io",
+        _ => "native_document",
+    }
+}
 
 pub fn to_parse_result(
     document: &uparser_document_engine::CanonicalDocument,
@@ -16,12 +38,7 @@ pub fn to_parse_result(
             page_num: (index + 1) as u32,
             width_px: 0,
             height_px: 0,
-            blocks: unit
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(order, block)| compatibility_block(document, block, order))
-                .collect(),
+            blocks: lower_blocks(document, &unit.blocks),
         })
         .collect();
     let protocol_format = match document.metadata.format {
@@ -63,6 +80,107 @@ pub fn to_parse_result(
     }
 }
 
+/// Lower a unit's canonical blocks into the compatibility `Block` IR.
+///
+/// A `List` expands into one block per item rather than collapsing into a
+/// single pre-rendered blob (O5.2): the IR now says "these are list items",
+/// and `MergeHint::ListItem` carries the marker the source actually used so
+/// the Markdown renderer reproduces it exactly.
+fn lower_blocks(
+    document: &uparser_document_engine::CanonicalDocument,
+    blocks: &[uparser_document_engine::Block],
+) -> Vec<Block> {
+    use uparser_document_engine::Block as DocBlock;
+
+    let mut out = Vec::new();
+    for block in blocks {
+        match block {
+            DocBlock::List { list } => lower_list(document, list, 0, &mut out),
+            _ => {
+                let order = out.len();
+                out.push(compatibility_block(document, block, order));
+            }
+        }
+    }
+    out
+}
+
+fn lower_list(
+    document: &uparser_document_engine::CanonicalDocument,
+    list: &uparser_document_engine::List,
+    level: u8,
+    out: &mut Vec<Block>,
+) {
+    use uparser_document_engine::Block as DocBlock;
+    use uparser_document_engine::ListMarker;
+
+    // Every marker except an explicit bullet (or none at all) is numbered
+    // in some alphabet; the compatibility IR only distinguishes ordered from
+    // bulleted, and the Markdown renderer normalizes ordered to `N.`.
+    let ordered = !matches!(list.marker, ListMarker::Bullet | ListMarker::None);
+    let mut number = list.start.unwrap_or(1);
+    for item in &list.items {
+        // An item's own text is its leading blocks; a nested list inside it
+        // recurses one level deeper instead of being flattened into the
+        // parent's text.
+        let mut text_parts = Vec::new();
+        let mut nested = Vec::new();
+        for child in &item.blocks {
+            match child {
+                DocBlock::List { list } => nested.push(list),
+                other => {
+                    let rendered = uparser_document_engine::render::block_markdown(document, other);
+                    let rendered = rendered.trim();
+                    if !rendered.is_empty() {
+                        text_parts.push(rendered.to_owned());
+                    }
+                }
+            }
+        }
+        let order = out.len();
+        out.push(Block {
+            category_raw: "list".to_owned(),
+            category: Some("list".to_owned()),
+            reading_order: Some(order as u32),
+            text: Some(text_parts.join(" ")),
+            merge_hint: Some(MergeHint::ListItem {
+                ordered,
+                number: ordered.then_some(number),
+                level,
+            }),
+            ..empty_structured_block()
+        });
+        number += 1;
+        for list in nested {
+            lower_list(document, list, level.saturating_add(1), out);
+        }
+    }
+}
+
+/// The fields every structured block shares: no geometry (source-semantic
+/// formats have none), full confidence, structured provenance.
+fn empty_structured_block() -> Block {
+    Block {
+        geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
+        geom_frame: CoordFrame::Page,
+        bbox_px: None,
+        category_raw: String::new(),
+        category: None,
+        reading_order: None,
+        text: None,
+        html: None,
+        latex: None,
+        spans: Vec::new(),
+        merge_hint: None,
+        confidence: Some(1.0),
+        source: BlockSource::StructuredNative,
+        error: None,
+        asset_bytes: None,
+        asset_path: None,
+        asset_caption: None,
+    }
+}
+
 fn compatibility_block(
     document: &uparser_document_engine::CanonicalDocument,
     block: &uparser_document_engine::Block,
@@ -80,7 +198,8 @@ fn compatibility_block(
     let mut text = None;
     let mut html = None;
     let mut asset_bytes = None;
-    let mut category = category_raw;
+    let mut merge_hint = None;
+    let category = category_raw;
 
     match block {
         DocBlock::Table { table } => {
@@ -97,12 +216,18 @@ fn compatibility_block(
                 ));
             }
         }
-        DocBlock::Heading { .. } => {
+        DocBlock::Heading { level, .. } => {
             let rendered = uparser_document_engine::render::block_markdown(document, block);
             text = Some(rendered.trim_start_matches('#').trim_start().to_owned());
+            // Without this the IR could not distinguish an `h1` from an `h4`
+            // and the Markdown renderer collapsed every heading to `#`.
+            merge_hint = Some(MergeHint::TitleLevel(*level));
         }
-        DocBlock::List { .. } => {
-            category = "text";
+        DocBlock::List { list } => {
+            // `lower_blocks` routes lists to `lower_list`; reaching here means
+            // a list nested somewhere this function does not walk, so degrade
+            // to the pre-O5.2 behaviour rather than dropping it.
+            let _ = list;
             text = Some(uparser_document_engine::render::block_markdown(
                 document, block,
             ));
@@ -115,29 +240,62 @@ fn compatibility_block(
     }
 
     Block {
-        geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
-        geom_frame: CoordFrame::Page,
-        bbox_px: None,
         category_raw: category_raw.to_owned(),
         category: Some(category.to_owned()),
         reading_order: Some(order as u32),
         text,
         html,
-        latex: None,
-        spans: Vec::new(),
-        merge_hint: None,
-        confidence: Some(1.0),
-        source: BlockSource::StructuredNative,
-        error: None,
+        merge_hint,
         asset_bytes,
-        asset_path: None,
-        asset_caption: None,
+        ..empty_structured_block()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_errors_have_stable_machine_readable_stages() {
+        use uparser_document_engine::{DocumentError, DocumentFormat};
+
+        let cases = [
+            (
+                DocumentError::UnsupportedFormat(DocumentFormat::Unknown),
+                "native_document.unsupported_format",
+            ),
+            (DocumentError::Encrypted, "native_document.encrypted"),
+            (
+                DocumentError::ResourceLimit {
+                    limit: "bytes",
+                    detail: "too large".to_owned(),
+                },
+                "native_document.resource_limit",
+            ),
+            (
+                DocumentError::MissingPart {
+                    part: "document.xml".to_owned(),
+                },
+                "native_document.missing_part",
+            ),
+            (
+                DocumentError::Malformed {
+                    part: Some("document.xml".to_owned()),
+                    detail: "bad XML".to_owned(),
+                },
+                "native_document.malformed",
+            ),
+            (
+                DocumentError::Io(std::io::Error::other("read failed")),
+                "native_document.io",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(document_error_stage(&error), expected);
+        }
+    }
+
     use uparser_document_engine::{
         Asset, Block as DocBlock, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentFormat,
         DocumentUnit, Inline, List, ListItem, ListMarker, ParseWarning, Table, TableKind, UnitKind,
@@ -235,8 +393,25 @@ mod tests {
         assert_eq!(blocks.len(), 6);
         assert_eq!(blocks[0].category_raw, "title");
         assert_eq!(blocks[0].text.as_deref(), Some("Heading"));
-        assert_eq!(blocks[1].category.as_deref(), Some("text"));
-        assert!(blocks[1].text.as_deref().unwrap().contains("item"));
+        // The heading level survives now; before O5.2 the IR only knew
+        // "this is a title".
+        assert_eq!(
+            blocks[0].merge_hint,
+            Some(crate::types::MergeHint::TitleLevel(2))
+        );
+        // O5.2: a list lowers to one block per item, tagged `list` and
+        // carrying the marker, instead of one `text` block holding the
+        // whole pre-rendered list.
+        assert_eq!(blocks[1].category.as_deref(), Some("list"));
+        assert_eq!(blocks[1].text.as_deref(), Some("item"));
+        assert_eq!(
+            blocks[1].merge_hint,
+            Some(crate::types::MergeHint::ListItem {
+                ordered: false,
+                number: None,
+                level: 0,
+            })
+        );
         assert!(blocks[2].html.as_deref().unwrap().contains("cell"));
         assert_eq!(blocks[3].asset_bytes.as_deref(), Some(&[1, 2, 3][..]));
         assert!(blocks[3].text.is_none());

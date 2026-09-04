@@ -639,24 +639,47 @@ fn escape_inline_text(text: &str, line_start: bool) -> Cow<'_, str> {
         };
     }
 
+    // `*` is emphasis only when a second one can close it. A lone asterisk —
+    // a footnote marker, a units qualifier, a bare bullet glyph — cannot form
+    // emphasis, so escaping it inserts a backslash the document never had.
+    // Escape the minimum needed to round-trip, not every character that is
+    // syntactically special somewhere.
+    let asterisk_can_pair = text.matches('*').count() > 1;
+
     let mut output = String::with_capacity(text.len() + 8);
     let mut previous = None;
-    let mut characters = text.chars().peekable();
-    while let Some(character) = characters.next() {
-        let next = characters.peek().copied();
+    let mut characters = text.char_indices().peekable();
+    while let Some((byte_index, character)) = characters.next() {
+        let next = characters.peek().map(|(_, character)| *character);
         match character {
+            '*' if !asterisk_can_pair => output.push('*'),
+            // A backslash only escapes ASCII punctuation; before anything
+            // else it is already literal. `\frac` and `\nu` in a LaTeX
+            // fragment therefore need no escaping, and doubling them
+            // corrupts the formula.
+            '\\' if !next.is_some_and(|next| next.is_ascii_punctuation()) => output.push('\\'),
             '\\' | '`' | '*' | '[' | ']' => {
                 output.push('\\');
                 output.push(character);
             }
-            // `_` is emphasis only at a word boundary; intra-word underscores
-            // are literal in GFM and must not be escaped.
-            '_' if is_word_boundary(previous) || is_word_boundary(next) => {
+            // `_` is emphasis only at a word boundary *and* only when it is
+            // adjacent to a non-space on at least one side: a delimiter run
+            // surrounded by whitespace can neither open nor close emphasis,
+            // so `P _ {x}` needs no escaping.
+            '_' if (is_word_boundary(previous) || is_word_boundary(next))
+                && (previous.is_some_and(|c| !c.is_whitespace())
+                    || next.is_some_and(|c| !c.is_whitespace())) =>
+            {
                 output.push('\\');
                 output.push('_');
             }
-            '<' => output.push_str("&lt;"),
-            '&' => output.push_str("&amp;"),
+            // Only escape what would actually change parsing. A bare `<`
+            // (as in `a < b`) is literal unless it opens a tag, and a bare
+            // `&` is literal unless it opens an entity — escaping either
+            // unconditionally puts `&amp;` and `&lt;` into the visible text
+            // of documents that contained neither.
+            '<' if opens_html_tag(next) => output.push_str("&lt;"),
+            '&' if opens_entity(&text[byte_index + 1..]) => output.push_str("&amp;"),
             _ => output.push(character),
         }
         previous = Some(character);
@@ -670,6 +693,27 @@ fn escape_inline_text(text: &str, line_start: bool) -> Cow<'_, str> {
 
 const fn needs_escape(byte: u8) -> bool {
     matches!(byte, b'\\' | b'`' | b'*' | b'[' | b']' | b'_' | b'<' | b'&')
+}
+
+/// Whether a `<` at this position could open an HTML tag or comment.
+fn opens_html_tag(next: Option<char>) -> bool {
+    matches!(next, Some(character) if character.is_ascii_alphabetic()
+        || character == '/'
+        || character == '!'
+        || character == '?')
+}
+
+/// Whether an `&` at this position could open a character entity —
+/// `&name;`, `&#123;` or `&#x1F;`.
+fn opens_entity(rest: &str) -> bool {
+    let rest = rest.strip_prefix('#').map_or(rest, |numeric| {
+        numeric.strip_prefix(['x', 'X']).unwrap_or(numeric)
+    });
+    let name: String = rest
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric())
+        .collect();
+    !name.is_empty() && rest[name.len()..].starts_with(';')
 }
 
 fn is_word_boundary(character: Option<char>) -> bool {
@@ -740,6 +784,80 @@ fn escape_html(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A backslash escapes only ASCII punctuation; before a letter it is
+    /// already literal. Doubling it corrupts LaTeX a model wrote into the
+    /// text, which is the most common source of backslashes in practice.
+    #[test]
+    fn backslash_escapes_only_before_punctuation() {
+        assert_eq!(
+            escape_inline_text("\\frac {D v}{\\nu}", false),
+            "\\frac {D v}{\\nu}"
+        );
+        // Before punctuation it really does escape, so it must be doubled.
+        assert_eq!(escape_inline_text("a \\* b", false), "a \\\\* b");
+    }
+
+    /// An underscore surrounded by whitespace is not a delimiter run and
+    /// cannot open or close emphasis.
+    #[test]
+    fn underscore_between_spaces_is_not_escaped() {
+        assert_eq!(escape_inline_text("P _ {x}", false), "P _ {x}");
+        // Adjacent to a word on one side, it can open emphasis.
+        assert_eq!(escape_inline_text("P _x", false), "P \\_x");
+    }
+
+    /// `&` and `<` are only special when they actually open an entity or a
+    /// tag. Escaping them unconditionally puts `&amp;` and `&lt;` into the
+    /// visible text of documents that contained neither.
+    #[test]
+    fn ampersand_and_angle_bracket_escape_only_when_they_would_parse() {
+        assert_eq!(
+            escape_inline_text("Access & Searching", false),
+            "Access & Searching"
+        );
+        assert_eq!(
+            escape_inline_text("a < b and c > d", false),
+            "a < b and c > d"
+        );
+        // These would parse, so they are escaped.
+        assert_eq!(
+            escape_inline_text("&amp; literally", false),
+            "&amp;amp; literally"
+        );
+        assert_eq!(
+            escape_inline_text("&#169; literally", false),
+            "&amp;#169; literally"
+        );
+        assert_eq!(
+            escape_inline_text("<br> literally", false),
+            "&lt;br> literally"
+        );
+        assert_eq!(
+            escape_inline_text("</b> literally", false),
+            "&lt;/b> literally"
+        );
+    }
+
+    /// A lone `*` cannot open emphasis — there is nothing to close it — so
+    /// escaping it inserts a backslash the source document never had. A
+    /// pair can, and still must be escaped.
+    #[test]
+    fn a_lone_asterisk_is_not_escaped_but_a_pair_is() {
+        assert_eq!(
+            escape_inline_text("*8 ml of water", false),
+            "*8 ml of water"
+        );
+        assert_eq!(
+            escape_inline_text("*8 ml and *6 ml", false),
+            "\\*8 ml and \\*6 ml"
+        );
+        // Emphasis the caller wants literal is still protected.
+        assert_eq!(
+            escape_inline_text("literal *emphasis* here", false),
+            "literal \\*emphasis\\* here"
+        );
+    }
     use super::*;
     use crate::{CellValueKind, DocumentFormat, DocumentUnit, TableKind};
 

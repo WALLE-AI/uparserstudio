@@ -1,7 +1,7 @@
 //! Coordinate-system conversion and geometric dedup, per
 //! ARCHITECTURE.md §5 / T-1.3.
 
-use crate::types::{CoordFrame, Geometry};
+use crate::types::Geometry;
 
 /// Convert a `[0,1]` fraction-of-page bbox to page-pixel coordinates.
 /// mineru-vlm's stage-1 boxes are fractions of the (independently
@@ -144,22 +144,6 @@ pub fn dedupe_by_iou(boxes: &[[i32; 4]], threshold: f32) -> Vec<usize> {
     kept
 }
 
-/// Convert a pixel bbox from a crop's local frame into its parent's
-/// frame. Not exercised by the mineru-vlm adapter in this pass (see the
-/// P1 plan's note that v0.1.14's stage 2 doesn't emit child boxes), but
-/// kept as shared machinery for protocols/versions that do.
-pub fn crop_bbox_to_parent(bbox_in_crop: [i32; 4], crop_frame: &CoordFrame) -> [i32; 4] {
-    match crop_frame {
-        CoordFrame::Page => bbox_in_crop,
-        CoordFrame::Crop { crop_bbox_px, .. } => [
-            bbox_in_crop[0] + crop_bbox_px[0],
-            bbox_in_crop[1] + crop_bbox_px[1],
-            bbox_in_crop[2] + crop_bbox_px[0],
-            bbox_in_crop[3] + crop_bbox_px[1],
-        ],
-    }
-}
-
 /// Extract the bounding rect of a `Geometry`, ignoring polygon detail.
 pub fn geometry_bounds(geom: &Geometry) -> [f32; 4] {
     match geom {
@@ -280,22 +264,6 @@ mod tests {
         ];
         let kept = dedupe_by_iou(&boxes, 0.5);
         assert_eq!(kept, vec![0, 2]);
-    }
-
-    #[test]
-    fn crop_bbox_to_parent_page_frame_is_identity() {
-        let b = [1, 2, 3, 4];
-        assert_eq!(crop_bbox_to_parent(b, &CoordFrame::Page), b);
-    }
-
-    #[test]
-    fn crop_bbox_to_parent_offsets_by_crop_origin() {
-        let frame = CoordFrame::Crop {
-            parent_block: 0,
-            crop_bbox_px: [100, 200, 300, 400],
-        };
-        let result = crop_bbox_to_parent([5, 5, 15, 15], &frame);
-        assert_eq!(result, [105, 205, 115, 215]);
     }
 
     #[test]

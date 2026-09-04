@@ -16,11 +16,11 @@
 //! Serving). This adapter therefore documents and implements its own
 //! reasonable, minimal REST contract (`PaddleOcrRequest`/`Response`
 //! below) as the one this project would ask a real deployment to speak
-//! — reusing `pipeline_serving::StageImage`'s base64-PNG shape rather
+//! — reusing `shape_executor::StageImage`'s base64-PNG shape rather
 //! than inventing a third image encoding — and is offline-tested via
 //! `MockDispatch`, same as every other adapter's dispatch.
 //!
-//! `dispatch()`-equivalent: like `pipeline`'s Remote stages, this isn't
+//! `dispatch()`-equivalent: like `pipeline`'s stages, this isn't
 //! chat-completions-shaped, so it goes through `ParseCtx::dispatch_rest`
 //! rather than `dispatch()` (§3.4's "覆盖走专属 REST").
 //!
@@ -33,11 +33,11 @@
 //! itself stays `false` to honestly describe the model's own output,
 //! not this adapter's applied fallback.
 
-use super::pipeline_serving::StageImage;
 use super::{ModelStage, ParseCtx, PostprocessSignals, ProtocolAdapter, RawOutputFormat};
 use crate::geometry;
 use crate::ingest::RenderedPage;
 use crate::reading_order;
+use crate::shape_executor::StageImage;
 use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
 use async_trait::async_trait;
 use base64::Engine as _;

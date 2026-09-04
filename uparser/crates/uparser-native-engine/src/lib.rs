@@ -37,6 +37,8 @@ pub mod extractor;
 pub mod glyph_names;
 pub mod markdown;
 pub mod process_mode;
+pub mod structure_export;
+pub use structure_export::{HeadingHint, StructureHints, TableHint};
 pub mod structure_tree;
 pub mod tables;
 mod text_quality;
@@ -169,6 +171,12 @@ pub struct PdfProcessResult {
     /// Source-backed chart regions detected from vector rectangle geometry,
     /// in bottom-left PDF coordinates and keyed by 1-indexed page number.
     pub chart_regions: HashMap<u32, Vec<[f32; 4]>>,
+    /// Headings and tables the Markdown pass committed to, in PDF
+    /// coordinates. Lets a consumer build a structured IR that agrees with
+    /// the Markdown instead of re-deriving (or losing) the analysis. Empty
+    /// in [`ProcessMode::Analyze`] and [`ProcessMode::DetectOnly`], which do
+    /// not render. See [`structure_export`].
+    pub structure_hints: structure_export::StructureHints,
 }
 
 // =========================================================================
@@ -581,6 +589,7 @@ pub fn extract_pages_markdown_mem(
                     prefiltered_page_number_mask: Some(&page_number_removal_mask),
                 },
             )
+            .0
         };
 
         let has_decoding_issue = has_text_quality_issue
@@ -3654,6 +3663,7 @@ fn process_document(
             struct_roles: HashMap::new(),
             page_sizes,
             chart_regions: HashMap::new(),
+            structure_hints: structure_export::StructureHints::default(),
         });
     }
 
@@ -3674,6 +3684,7 @@ fn process_document(
             struct_roles: HashMap::new(),
             page_sizes,
             chart_regions: HashMap::new(),
+            structure_hints: structure_export::StructureHints::default(),
         });
     }
 
@@ -3768,6 +3779,7 @@ fn process_document(
         text_quality_pages,
         text_quality_reasons_by_page,
         chart_regions,
+        structure_hints,
     ) = match extracted {
         Some(((items, rects, lines), page_thresholds, gid_encoded_pages)) => {
             let mut ocr_reasons_by_page = BTreeMap::new();
@@ -3893,10 +3905,13 @@ fn process_document(
                 })
                 .collect();
 
-            let md = if options.mode == ProcessMode::Analyze {
-                None
+            // `hints` is the structure the renderer committed to on this very
+            // pass — see `structure_export`. Split from the Markdown here so
+            // everything downstream keeps working with a plain `String`.
+            let (md, hints) = if options.mode == ProcessMode::Analyze {
+                (None, crate::structure_export::StructureHints::default())
             } else {
-                Some(markdown::to_markdown_from_items_with_rects_and_lines(
+                let (markdown, hints) = markdown::to_markdown_from_items_with_rects_and_lines(
                     items,
                     options.markdown,
                     &rects,
@@ -3909,7 +3924,8 @@ fn process_document(
                         prefiltered_page_number_pages: Some(&removed_pages),
                         prefiltered_page_number_mask: Some(removal_mask.as_slice()),
                     },
-                ))
+                );
+                (Some(markdown), hints)
             };
 
             let enc = !ocr_reasons_by_page.is_empty()
@@ -3923,6 +3939,7 @@ fn process_document(
                 text_quality.pages_needing_ocr,
                 ocr_reasons_by_page,
                 chart_regions,
+                hints,
             )
         }
         None => (
@@ -3933,6 +3950,7 @@ fn process_document(
             Vec::new(),
             BTreeMap::new(),
             HashMap::new(),
+            crate::structure_export::StructureHints::default(),
         ),
     };
 
@@ -4040,6 +4058,7 @@ fn process_document(
         struct_roles: struct_roles.unwrap_or_default(),
         page_sizes,
         chart_regions,
+        structure_hints,
     })
 }
 

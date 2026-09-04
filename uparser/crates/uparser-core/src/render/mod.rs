@@ -3,85 +3,99 @@
 //! formatting (those land alongside the adapters that produce the
 //! richer signals they depend on).
 
-use crate::types::{MergeHint, ParseResult};
+use crate::types::ParseResult;
+
+/// Which producer supplies Markdown.
+///
+/// Only one distinction survives: whether the **native PDF engine's own**
+/// Markdown is used, or whether that document is rendered from the canonical
+/// model like everything else. Model protocols and structured sources have a
+/// single renderer either way.
+///
+/// `Engine` remains the default because the vendored engine's Markdown is
+/// what the published native benchmark score was measured on, and rendering
+/// a PDF from the IR still loses signals the engine only expresses in text
+/// (see the plan's §15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownSource {
+    Engine,
+    Canonical,
+}
+
+/// Everything a completed run can be asked to render.
+pub struct RenderInput<'a> {
+    pub result: &'a ParseResult,
+    /// The engine's own Markdown, when the protocol produced one.
+    pub engine_markdown: Option<&'a str>,
+    /// The canonical document, when the source was a structured format.
+    pub document: Option<&'a uparser_document_engine::CanonicalDocument>,
+    /// Format to record on a document ascended from `result`.
+    pub source_format: uparser_document_engine::DocumentFormat,
+}
+
+#[derive(Debug)]
+pub enum RenderError {
+    Serialization(String),
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::Serialization(message) => write!(formatter, "{message}"),
+        }
+    }
+}
+
+/// The one place an output format is turned into bytes (O5.4).
+///
+/// This used to be a four-way `if/else` inline in `cli.rs`, which meant the
+/// library API and the CLI could disagree about what `--format markdown`
+/// means, and that `document-json` was reachable only for structured
+/// sources. Both are decided here now.
+pub fn render_markdown(input: &RenderInput<'_>, source: MarkdownSource) -> String {
+    if source == MarkdownSource::Engine
+        && let Some(markdown) = input.engine_markdown
+    {
+        return markdown.to_owned();
+    }
+    // The canonical renderer terminates its output with a newline; the CLI
+    // adds one of its own when writing the line. Trim so the emitted file
+    // does not gain a trailing blank line just because of which renderer
+    // produced it.
+    let rendered = match input.document {
+        // A structured source already *is* a canonical document; ascending
+        // its own lowered blocks would only lose what it already has.
+        Some(document) => uparser_document_engine::render::markdown(document),
+        // Everything else — every model protocol, and `pipeline` — is lifted
+        // into the canonical model and rendered by the one renderer. This is
+        // the merge: the `Page`/`Block` Markdown writer that used to serve
+        // these protocols is gone, so escaping, list indentation and table
+        // degradation are decided in exactly one place.
+        None => uparser_document_engine::render::markdown(&crate::ascend::to_canonical_document(
+            input.result,
+            input.source_format,
+        )),
+    };
+    rendered.trim_end().to_owned()
+}
+
+/// `--format document-json` for any protocol: a structured source renders
+/// its own document, everything else renders one ascended from the IR.
+pub fn render_document_json(input: &RenderInput<'_>) -> Result<String, RenderError> {
+    let owned;
+    let document = match input.document {
+        Some(document) => document,
+        None => {
+            owned = crate::ascend::to_canonical_document(input.result, input.source_format);
+            &owned
+        }
+    };
+    uparser_document_engine::render::document_json(document)
+        .map_err(|error| RenderError::Serialization(error.to_string()))
+}
 
 pub fn to_json(result: &ParseResult) -> String {
     serde_json::to_string_pretty(result).expect("ParseResult is always serializable")
-}
-
-pub fn to_markdown(result: &ParseResult) -> String {
-    let mut out = String::new();
-    for page in &result.pages {
-        for block in &page.blocks {
-            if let Some(html) = &block.html {
-                out.push_str(html);
-                out.push_str("\n\n");
-            } else if let Some(latex) = &block.latex {
-                // Inline formulas (`category == "equation_inline"`, e.g.
-                // pipeline's `inline_formula` regions) render as `$...$`
-                // so they stay inline with surrounding text; every other
-                // formula renders as a display-math `$$...$$` block. See
-                // D3 in `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md` — the
-                // prior unconditional `$$...$$` split every paragraph
-                // containing an inline formula into two blocks.
-                if block.category.as_deref() == Some("equation_inline") {
-                    out.push('$');
-                    out.push_str(latex);
-                    out.push('$');
-                } else {
-                    out.push_str("$$\n");
-                    out.push_str(latex);
-                    out.push_str("\n$$");
-                }
-                out.push_str("\n\n");
-            } else if let Some(text) = &block.text {
-                // Emit semantic Markdown markup from the block's normalized
-                // category so heading/list structure survives into Markdown
-                // (previously every text block rendered as a bare paragraph,
-                // which zeroed the heading-hierarchy metric for the VLM
-                // protocols whose adapters DO classify titles/lists — see
-                // the opendataloader-bench mineru-vlm finding). `native`'s
-                // markdown path bypasses this renderer entirely, so it is
-                // unaffected.
-                match block.category.as_deref() {
-                    Some("title") => {
-                        // `merge_hint::TitleLevel(n)` (currently only set
-                        // by the `pipeline` adapter's doc_title/
-                        // paragraph_title distinction — see D6) drives
-                        // heading depth when present; every other
-                        // protocol collapses "title" to a single `#`,
-                        // unchanged from before this fix.
-                        let level = match &block.merge_hint {
-                            Some(MergeHint::TitleLevel(level)) => (*level).clamp(1, 6),
-                            _ => 1,
-                        };
-                        for _ in 0..level {
-                            out.push('#');
-                        }
-                        out.push(' ');
-                        out.push_str(text);
-                    }
-                    Some("list") => {
-                        out.push_str("- ");
-                        out.push_str(text);
-                    }
-                    _ => out.push_str(text),
-                }
-                out.push_str("\n\n");
-            } else if let Some(asset_path) = &block.asset_path {
-                // See `image_link_gap_report.md`: image-category blocks
-                // previously fell through every branch above with
-                // text/html/latex all `None`, producing no Markdown
-                // output at all. `asset_path` is only ever populated
-                // by `assets::write_page_assets` after a real crop was
-                // written to disk.
-                out.push_str("![](");
-                out.push_str(asset_path);
-                out.push_str(")\n\n");
-            }
-        }
-    }
-    out.trim_end().to_string()
 }
 
 pub fn to_content_list(result: &ParseResult) -> String {
@@ -114,6 +128,19 @@ pub fn to_content_list(result: &ParseResult) -> String {
 mod tests {
     use super::*;
     use crate::types::*;
+
+    /// Render through the one renderer, the way every caller now does.
+    fn markdown(result: &ParseResult) -> String {
+        render_markdown(
+            &RenderInput {
+                result,
+                engine_markdown: None,
+                document: None,
+                source_format: uparser_document_engine::DocumentFormat::Pdf,
+            },
+            MarkdownSource::Canonical,
+        )
+    }
 
     fn sample_result() -> ParseResult {
         ParseResult {
@@ -159,7 +186,7 @@ mod tests {
 
     #[test]
     fn markdown_snapshot() {
-        insta::assert_snapshot!(to_markdown(&sample_result()));
+        insta::assert_snapshot!(markdown(&sample_result()));
     }
 
     #[test]
@@ -167,7 +194,7 @@ mod tests {
         let mut result = sample_result();
         result.pages[0].blocks[0].text = None;
         result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
-        assert_eq!(to_markdown(&result), "![](doc_images/abc123.png)");
+        assert_eq!(markdown(&result), "![](doc_images/abc123.png)");
     }
 
     #[test]
@@ -177,7 +204,7 @@ mod tests {
         // fallback order should still be deterministic if it ever does.
         let mut result = sample_result();
         result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
-        assert_eq!(to_markdown(&result), "Hello world");
+        assert_eq!(markdown(&result), "Hello world");
     }
 
     #[test]
@@ -256,7 +283,7 @@ mod tests {
         let mineru_shaped = result_with(block(BlockSource::LayoutThenRecognize, "text", None));
         let dots_ocr_shaped = result_with(block(BlockSource::OneShotVlm, "Text", Some(0)));
 
-        assert_eq!(to_markdown(&mineru_shaped), to_markdown(&dots_ocr_shaped));
+        assert_eq!(markdown(&mineru_shaped), markdown(&dots_ocr_shaped));
         assert_eq!(
             to_content_list(&mineru_shaped),
             to_content_list(&dots_ocr_shaped)
@@ -298,7 +325,7 @@ mod tests {
             typed("list", "an item"),
             typed("text", "a paragraph"),
         ];
-        let md = to_markdown(&r);
+        let md = markdown(&r);
         assert!(md.contains("# The Heading"), "title → '# ': {md}");
         assert!(md.contains("- an item"), "list → '- ': {md}");
         // Plain text is unprefixed.
@@ -335,10 +362,10 @@ mod tests {
         }
         let mut r = sample_result();
         r.pages[0].blocks = vec![formula("equation_inline", "x^2")];
-        assert_eq!(to_markdown(&r), "$x^2$");
+        assert_eq!(markdown(&r), "$x^2$");
 
         r.pages[0].blocks = vec![formula("equation", "x^2")];
-        assert_eq!(to_markdown(&r), "$$\nx^2\n$$");
+        assert_eq!(markdown(&r), "$$\nx^2\n$$");
     }
 
     /// D6: `merge_hint::TitleLevel(n)` drives heading depth for
@@ -375,7 +402,7 @@ mod tests {
             titled("Section", Some(2)),
             titled("No Hint", None),
         ];
-        let md = to_markdown(&r);
+        let md = markdown(&r);
         assert!(md.contains("# Document Title"));
         assert!(md.contains("## Section"));
         assert!(md.contains("# No Hint"));

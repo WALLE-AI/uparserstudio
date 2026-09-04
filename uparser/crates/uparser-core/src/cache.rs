@@ -39,7 +39,7 @@ pub struct ParamFingerprint {
 impl ParamFingerprint {
     fn canonical(&self) -> String {
         format!(
-            "v2-runner-2|{}|{}|{}|{}",
+            "v3-outcome-1|{}|{}|{}|{}",
             self.protocol,
             self.endpoint.as_deref().unwrap_or(""),
             self.model.as_deref().unwrap_or(""),
@@ -57,10 +57,28 @@ pub fn cache_key(source_bytes: &[u8], params: &ParamFingerprint) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Everything a completed run produces, not just the IR.
+///
+/// `native` yields up to three artifacts — the compatibility `ParseResult`,
+/// the engine's own Markdown, and (for structured sources) the
+/// `CanonicalDocument` that `--format document-json` and the document-engine
+/// Markdown renderer need. Caching only the `ParseResult` would silently
+/// downgrade those two output formats on a cache hit, which is why `native`
+/// was excluded from the cache entirely before O3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CachedOutcome {
+    pub result: ParseResult,
+    #[serde(default)]
+    pub engine_markdown: Option<String>,
+    #[serde(default)]
+    pub document: Option<uparser_document_engine::CanonicalDocument>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEntry {
     stored_at_unix_secs: u64,
-    result: ParseResult,
+    #[serde(flatten)]
+    outcome: CachedOutcome,
 }
 
 fn entry_path(base_dir: &Path, key: &str) -> PathBuf {
@@ -96,7 +114,7 @@ pub fn default_cache_dir() -> PathBuf {
 /// fresh (within `ttl`) entry exists. Any read/parse failure (missing
 /// file, corrupt JSON, stale entry) is treated as a clean miss, never an
 /// error — a cache is an optimization, not a source of truth.
-pub fn get(base_dir: &Path, key: &str, ttl: Duration) -> Option<ParseResult> {
+pub fn get(base_dir: &Path, key: &str, ttl: Duration) -> Option<CachedOutcome> {
     let path = entry_path(base_dir, key);
     let bytes = std::fs::read(&path).ok()?;
     let entry: CacheEntry = serde_json::from_slice(&bytes).ok()?;
@@ -104,18 +122,42 @@ pub fn get(base_dir: &Path, key: &str, ttl: Duration) -> Option<ParseResult> {
     if age > ttl.as_secs() {
         return None;
     }
-    Some(entry.result)
+    // Assets referenced by a hit must still exist: a cached `asset_path`
+    // pointing at a file the user has since deleted is a wrong answer, not
+    // a fast one. Treat that as a miss and re-run.
+    let assets_present = entry
+        .outcome
+        .result
+        .pages
+        .iter()
+        .flat_map(|page| &page.blocks)
+        .filter_map(|block| block.asset_path.as_deref())
+        .all(|asset| {
+            let asset = Path::new(asset);
+            if asset.is_absolute() {
+                asset.exists()
+            } else {
+                Path::new(&entry.outcome.result.source_path)
+                    .parent()
+                    .map(|parent| parent.join(asset).exists())
+                    .unwrap_or(false)
+            }
+        });
+    if !assets_present {
+        return None;
+    }
+    Some(entry.outcome)
 }
 
-/// Write `result` under `key`, creating parent directories as needed.
-pub fn put(base_dir: &Path, key: &str, result: &ParseResult) -> io::Result<()> {
+/// Write `outcome` under `key`, creating parent directories as needed.
+pub fn put(base_dir: &Path, key: &str, outcome: CachedOutcome) -> io::Result<()> {
     let path = entry_path(base_dir, key);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let entry = CacheEntry {
         stored_at_unix_secs: now_unix_secs(),
-        result: result.clone(),
+        outcome,
     };
     let json = serde_json::to_vec(&entry)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -193,6 +235,41 @@ mod tests {
         }
     }
 
+    fn sample_outcome(result: &ParseResult) -> CachedOutcome {
+        CachedOutcome {
+            result: result.clone(),
+            engine_markdown: None,
+            document: None,
+        }
+    }
+
+    fn sample_block_page() -> crate::types::Page {
+        crate::types::Page {
+            page_num: 1,
+            width_px: 10,
+            height_px: 10,
+            blocks: vec![crate::types::Block {
+                geom: crate::types::Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+                geom_frame: crate::types::CoordFrame::Page,
+                bbox_px: Some([0, 0, 10, 10]),
+                category_raw: "image".into(),
+                category: Some("image".into()),
+                reading_order: None,
+                text: None,
+                html: None,
+                latex: None,
+                spans: vec![],
+                merge_hint: None,
+                confidence: None,
+                source: crate::types::BlockSource::NativeTextLayer,
+                error: None,
+                asset_bytes: None,
+                asset_path: None,
+                asset_caption: None,
+            }],
+        }
+    }
+
     #[test]
     fn cache_key_is_stable_for_identical_input() {
         let params = ParamFingerprint {
@@ -264,9 +341,54 @@ mod tests {
         let key = "deadbeef";
         let result = sample_result("mock");
 
-        put(dir.path(), key, &result).unwrap();
+        put(dir.path(), key, sample_outcome(&result)).unwrap();
         let hit = get(dir.path(), key, Duration::from_secs(3600));
-        assert_eq!(hit, Some(result));
+        assert_eq!(hit, Some(sample_outcome(&result)));
+    }
+
+    /// O3.1: `native` produces Markdown and (for structured sources) a
+    /// `CanonicalDocument` alongside the IR. A hit must replay all three,
+    /// otherwise `--format markdown`/`document-json` silently degrade.
+    #[test]
+    fn put_then_get_round_trips_every_native_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let stored = CachedOutcome {
+            result: sample_result("native"),
+            engine_markdown: Some("# Title\n\nBody".to_owned()),
+            document: None,
+        };
+
+        put(dir.path(), "nativekey", stored.clone()).unwrap();
+        let hit = get(dir.path(), "nativekey", Duration::from_secs(3600)).unwrap();
+        assert_eq!(hit.engine_markdown.as_deref(), Some("# Title\n\nBody"));
+        assert_eq!(hit, stored);
+    }
+
+    /// A hit whose `asset_path` no longer exists on disk is a wrong answer,
+    /// not a fast one.
+    #[test]
+    fn get_misses_when_a_referenced_asset_file_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut result = sample_result("native");
+        result.source_path = dir.path().join("doc.pdf").to_string_lossy().into_owned();
+        result.pages = vec![sample_block_page()];
+        result.pages[0].blocks[0].asset_path = Some("images/deadbeef.png".to_owned());
+
+        put(
+            dir.path(),
+            "assetkey",
+            CachedOutcome {
+                result,
+                engine_markdown: None,
+                document: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(get(dir.path(), "assetkey", Duration::from_secs(3600)), None);
+
+        std::fs::create_dir_all(dir.path().join("images")).unwrap();
+        std::fs::write(dir.path().join("images/deadbeef.png"), b"png").unwrap();
+        assert!(get(dir.path(), "assetkey", Duration::from_secs(3600)).is_some());
     }
 
     #[test]
@@ -283,7 +405,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let stale_entry = CacheEntry {
             stored_at_unix_secs: 0, // 1970 — always "older than any TTL"
-            result: sample_result("mock"),
+            outcome: sample_outcome(&sample_result("mock")),
         };
         std::fs::write(&path, serde_json::to_vec(&stale_entry).unwrap()).unwrap();
 
@@ -304,8 +426,13 @@ mod tests {
     #[test]
     fn stat_counts_entries_and_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        put(dir.path(), "key1", &sample_result("mock")).unwrap();
-        put(dir.path(), "key2", &sample_result("mineru-vlm")).unwrap();
+        put(dir.path(), "key1", sample_outcome(&sample_result("mock"))).unwrap();
+        put(
+            dir.path(),
+            "key2",
+            sample_outcome(&sample_result("mineru-vlm")),
+        )
+        .unwrap();
 
         let stats = stat(dir.path()).unwrap();
         assert_eq!(stats.entries, 2);
@@ -329,7 +456,7 @@ mod tests {
     #[test]
     fn clear_removes_all_entries() {
         let dir = tempfile::tempdir().unwrap();
-        put(dir.path(), "key1", &sample_result("mock")).unwrap();
+        put(dir.path(), "key1", sample_outcome(&sample_result("mock"))).unwrap();
         clear(dir.path()).unwrap();
         assert_eq!(stat(dir.path()).unwrap().entries, 0);
     }

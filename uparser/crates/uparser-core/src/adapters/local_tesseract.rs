@@ -165,6 +165,8 @@ fn parse_tsv_blocks(bytes: &[u8], page: &RenderedPage) -> Result<Vec<Block>, Str
             .words
             .iter()
             .map(|(text, bbox, _)| Span {
+                // Tesseract reports no character styling.
+                style: Default::default(),
                 text: text.clone(),
                 bbox_px: Some(*bbox),
                 font_size: None,

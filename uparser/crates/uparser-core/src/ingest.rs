@@ -1,22 +1,19 @@
-//! Document ingestion. P0 only implements `rasterize()`; P7 adds
-//! `detect_format`, `structured_bypass`, and `normalize_format`, wired
-//! together by `ingest_document` in the canonical order fixed by
-//! ARCHITECTURE.md §13.1a: `detect_format → structured_bypass? →
-//! normalize_format → rasterize` (the last step lives in `rasterize()`
-//! itself, called separately downstream).
+//! Document ingestion primitives used by the runner: PDF rasterization
+//! (`rasterize*`, PDFium-gated) and external-tool format normalization
+//! (`normalize_format`, LibreOffice/ImageMagick).
+//!
+//! Format detection lives in `frontend.rs` (the single authoritative
+//! detection point) and structured-document reading lives in the
+//! `uparser-document-engine` crate — the P7-era `detect_format`
+//! wrapper, `structured_bypass` and `ingest_document` that used to sit
+//! here were superseded by those two and removed in O1.
 
-use crate::types::{Block, BlockSource, CoordFrame, Geometry, Page, ParseResult, RoutedBy};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 
 /// The structured-document engine owns format identity and detection. Core
 /// re-exports that contract so every entry point carries the same 16 variants.
 pub use crate::frontend::DocumentFormat;
-
-pub fn detect_format(bytes: &[u8], filename_hint: Option<&str>) -> DocumentFormat {
-    uparser_document_engine::detect_format(bytes, filename_hint)
-}
 
 /// A single rasterized page: PNG bytes plus pixel dimensions. Mirrors
 /// liteparse's `RenderedPage` shape.
@@ -49,138 +46,6 @@ pub enum IngestError {
     UnsupportedFormat(DocumentFormat),
     #[error("failed to compute document profile: {0}")]
     Profiling(String),
-}
-
-/// Structured-data short-circuit: XLSX/CSV are read directly as cell
-/// grids — no rasterization, no model call at all. Returns `None` for
-/// any other format (the "does this format even apply" gate in
-/// `ingest_document`'s control flow), `Some(Ok(..))`/`Some(Err(..))`
-/// otherwise.
-pub fn structured_bypass(
-    bytes: &[u8],
-    format: DocumentFormat,
-    source_path: &str,
-) -> Option<Result<ParseResult, IngestError>> {
-    match format {
-        DocumentFormat::Excel => Some(structured_bypass_xlsx(bytes, source_path)),
-        DocumentFormat::Csv => Some(structured_bypass_csv(bytes, source_path)),
-        _ => None,
-    }
-}
-
-fn structured_bypass_xlsx(bytes: &[u8], source_path: &str) -> Result<ParseResult, IngestError> {
-    use calamine::Reader;
-
-    let cursor = std::io::Cursor::new(bytes);
-    let mut workbook =
-        calamine::Xlsx::new(cursor).map_err(|e| IngestError::StructuredParse(e.to_string()))?;
-
-    let pages: Vec<Page> = workbook
-        .worksheets()
-        .into_iter()
-        .enumerate()
-        .map(|(idx, (_name, range))| {
-            let rows: Vec<Vec<String>> = range
-                .rows()
-                .map(|row| row.iter().map(|cell| cell.to_string()).collect())
-                .collect();
-            Page {
-                page_num: (idx + 1) as u32,
-                width_px: 0,
-                height_px: 0,
-                blocks: vec![sheet_block(&rows)],
-            }
-        })
-        .collect();
-
-    Ok(build_structured_result(source_path, bytes, pages, "xlsx"))
-}
-
-fn structured_bypass_csv(bytes: &[u8], source_path: &str) -> Result<ParseResult, IngestError> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(bytes);
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    for record in reader.records() {
-        let record = record.map_err(|e| IngestError::StructuredParse(e.to_string()))?;
-        rows.push(record.iter().map(|s| s.to_string()).collect());
-    }
-
-    let page = Page {
-        page_num: 1,
-        width_px: 0,
-        height_px: 0,
-        blocks: vec![sheet_block(&rows)],
-    };
-
-    Ok(build_structured_result(
-        source_path,
-        bytes,
-        vec![page],
-        "csv",
-    ))
-}
-
-fn sheet_block(rows: &[Vec<String>]) -> Block {
-    let mut html = String::from("<table>");
-    for row in rows {
-        html.push_str("<tr>");
-        for cell in row {
-            html.push_str("<td>");
-            html.push_str(&crate::otsl::escape_html(cell));
-            html.push_str("</td>");
-        }
-        html.push_str("</tr>");
-    }
-    html.push_str("</table>");
-
-    Block {
-        geom: Geometry::Rect([0.0, 0.0, 0.0, 0.0]),
-        geom_frame: CoordFrame::Page,
-        bbox_px: None,
-        category_raw: "table".to_string(),
-        category: Some("table".to_string()),
-        reading_order: Some(0),
-        text: None,
-        html: Some(html),
-        latex: None,
-        spans: vec![],
-        merge_hint: None,
-        confidence: None,
-        source: BlockSource::StructuredNative,
-        error: None,
-        asset_bytes: None,
-        asset_path: None,
-        asset_caption: None,
-    }
-}
-
-fn build_structured_result(
-    source_path: &str,
-    bytes: &[u8],
-    pages: Vec<Page>,
-    kind: &str,
-) -> ParseResult {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let source_sha256 = format!("{:x}", hasher.finalize());
-
-    ParseResult {
-        source_path: source_path.to_string(),
-        source_sha256,
-        protocol: format!("structured_bypass:{kind}"),
-        routed_by: RoutedBy::Explicit,
-        document_profile: None,
-        route_decision: None,
-        preprocess_plan: None,
-        model_endpoint: None,
-        model_name: None,
-        pages,
-        page_errors: vec![],
-        capability_notes: vec![],
-        warnings: vec![],
-        timing: Default::default(),
-    }
 }
 
 /// External conversion tool binary names, overridable for testing (point
@@ -392,33 +257,6 @@ async fn run_with_timeout(
     }
 }
 
-/// Result of `ingest_document`: either a fully-formed structured result
-/// (XLSX/CSV bypass — no further pipeline steps needed) or PDF bytes
-/// ready for the next pipeline step (`rasterize()`, called separately).
-#[derive(Debug)]
-pub enum IngestOutcome {
-    Structured(Box<ParseResult>),
-    Pdf(Vec<u8>),
-}
-
-/// Ties `detect_format`/`structured_bypass`/`normalize_format` together
-/// in the canonical order fixed by ARCHITECTURE.md §13.1a:
-/// `detect_format → structured_bypass? → normalize_format → (rasterize,
-/// called separately downstream)`.
-pub async fn ingest_document(
-    bytes: &[u8],
-    source_path: &str,
-) -> Result<IngestOutcome, IngestError> {
-    let format = detect_format(bytes, Some(source_path));
-
-    if let Some(result) = structured_bypass(bytes, format, source_path) {
-        return result.map(|r| IngestOutcome::Structured(Box::new(r)));
-    }
-
-    let pdf_bytes = normalize_format(bytes, format).await?;
-    Ok(IngestOutcome::Pdf(pdf_bytes))
-}
-
 #[cfg(feature = "pdfium")]
 pub fn rasterize(path: &str, dpi: f32) -> Result<Vec<RenderedPage>, IngestError> {
     use pdfium::Library;
@@ -574,91 +412,6 @@ mod rasterize_tests {
 mod tests {
     use super::*;
 
-    // --- detect_format ---
-
-    #[test]
-    fn detects_pdf_by_magic_bytes() {
-        assert_eq!(detect_format(b"%PDF-1.7\n", None), DocumentFormat::Pdf);
-    }
-
-    #[test]
-    fn detects_png_by_magic_bytes() {
-        let png_sig: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert_eq!(detect_format(png_sig, None), DocumentFormat::Png);
-    }
-
-    #[test]
-    fn detects_jpeg_by_magic_bytes() {
-        let jpeg_sig: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
-        assert_eq!(detect_format(jpeg_sig, None), DocumentFormat::Jpeg);
-    }
-
-    #[test]
-    fn csv_falls_back_to_extension_hint() {
-        let csv_bytes = b"a,b,c\n1,2,3\n";
-        assert_eq!(
-            detect_format(csv_bytes, Some("data.csv")),
-            DocumentFormat::Csv
-        );
-        // Without the hint, plain text has no distinguishing magic bytes.
-        assert_eq!(detect_format(csv_bytes, None), DocumentFormat::Unknown);
-    }
-
-    #[test]
-    fn unrecognized_bytes_are_unknown() {
-        assert_eq!(
-            detect_format(&[0, 1, 2, 3, 4], None),
-            DocumentFormat::Unknown
-        );
-    }
-
-    // --- structured_bypass ---
-
-    #[test]
-    fn structured_bypass_returns_none_for_non_spreadsheet_formats() {
-        assert!(structured_bypass(b"%PDF-1.7", DocumentFormat::Pdf, "doc.pdf").is_none());
-    }
-
-    #[test]
-    fn structured_bypass_csv_builds_table_block() {
-        let csv_bytes = b"Name,Age\nAlice,30\nBob,25\n";
-        let result = structured_bypass(csv_bytes, DocumentFormat::Csv, "people.csv")
-            .expect("csv is bypassed")
-            .expect("csv parses");
-
-        assert_eq!(result.protocol, "structured_bypass:csv");
-        assert_eq!(result.pages.len(), 1);
-        let block = &result.pages[0].blocks[0];
-        assert_eq!(block.source, BlockSource::StructuredNative);
-        assert_eq!(block.category.as_deref(), Some("table"));
-        let html = block.html.as_ref().expect("csv produces html");
-        assert!(html.contains("<table>"));
-        assert!(html.contains("Alice"));
-        assert!(html.contains("30"));
-    }
-
-    #[test]
-    fn structured_bypass_csv_escapes_html() {
-        let csv_bytes = b"a,b\n<script>,\"x & y\"\n";
-        let result = structured_bypass(csv_bytes, DocumentFormat::Csv, "x.csv")
-            .unwrap()
-            .unwrap();
-        let html = result.pages[0].blocks[0].html.as_ref().unwrap();
-        assert!(html.contains("&lt;script&gt;"));
-        assert!(html.contains("x &amp; y"));
-    }
-
-    #[test]
-    fn structured_bypass_malformed_csv_does_not_panic() {
-        // Unterminated quote — csv crate should surface a parse error,
-        // not panic.
-        let malformed = b"a,\"b\n";
-        let result = structured_bypass(malformed, DocumentFormat::Csv, "bad.csv").unwrap();
-        // Either a structured error or (if the csv crate tolerates it) a
-        // successful parse — the key assertion is "did not panic".
-        let _ = result;
-    }
-
     // --- normalize_format ---
 
     fn bogus_tools() -> ToolNames {
@@ -706,57 +459,6 @@ mod tests {
             result,
             Err(IngestError::UnsupportedFormat(DocumentFormat::Unknown))
         ));
-    }
-
-    #[test]
-    fn malformed_xlsx_is_a_typed_structured_parse_error() {
-        let result = structured_bypass(b"not an xlsx", DocumentFormat::Excel, "bad.xlsx")
-            .expect("Excel uses structured bypass");
-        assert!(matches!(result, Err(IngestError::StructuredParse(_))));
-
-        let parts = [
-            (
-                "[Content_Types].xml",
-                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
-            ),
-            (
-                "_rels/.rels",
-                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/workbook.xml",
-                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
-            ),
-            (
-                "xl/_rels/workbook.xml.rels",
-                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/worksheets/sheet1.xml",
-                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>name</t></is></c><c r="B1" t="inlineStr"><is><t>value</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>alpha</t></is></c><c r="B2"><v>42</v></c></row></sheetData></worksheet>"#,
-            ),
-        ];
-        let mut bytes = Vec::new();
-        {
-            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
-            let options = zip::write::SimpleFileOptions::default();
-            for (name, body) in parts {
-                writer.start_file(name, options).unwrap();
-                std::io::Write::write_all(&mut writer, body.as_bytes()).unwrap();
-            }
-            writer.finish().unwrap();
-        }
-        let result = structured_bypass(&bytes, DocumentFormat::Excel, "valid.xlsx")
-            .unwrap()
-            .expect("minimal XLSX parses");
-        assert_eq!(result.protocol, "structured_bypass:xlsx");
-        assert!(
-            result.pages[0].blocks[0]
-                .html
-                .as_deref()
-                .unwrap()
-                .contains("alpha")
-        );
     }
 
     #[tokio::test]
@@ -899,25 +601,5 @@ mod tests {
     #[cfg(not(windows))]
     fn process_exists(pid: u32) -> bool {
         std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
-
-    // --- ingest_document ---
-
-    #[tokio::test]
-    async fn ingest_document_xlsx_shaped_input_short_circuits_to_structured() {
-        let csv_bytes = b"a,b\n1,2\n";
-        // Route via detect_format's extension hint by using a .csv path.
-        let outcome = ingest_document(csv_bytes, "sheet.csv").await.unwrap();
-        assert!(matches!(outcome, IngestOutcome::Structured(_)));
-    }
-
-    #[tokio::test]
-    async fn ingest_document_pdf_passes_through_without_conversion() {
-        let pdf_bytes = b"%PDF-1.7 fake";
-        let outcome = ingest_document(pdf_bytes, "doc.pdf").await.unwrap();
-        match outcome {
-            IngestOutcome::Pdf(bytes) => assert_eq!(bytes, pdf_bytes),
-            IngestOutcome::Structured(_) => panic!("PDF should not be structured-bypassed"),
-        }
     }
 }

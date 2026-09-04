@@ -3,6 +3,11 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
+/// `Preprocess`/`Seal`/`Chart` are declared vocabulary for stages the V2
+/// graph does not construct yet (see `PIPELINE_V2_MINERU_345_EXECUTION_PLAN.md`
+/// §0.3). Kept deliberately so the serialized stage names stay stable as
+/// those stages land, rather than being re-added under a different spelling.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
