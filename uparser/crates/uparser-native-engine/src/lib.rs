@@ -38,7 +38,7 @@ pub mod glyph_names;
 pub mod markdown;
 pub mod process_mode;
 pub mod structure_export;
-pub use structure_export::{HeadingHint, StructureHints, TableHint};
+pub use structure_export::{HeadingHint, LineHint, StructureHints, TableHint};
 pub mod structure_tree;
 pub mod tables;
 mod text_quality;
@@ -55,6 +55,7 @@ pub use extractor::{
     extract_text, extract_text_with_positions, extract_text_with_positions_mem,
     extract_text_with_positions_pages,
 };
+pub use markdown::postprocess::clean_text_fragment;
 pub use markdown::{
     to_markdown, to_markdown_from_items, to_markdown_from_items_with_rects,
     to_markdown_from_items_with_rects_and_page_count, MarkdownOptions, MarkdownProfile,

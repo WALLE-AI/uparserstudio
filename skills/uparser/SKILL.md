@@ -97,7 +97,7 @@ Known structured-format losses should remain visible through warnings. Notable c
 
 ## Results and side effects
 
-Use `--format json` when downstream code needs blocks, bounding boxes, normalized categories, formulas, tables, provenance, or routing metadata. Use `--markdown-source engine` (the default) for native fidelity; `canonical` is an explicit comparison/debug renderer and is not the quality default.
+Use `--format json` when downstream code needs blocks, bounding boxes, normalized categories, formulas, tables, provenance, or routing metadata. `--markdown-source canonical` is the default: every source, native PDF included, is rendered by the one shared renderer. `engine-legacy` keeps the native engine's own Markdown writer for one release as a fallback.
 
 Assets are written by default to `<source_stem>_images/`. Use `--assets-dir <dir>` to control the location or `--no-assets` to avoid filesystem writes. `--output <path>` writes the aggregate successful result to a file while preserving errors on the normal channels.
 

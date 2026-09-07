@@ -10,7 +10,7 @@ pub(crate) mod analysis;
 mod classify;
 mod convert;
 mod heading;
-mod postprocess;
+pub mod postprocess;
 mod preprocess;
 
 pub use convert::to_markdown_from_lines;

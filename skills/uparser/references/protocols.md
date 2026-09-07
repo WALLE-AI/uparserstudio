@@ -136,7 +136,7 @@ The common `--format json` result includes:
 
 Native may emit richer categories such as `formula`, `normative_clause`, `mandatory_clause`, and `annex_heading`. Treat inferred formula text conservatively: `latex` remains empty unless source/model evidence provides real LaTeX.
 
-`--format document-json` is a separate lossless structured-document contract and requires a non-PDF native route. `--markdown-source engine` preserves native/document engine behavior; `canonical` uses the shared IR renderer for comparison.
+`--format document-json` is a separate lossless structured-document contract and requires a non-PDF native route. `--markdown-source canonical` (the default) renders every source through the shared canonical renderer; `engine-legacy` falls back to the native engine's own Markdown writer, retained for one release.
 
 ## Endpoints and configuration
 

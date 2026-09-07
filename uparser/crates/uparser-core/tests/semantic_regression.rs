@@ -143,6 +143,14 @@ fn performance_flags_never_change_the_result() {
 
 /// Full matrix snapshot: any change to exit codes or output content for any
 /// (input, format) pair shows up as a reviewable diff rather than silently.
+///
+/// The rows are content hashes, so a diff says *that* something changed and
+/// not what. Last movement: `text.pdf markdown` (2026-09-07), when
+/// `--markdown-source` flipped its default to `canonical` — the rendered
+/// Markdown is byte-identical apart from a trailing blank line, which the
+/// canonical path trims and the `engine-legacy` early return does not
+/// (trimming there would break its byte-for-byte gate). Every other row was
+/// unchanged, which is the evidence that the flip only reaches native PDF.
 #[test]
 fn semantic_matrix_snapshot() {
     let rows = run_matrix();

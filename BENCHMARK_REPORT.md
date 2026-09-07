@@ -146,7 +146,15 @@ MinerU 3.4.5 相对公开 MinerU 2.7 ODL 参考的 Overall/NID/TEDS/MHS 分别�
 
 ## 4. native vs pdf-inspector:内部化 + 打平
 
-native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与冻结输出**逐字节相同**，故 Overall **打平**(均 0.8754)。V2 统一 runner 无缓存速度为 `0.0508 s/篇`，冻结 native 为 `0.0473 s/篇`，独立 pdf-inspector baseline 为 `0.032 s/篇`。native 的价值在于去除 liteparse 依赖、消除 PDFium 二进制并纳入统一 IR/CLI/路由；要严格超越 pdf-inspector 仍需引擎核心调优。
+native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与冻结输出**逐字节相同**，故 Overall **打平**(均 0.8754)。
+
+> **2026-09-07 更新（M3 渲染器合并 2→1）**：native 的默认 Markdown 已改为
+> `--markdown-source canonical`（统一渲染器，不再直通引擎字符串），同一评测器同一 200 篇下
+> **Overall 0.8766 / NID 0.9197 / TEDS 0.8393 / MHS 0.7826**，相对 pdf-inspector 的 0.8754
+> **+0.0012**——本节末尾「要严格超越 pdf-inspector 仍需引擎核心调优」的那条待办，是靠把引擎
+> 已有的结构判断导出到 IR（表格流内位置、标题对账、链接注释剔除、行内清理）达成的，
+> 没有改引擎核心。引擎自身的 Markdown 保留为 `--markdown-source engine-legacy`，
+> 200 篇逐字节不变。详见 `RENDERER_UNIFICATION_EXECUTION_PLAN.md` §18。V2 统一 runner 无缓存速度为 `0.0508 s/篇`，冻结 native 为 `0.0473 s/篇`，独立 pdf-inspector baseline 为 `0.032 s/篇`。native 的价值在于去除 liteparse 依赖、消除 PDFium 二进制并纳入统一 IR/CLI/路由；要严格超越 pdf-inspector 仍需引擎核心调优。
 
 ---
 

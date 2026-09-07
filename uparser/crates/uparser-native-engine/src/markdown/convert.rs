@@ -705,6 +705,15 @@ fn count_table_columns(table_md: &str) -> usize {
 }
 
 /// Flush any remaining tables and images for a given page
+/// Where a flushed table's position gets recorded, and what that position is.
+///
+/// Write-only, same discipline as the other sinks: a flushed table lands
+/// wherever the line stream had reached.
+struct FlushedTablePositions<'a> {
+    sink: &'a mut Vec<(u32, usize, usize)>,
+    flow_position: usize,
+}
+
 fn flush_page_tables_and_images(
     page: u32,
     page_blocks: &HashMap<u32, Vec<PositionedBlockRef<'_>>>,
@@ -712,10 +721,7 @@ fn flush_page_tables_and_images(
     inserted_images: &mut HashSet<(u32, usize)>,
     output: &mut String,
     in_paragraph: &mut bool,
-    // Write-only, same discipline as the other sinks: the flow position a
-    // flushed table lands at, which is wherever the line stream had reached.
-    table_order_sink: &mut Vec<(u32, usize, usize)>,
-    flow_position: usize,
+    positions: FlushedTablePositions<'_>,
 ) {
     let Some(blocks) = page_blocks.get(&page) else {
         return;
@@ -738,7 +744,7 @@ fn flush_page_tables_and_images(
         match kind {
             PositionedBlockKind::Table => {
                 inserted_tables.insert((page, idx));
-                table_order_sink.push((page, idx, flow_position));
+                positions.sink.push((page, idx, positions.flow_position));
             }
             PositionedBlockKind::Image => {
                 inserted_images.insert((page, idx));
@@ -922,6 +928,7 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                 bbox,
                 order: line_sink.len(),
                 text: line.text(),
+                item_texts: line.text_plain_pieces(),
             });
         }
         // Page break
@@ -939,8 +946,10 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                     &mut inserted_images,
                     &mut output,
                     &mut in_paragraph,
-                    table_order_sink,
-                    line_sink.len(),
+                    FlushedTablePositions {
+                        sink: table_order_sink,
+                        flow_position: line_sink.len(),
+                    },
                 );
                 if in_paragraph {
                     output.push_str("\n\n");
@@ -965,8 +974,10 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
                     &mut inserted_images,
                     &mut output,
                     &mut in_paragraph,
-                    table_order_sink,
-                    line_sink.len(),
+                    FlushedTablePositions {
+                        sink: table_order_sink,
+                        flow_position: line_sink.len(),
+                    },
                 );
                 if in_paragraph {
                     output.push_str("\n\n");
@@ -1394,8 +1405,10 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
         &mut inserted_images,
         &mut output,
         &mut in_paragraph,
-        table_order_sink,
-        line_sink.len(),
+        FlushedTablePositions {
+            sink: table_order_sink,
+            flow_position: line_sink.len(),
+        },
     );
     for &p in &all_content_pages {
         if p <= current_page {
@@ -1408,8 +1421,10 @@ pub(super) fn to_markdown_from_lines_with_tables_and_images(
             &mut inserted_images,
             &mut output,
             &mut in_paragraph,
-            table_order_sink,
-            line_sink.len(),
+            FlushedTablePositions {
+                sink: table_order_sink,
+                flow_position: line_sink.len(),
+            },
         );
     }
 

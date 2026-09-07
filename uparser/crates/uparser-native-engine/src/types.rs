@@ -262,22 +262,59 @@ impl TextLine {
 
     /// Get plain text without formatting
     fn text_plain(&self) -> String {
+        self.text_plain_pieces().concat()
+    }
+
+    /// The same plain text, split into the contribution of each item that
+    /// carries any non-whitespace text.
+    ///
+    /// `pieces.concat() == self.text()` always. Each piece includes the
+    /// separator the join chose before it, and the contribution of any
+    /// whitespace-only item is folded into the piece that follows it (or the
+    /// one before it, at the end of the line) — so the vector lines up with
+    /// the items a consumer keeps, which is the non-blank ones. Nothing is
+    /// dropped; a blank item's own spacing still reaches the text.
+    ///
+    /// Exists for consumers that need to attribute the joined text back to
+    /// the items it came from — a span carrying that item's font style, say
+    /// — without reimplementing the spacing rules, which are the accumulated
+    /// answer to letter-spaced glyph runs, CID fonts, sub/superscripts and
+    /// hyphenation and are not reproducible from item geometry alone.
+    pub fn text_plain_pieces(&self) -> Vec<String> {
         let single_char_threshold = self.adaptive_threshold;
 
+        let mut pieces: Vec<String> = Vec::with_capacity(self.items.len());
+        let mut pending = String::new();
         let mut result = String::new();
         for (i, item) in self.items.iter().enumerate() {
             let text = item.text.as_str();
-            if i == 0 {
-                result.push_str(text);
-            } else {
+            // Everything this item adds to the running text: the separator
+            // the join rules chose, then the item's own text.
+            let mut added = String::new();
+            if i > 0 {
                 let prev_item = &self.items[i - 1];
                 if self.needs_space_between(prev_item, item, &result, single_char_threshold) {
-                    result.push(' ');
+                    added.push(' ');
                 }
-                result.push_str(text);
+            }
+            added.push_str(text);
+            result.push_str(&added);
+
+            let mut piece = std::mem::take(&mut pending);
+            piece.push_str(&added);
+            if text.trim().is_empty() {
+                pending = piece;
+            } else {
+                pieces.push(piece);
             }
         }
-        result
+        if !pending.is_empty() {
+            match pieces.last_mut() {
+                Some(last) => last.push_str(&pending),
+                None => pieces.push(pending),
+            }
+        }
+        pieces
     }
 
     /// Determine if a space is needed between two items
@@ -319,5 +356,69 @@ impl TextLine {
             || was_sub_super
             || should_join
             || space_already_exists)
+    }
+}
+
+#[cfg(test)]
+mod line_piece_tests {
+    use super::*;
+
+    fn item(text: &str, x: f32, width: f32) -> TextItem {
+        TextItem {
+            text: text.to_owned(),
+            x,
+            y: 100.0,
+            width,
+            height: 10.0,
+            font: "F1".to_owned(),
+            font_size: 10.0,
+            page: 1,
+            is_bold: false,
+            is_italic: false,
+            is_underline: false,
+            is_strikeout: false,
+            item_type: ItemType::Text,
+            mcid: None,
+        }
+    }
+
+    fn line(items: Vec<TextItem>) -> TextLine {
+        TextLine {
+            items,
+            y: 100.0,
+            page: 1,
+            adaptive_threshold: 0.10,
+        }
+    }
+
+    /// The contract consumers rely on: the pieces are the text, split up.
+    #[test]
+    fn pieces_always_concatenate_back_to_the_line_text() {
+        let line = line(vec![
+            item("Hello", 10.0, 25.0),
+            item("world", 40.0, 25.0),
+            item(".", 65.0, 3.0),
+        ]);
+        assert_eq!(line.text_plain_pieces().concat(), line.text());
+    }
+
+    /// A blank item has no piece of its own — a consumer drops those items —
+    /// but whatever it contributed to the text still has to be there.
+    #[test]
+    fn a_blank_item_folds_into_its_neighbour_without_losing_text() {
+        let line = line(vec![
+            item("Hello", 10.0, 25.0),
+            item(" ", 35.0, 4.0),
+            item("world", 40.0, 25.0),
+        ]);
+        let pieces = line.text_plain_pieces();
+        assert_eq!(pieces.len(), 2, "one piece per non-blank item");
+        assert_eq!(pieces.concat(), line.text());
+    }
+
+    #[test]
+    fn a_line_of_only_blank_items_yields_at_most_one_piece() {
+        let line = line(vec![item("  ", 10.0, 8.0), item(" ", 20.0, 4.0)]);
+        assert_eq!(line.text_plain_pieces().concat(), line.text());
     }
 }

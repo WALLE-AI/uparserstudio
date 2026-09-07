@@ -54,6 +54,30 @@ pub(crate) fn clean_markdown(mut text: String, options: &MarkdownOptions) -> Str
     text
 }
 
+/// The line-local half of [`clean_markdown`], for a single fragment of text.
+///
+/// `clean_markdown` runs on the finished document, so a consumer that builds
+/// its own document out of this engine's *structure* rather than its string
+/// never gets any of it — and these particular repairs are not cosmetic. A
+/// table of contents' dot leader arrives from the extractor as ". . . . . ."
+/// (each dot its own text item, each gap wide enough to read as a word
+/// break) and only becomes "............" here; a compound word split across
+/// a line arrives as "Fact - checkers".
+///
+/// Only the rules whose decision is contained within one fragment are
+/// applied. `remove_page_numbers`, `refine_heading_blocks` and
+/// `refine_table_lines` all read surrounding lines to decide, and a
+/// structured consumer expresses those as blocks rather than as text.
+/// `format_urls` is left out on purpose: it writes Markdown link syntax into
+/// the text, and in the IR the text field is plain text.
+pub fn clean_text_fragment(text: &str) -> String {
+    let mut cleaned = fix_hyphenation(text);
+    collapse_consecutive_spaces(&mut cleaned);
+    remove_spaces_before_closing_brackets(&mut cleaned);
+    remove_spaces_before_sentence_punctuation(&mut cleaned);
+    cleaned
+}
+
 fn repair_trailing_toc_part_headings(text: &str) -> String {
     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let has_contents_marker = lines.iter().any(|line| {
@@ -1014,6 +1038,40 @@ fn repair_wrapped_arxiv_urls(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three repairs a consumer of the *structure* would otherwise
+    /// never get, because they happen on the finished string.
+    #[test]
+    fn clean_text_fragment_repairs_what_the_document_pass_repairs() {
+        // A dot leader reaches the writer as one item per dot, each gap wide
+        // enough to read as a word break.
+        assert_eq!(
+            clean_text_fragment("Introduction. . . . . . . . 1"),
+            "Introduction........ 1"
+        );
+        // Gap-inserted double spaces.
+        assert_eq!(clean_text_fragment("Vice  President"), "Vice President");
+        // A compound split across a line break.
+        assert_eq!(clean_text_fragment("Fact - checkers"), "Fact-checkers");
+        // Ordinary prose is left exactly as it was.
+        let prose = "The quick brown fox jumps over the lazy dog.";
+        assert_eq!(clean_text_fragment(prose), prose);
+    }
+
+    /// It is the line-local *subset*: anything that needs neighbouring lines
+    /// to decide stays in `clean_markdown`, where the whole document is
+    /// visible.
+    #[test]
+    fn clean_text_fragment_leaves_document_level_decisions_alone() {
+        // `remove_page_numbers` would drop this; on its own it is just text.
+        assert_eq!(clean_text_fragment("12"), "12");
+        // `format_urls` would rewrite this as a Markdown link; the IR's text
+        // field is plain text.
+        assert_eq!(
+            clean_text_fragment("https://example.com/a"),
+            "https://example.com/a"
+        );
+    }
 
     #[test]
     fn fidelity_profile_preserves_dot_leaders() {

@@ -91,6 +91,16 @@ pub struct LineHint {
     /// The line's plain text, used to reconcile decisions the pipeline makes
     /// after geometry is gone (see [`reconcile_headings`]).
     pub text: String,
+    /// `text` split into each item's own contribution, in item order and
+    /// including the separator the writer chose before it, so
+    /// `item_texts.concat() == text`.
+    ///
+    /// A consumer that re-joins the items itself gets the spacing wrong in
+    /// ways that are invisible on prose and glaring on a table of contents,
+    /// where a dot leader is dozens of separate items: the writer's rules
+    /// produce `.................`, a gap threshold produces
+    /// `. . . . . . . . .`.
+    pub item_texts: Vec<String>,
 }
 
 /// Everything [`crate::process_pdf_mem`] learned about document structure
@@ -215,10 +225,18 @@ pub(crate) fn reconcile_headings(
     lines: &[LineHint],
     writer_hints: Vec<HeadingHint>,
 ) -> Vec<HeadingHint> {
-    let mut by_text: std::collections::HashMap<String, &HeadingHint> =
+    // Occurrences, not a single entry per text: a document that says
+    // "Version History" twice (a page title and the section below it) emits
+    // two headings, and collapsing them onto one writer hint gives both the
+    // *first* one's geometry — so the second heading has no line of its own
+    // and a consumer matching by geometry never sees it.
+    let mut by_text: std::collections::HashMap<String, std::collections::VecDeque<&HeadingHint>> =
         std::collections::HashMap::new();
     for hint in &writer_hints {
-        by_text.entry(compact(&hint.text)).or_insert(hint);
+        by_text
+            .entry(compact(&hint.text))
+            .or_default()
+            .push_back(hint);
     }
     let mut used_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
@@ -236,10 +254,19 @@ pub(crate) fn reconcile_headings(
         if key.is_empty() {
             continue;
         }
-        if let Some(hint) = by_text.get(&key) {
+        if let Some(hint) = by_text.get_mut(&key).and_then(|queue| queue.pop_front()) {
+            // Claim the line this hint came from, so a later heading with the
+            // same text falls through to a *different* line rather than
+            // recovering the geometry this one already used.
+            if let Some(index) = lines
+                .iter()
+                .position(|line| line.page == hint.page && line.bbox == hint.bbox)
+            {
+                used_lines.insert(index);
+            }
             out.push(HeadingHint {
                 level: level.clamp(1, 6) as u8,
-                ..(*hint).clone()
+                ..hint.clone()
             });
             continue;
         }
@@ -387,8 +414,7 @@ pub(crate) fn table_hint(table: &Table, page: u32, items: &[crate::types::TextIt
 /// table. Keeping the correlation here, in one place, means the writer only
 /// has to report what it actually emitted.
 pub(crate) fn assign_table_orders(hints: &mut [TableHint], emitted: &[(u32, usize, usize)]) {
-    let mut seen_per_page: std::collections::HashMap<u32, usize> =
-        std::collections::HashMap::new();
+    let mut seen_per_page: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     for hint in hints.iter_mut() {
         let index = seen_per_page.entry(hint.page).or_insert(0);
         let position = *index;
@@ -410,6 +436,7 @@ mod tests {
             bbox,
             order,
             text: String::new(),
+            item_texts: Vec::new(),
         }
     }
 
@@ -550,6 +577,75 @@ mod tests {
         assert!(hints
             .table_at(1, [72.0, 600.0, 500.0, 612.0], "Some caption text")
             .is_none());
+    }
+
+    /// A page title and a section below it can carry the same words. Both
+    /// are emitted, so both need their own geometry — giving the second one
+    /// the first one's box hides it from a consumer matching by geometry,
+    /// which is how a `##` in the Markdown ends up as plain text in the IR.
+    #[test]
+    fn a_heading_repeated_verbatim_resolves_to_its_own_line() {
+        let title = LineHint {
+            page: 1,
+            bbox: [70.0, 714.0, 225.0, 735.0],
+            order: 0,
+            text: "Version History".to_owned(),
+            item_texts: vec!["Version History".to_owned()],
+        };
+        let section = LineHint {
+            page: 1,
+            bbox: [70.0, 443.0, 186.0, 458.0],
+            order: 7,
+            text: "Version History".to_owned(),
+            item_texts: vec!["Version History".to_owned()],
+        };
+        let writer = vec![HeadingHint {
+            page: 1,
+            bbox: title.bbox,
+            level: 1,
+            text: "Version History".to_owned(),
+        }];
+
+        let out = reconcile_headings(
+            "# Version History\n\nbody\n\n## Version History\n",
+            &[title.clone(), section.clone()],
+            writer,
+        );
+
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].level, out[0].bbox), (1, title.bbox));
+        assert_eq!((out[1].level, out[1].bbox), (2, section.bbox));
+    }
+
+    /// The writer names a table by `(page, index within that page)`; the
+    /// hints are one flat vector. Getting the correlation wrong hands a
+    /// table another table's position, which reads as a reordering bug far
+    /// from its cause.
+    #[test]
+    fn table_orders_are_matched_per_page_not_globally() {
+        fn hint(page: u32) -> TableHint {
+            TableHint {
+                page,
+                bbox: [0.0, 0.0, 10.0, 10.0],
+                rows: 1,
+                columns: 1,
+                cells: vec![vec!["x".to_owned()]],
+                kind: TableKind::Data,
+                order: None,
+            }
+        }
+        // Page 1 has two tables, page 2 has one; the second table on page 2
+        // was detected but never emitted.
+        let mut hints = vec![hint(1), hint(1), hint(2), hint(2)];
+        assign_table_orders(&mut hints, &[(1, 0, 3), (1, 1, 11), (2, 0, 20)]);
+
+        assert_eq!(hints[0].order, Some(3));
+        assert_eq!(hints[1].order, Some(11));
+        assert_eq!(hints[2].order, Some(20));
+        assert_eq!(
+            hints[3].order, None,
+            "a table the writer never emitted has no position"
+        );
     }
 
     #[test]

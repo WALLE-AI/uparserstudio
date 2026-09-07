@@ -103,6 +103,16 @@ fn build_pages(
         if matches!(it.item_type, ItemType::Image) && !is_substantive_image_item(&it) {
             continue;
         }
+        // A link item is an annotation rectangle whose `text` is the target
+        // URL, sitting on top of the anchor text it decorates — not content
+        // of its own. Treating it as text glues the raw URL onto the words
+        // it links ("Affordable Courseshttps://example.org/..."), which is
+        // why the engine routes these out of the item stream before it ever
+        // groups lines. The anchor's own underline already survives in
+        // `Span.style`.
+        if matches!(it.item_type, ItemType::Link(_)) {
+            continue;
+        }
         if !matches!(it.item_type, ItemType::Image) && it.text.trim().is_empty() {
             continue;
         }
@@ -158,36 +168,35 @@ fn build_page(
 
     let lines = group_lines(page_num, items, hints);
 
-    // Lines the engine already claimed for a table are not paragraphs: drop
-    // them here and emit one table block per hint below, so the IR carries the
-    // table the Markdown pipeline detected instead of its shredded rows.
-    let mut table_blocks: Vec<Block> = Vec::new();
-    let mut claimed_tables: std::collections::HashSet<usize> = Default::default();
+    // The engine's tables come straight from its hints rather than from
+    // re-recognising them in the line stream: a table's rows are not among
+    // the lines it grouped (they were consumed by the table), and the hint
+    // already carries the cells, the kind and the position the writer gave
+    // it. `order == None` means the writer detected the table but never
+    // emitted it, so neither should this.
+    let table_blocks: Vec<Block> = hints
+        .tables
+        .iter()
+        .filter(|hint| hint.page == page_num && hint.order.is_some())
+        .flat_map(|hint| build_table_blocks(hint, page_top))
+        .collect();
     let blocks: Vec<Block> = lines
         .into_iter()
         .enumerate()
-        .filter_map(|(order, mut line)| {
+        .filter_map(|(order, (hint_order, mut line))| {
             line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            let line_hint =
+                hint_order.and_then(|wanted| hints.lines.iter().find(|line| line.order == wanted));
             let line_bbox = pdf_bbox(&line);
+            // A line a table already claimed is not also a paragraph. The
+            // engine usually removes a table's items before grouping lines,
+            // but not on every detection path, and emitting both the table
+            // block and its rows as prose duplicates the whole table.
             let line_text: String = line.iter().map(|item| item.text.as_str()).collect();
-            if let Some((index, table)) = line_bbox.and_then(|bbox| {
-                hints
-                    .tables
-                    .iter()
-                    .position(|hint| {
-                        hint.page == page_num
-                            && hints
-                                .table_at(page_num, bbox, &line_text)
-                                .is_some_and(|found| std::ptr::eq(found, hint))
-                    })
-                    .map(|index| (index, &hints.tables[index]))
-            }) {
-                if claimed_tables.insert(index) {
-                    table_blocks.extend(build_table_blocks(table, page_top));
-                }
+            if line_bbox.is_some_and(|bbox| hints.table_at(page_num, bbox, &line_text).is_some()) {
                 return None;
             }
-            let mut block = build_line_block(&line, page_top, struct_roles);
+            let mut block = build_line_block(&line, page_top, struct_roles, line_hint);
             // A heading the engine committed to in its Markdown pass. Only
             // applied when the struct tree did not already say otherwise —
             // an explicit PDF tag outranks a visual heuristic.
@@ -208,8 +217,7 @@ fn build_page(
     // Carrying the distinction alongside the block keeps it out of the IR,
     // where a doubled or fractional `reading_order` would be a rank nothing
     // else in the codebase means.
-    let mut blocks: Vec<(bool, Block)> =
-        blocks.into_iter().map(|block| (false, block)).collect();
+    let mut blocks: Vec<(bool, Block)> = blocks.into_iter().map(|block| (false, block)).collect();
     blocks.extend(table_blocks.into_iter().map(|block| (true, block)));
 
     blocks.extend(
@@ -364,7 +372,7 @@ fn group_lines(
     page_num: u32,
     items: Vec<TextItem>,
     hints: &uparser_native_engine::StructureHints,
-) -> Vec<Vec<TextItem>> {
+) -> Vec<(Option<usize>, Vec<TextItem>)> {
     let mut hinted: BTreeMap<usize, Vec<TextItem>> = BTreeMap::new();
     let mut unplaced: Vec<TextItem> = Vec::new();
     for item in items {
@@ -375,8 +383,21 @@ fn group_lines(
         }
     }
 
-    let mut lines: Vec<Vec<TextItem>> = hinted.into_values().collect();
-    // Proximity fallback for whatever the engine did not account for.
+    let mut lines: Vec<(Option<usize>, Vec<TextItem>)> = hinted
+        .into_iter()
+        .map(|(order, items)| (Some(order), items))
+        .collect();
+    // On a page the engine did group, an item it left out is one it decided
+    // does not belong in the body: a link annotation's raw URL, a page
+    // number, a repeated header. Keeping those produces text the engine's
+    // own Markdown never contains — a URL glued onto the anchor text it
+    // annotates, a stray footnote digit before the first paragraph — so the
+    // fallback is for pages with no grouping at all (`ProcessMode::Analyze`,
+    // where there is no decision to respect), not for leftovers on a page
+    // that has one.
+    if hints.lines.iter().any(|line| line.page == page_num) {
+        return lines;
+    }
     let mut current: Vec<TextItem> = Vec::new();
     for item in unplaced {
         let center = item.y + item.height / 2.0;
@@ -389,13 +410,13 @@ fn group_lines(
             current.push(item);
         } else {
             if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
+                lines.push((None, std::mem::take(&mut current)));
             }
             current.push(item);
         }
     }
     if !current.is_empty() {
-        lines.push(current);
+        lines.push((None, current));
     }
     lines
 }
@@ -517,6 +538,7 @@ fn build_line_block(
     line: &[TextItem],
     page_top: f32,
     struct_roles: Option<&HashMap<i64, StructRole>>,
+    hint: Option<&uparser_native_engine::LineHint>,
 ) -> Block {
     let x0 = line.iter().map(|i| i.x).fold(f32::INFINITY, f32::min);
     let x1 = line
@@ -537,19 +559,46 @@ fn build_line_block(
         y1.round() as i32,
     ];
 
-    // Join item texts, inserting a space across a real inter-item gap.
-    let mut text = String::new();
-    for (idx, it) in line.iter().enumerate() {
-        if idx > 0 {
-            let prev = &line[idx - 1];
-            let gap = it.x - (prev.x + prev.width);
-            let boundary = !text.ends_with(' ') && !it.text.starts_with(' ');
-            if boundary && gap > it.font_size * 0.15 {
-                text.push(' ');
-            }
-        }
-        text.push_str(&it.text);
-    }
+    // Prefer the engine's own join. Its spacing rules are the accumulated
+    // answer to letter-spaced runs, CID fonts, sub/superscripts and
+    // hyphenation; a plain gap threshold disagrees with them wherever items
+    // are small and dense — a table of contents' dot leader becomes
+    // ". . . . . . ." instead of "..............". Only usable when the
+    // pieces line up 1:1 with the items this consumer assigned to the line,
+    // since each piece is what its item contributed; otherwise fall back to
+    // the gap rule so a mismatch degrades instead of misattributing text.
+    let engine_pieces = hint
+        .map(|hint| hint.item_texts.as_slice())
+        .filter(|pieces| pieces.len() == line.len());
+    let pieces: Vec<String> = match engine_pieces {
+        Some(pieces) => pieces.to_vec(),
+        None => line
+            .iter()
+            .enumerate()
+            .scan(String::new(), |seen, (idx, it)| {
+                let mut piece = String::new();
+                if idx > 0 {
+                    let prev = &line[idx - 1];
+                    let gap = it.x - (prev.x + prev.width);
+                    let boundary = !seen.ends_with(' ') && !it.text.starts_with(' ');
+                    if boundary && gap > it.font_size * 0.15 {
+                        piece.push(' ');
+                    }
+                }
+                piece.push_str(&it.text);
+                seen.push_str(&piece);
+                Some(piece)
+            })
+            .collect(),
+    };
+    // The engine's own final cleanup, which a consumer reading its structure
+    // instead of its string would otherwise never get: dot leaders, double
+    // spaces and hyphen-split compounds are all repaired there, after the
+    // line text exists. Spans are deliberately left as they were — the
+    // consumer-side rule is that spans are only trusted when they still
+    // concatenate to the text, so a line this rewrites drops its inline
+    // styling rather than mapping it onto the wrong characters.
+    let text: String = uparser_native_engine::clean_text_fragment(&pieces.concat());
 
     let semantic_category = line_semantic_category(line, struct_roles);
     let source_formula = semantic_category.is_some_and(|(_, category)| category == "equation");
@@ -560,7 +609,8 @@ fn build_line_block(
 
     let spans: Vec<Span> = line
         .iter()
-        .map(|it| {
+        .zip(pieces.iter())
+        .map(|(it, piece)| {
             let sy0 = page_top - (it.y + it.height);
             let sy1 = page_top - it.y;
             Span {
@@ -573,7 +623,10 @@ fn build_line_block(
                     underline: it.is_underline,
                     strike: it.is_strikeout,
                 },
-                text: it.text.clone(),
+                // The item's contribution to the joined text, separator
+                // included, so the spans still concatenate to `text` — the
+                // condition a consumer checks before trusting them.
+                text: piece.clone(),
                 bbox_px: Some([
                     it.x.round() as i32,
                     sy0.round() as i32,
@@ -1463,6 +1516,70 @@ mod tests {
         assert!(pages[0].blocks.len() > 1);
     }
 
+    /// A two-column page reads column by column, so a table near the top of
+    /// the right-hand column comes *late* in the flow even though it is high
+    /// on the page. Placing it by geometry sinks or floats it away from the
+    /// text that introduces it; the writer's own position is the only thing
+    /// that knows where it goes.
+    #[test]
+    fn a_table_is_placed_where_the_writer_put_it_not_where_its_geometry_is() {
+        use uparser_native_engine::{LineHint, StructureHints, TableHint};
+
+        let line = |order: usize, text: &str, y: f32, x: f32| LineHint {
+            page: 1,
+            bbox: [x, y, x + 200.0, y + 10.0],
+            order,
+            text: text.to_owned(),
+            item_texts: vec![text.to_owned()],
+        };
+        let hints = StructureHints {
+            headings: Vec::new(),
+            // Emitted between the second and third lines, i.e. after both of
+            // the left column's lines — but its box is above the last one.
+            tables: vec![TableHint {
+                page: 1,
+                bbox: [320.0, 600.0, 520.0, 640.0],
+                rows: 1,
+                columns: 1,
+                cells: vec![vec!["cell".to_owned()]],
+                kind: uparser_native_engine::tables::TableKind::Data,
+                order: Some(2),
+            }],
+            lines: vec![
+                line(0, "left top", 700.0, 60.0),
+                line(1, "left bottom", 500.0, 60.0),
+                line(2, "right below table", 560.0, 320.0),
+            ],
+            ..Default::default()
+        };
+        let items = vec![
+            text_item("left top", 60.0, 700.0, 100.0, 1, ItemType::Text),
+            text_item("left bottom", 60.0, 500.0, 100.0, 1, ItemType::Text),
+            text_item("right below table", 320.0, 560.0, 100.0, 1, ItemType::Text),
+        ];
+
+        let pages = build_pages(
+            items,
+            &HashMap::new(),
+            &HashMap::from([(1u32, [612.0_f32, 792.0_f32])]),
+            &hints,
+        );
+
+        let flow: Vec<&str> = pages[0]
+            .blocks
+            .iter()
+            .map(|block| match (&block.text, &block.html) {
+                (Some(text), _) => text.as_str(),
+                (None, Some(_)) => "<table>",
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(
+            flow,
+            ["left top", "left bottom", "<table>", "right below table"]
+        );
+    }
+
     #[test]
     fn positioned_items_are_filtered_grouped_and_mapped_to_page_geometry() {
         let pages = build_pages(
@@ -1472,14 +1589,18 @@ mod tests {
                 text_item("World", 35.0, 90.0, 25.0, 1, ItemType::Text),
                 text_item("Hello", 10.0, 90.0, 20.0, 1, ItemType::Text),
                 text_item("Lower", 5.0, 60.0, 30.0, 1, ItemType::FormField),
+                // A link annotation sits on top of the words it decorates.
+                // Its `text` is the target URL, so admitting it as content
+                // glues the URL into the sentence.
                 text_item(
-                    "Second page",
-                    4.0,
-                    20.0,
-                    50.0,
-                    2,
+                    "https://example.com",
+                    10.0,
+                    90.0,
+                    45.0,
+                    1,
                     ItemType::Link("https://example.com".to_owned()),
                 ),
+                text_item("Second page", 4.0, 20.0, 50.0, 2, ItemType::Text),
             ],
             &HashMap::new(),
             &HashMap::new(),

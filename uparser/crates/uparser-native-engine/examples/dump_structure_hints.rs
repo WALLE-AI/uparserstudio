@@ -48,8 +48,12 @@ fn main() {
     println!("\nline hints: {}", hints.lines.len());
     for hint in hints.lines.iter().take(12) {
         println!(
-            "  order={} page={} bbox={:?}",
-            hint.order, hint.page, hint.bbox
+            "  order={} page={} bbox={:?} pieces={} text={:?}",
+            hint.order,
+            hint.page,
+            hint.bbox,
+            hint.item_texts.len(),
+            hint.text.chars().take(50).collect::<String>()
         );
     }
 }

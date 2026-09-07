@@ -18,8 +18,8 @@ use crate::types::ParseResult;
 /// (see the plan's §15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkdownSource {
-    Engine,
     Canonical,
+    EngineLegacy,
 }
 
 /// Everything a completed run can be asked to render.
@@ -53,7 +53,7 @@ impl std::fmt::Display for RenderError {
 /// means, and that `document-json` was reachable only for structured
 /// sources. Both are decided here now.
 pub fn render_markdown(input: &RenderInput<'_>, source: MarkdownSource) -> String {
-    if source == MarkdownSource::Engine
+    if source == MarkdownSource::EngineLegacy
         && let Some(markdown) = input.engine_markdown
     {
         return markdown.to_owned();

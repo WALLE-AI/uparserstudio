@@ -6,10 +6,10 @@ text.pdf         json      plain               exit=0 out=72f89c03e03c
 text.pdf         json      no-cache            exit=0 out=72f89c03e03c
 text.pdf         json      no-assets           exit=0 out=72f89c03e03c
 text.pdf         json      no-cache+no-assets  exit=0 out=72f89c03e03c
-text.pdf         markdown  plain               exit=0 out=ad6dfeb503d0
-text.pdf         markdown  no-cache            exit=0 out=ad6dfeb503d0
-text.pdf         markdown  no-assets           exit=0 out=ad6dfeb503d0
-text.pdf         markdown  no-cache+no-assets  exit=0 out=ad6dfeb503d0
+text.pdf         markdown  plain               exit=0 out=9927c24ad4fb
+text.pdf         markdown  no-cache            exit=0 out=9927c24ad4fb
+text.pdf         markdown  no-assets           exit=0 out=9927c24ad4fb
+text.pdf         markdown  no-cache+no-assets  exit=0 out=9927c24ad4fb
 image_only.pdf   json      plain               exit=1 out=ae46f8d0ab53
 image_only.pdf   json      no-cache            exit=1 out=ae46f8d0ab53
 image_only.pdf   json      no-assets           exit=1 out=ae46f8d0ab53

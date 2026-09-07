@@ -53,6 +53,16 @@ fn docx_with_image_bytes() -> Vec<u8> {
     buf
 }
 
+/// Every test here parses the *same* fixture bytes, so they all hash to the
+/// same content cache key — and they differ only in flags the key does not
+/// cover. Without an isolated cache directory per test, one test replays
+/// another's `ParseResult`, complete with `asset_path`s pointing into a
+/// tempdir it never wrote to, which shows up as a flake rather than as a
+/// consistent failure. Same fix as `tests/cli.rs`.
+fn isolated_cache<'a>(command: &'a mut Command, dir: &std::path::Path) -> &'a mut Command {
+    command.env("UPARSER_CACHE_DIR", dir.join("cache"))
+}
+
 fn parse_markdown(source: &std::path::Path, extra: &[&str]) -> String {
     let mut args = vec![
         "parse",
@@ -63,8 +73,8 @@ fn parse_markdown(source: &std::path::Path, extra: &[&str]) -> String {
         "markdown",
     ];
     args.extend_from_slice(extra);
-    let output = Command::cargo_bin("uparser")
-        .unwrap()
+    let mut command = Command::cargo_bin("uparser").unwrap();
+    let output = isolated_cache(&mut command, source.parent().unwrap())
         .args(&args)
         .assert()
         .success()
@@ -124,8 +134,8 @@ fn document_json_records_asset_paths_and_never_inlines_asset_bytes() {
     let source = dir.path().join("pictured.docx");
     std::fs::write(&source, docx_with_image_bytes()).unwrap();
 
-    let output = Command::cargo_bin("uparser")
-        .unwrap()
+    let mut command = Command::cargo_bin("uparser").unwrap();
+    let output = isolated_cache(&mut command, dir.path())
         .args([
             "parse",
             source.to_str().unwrap(),

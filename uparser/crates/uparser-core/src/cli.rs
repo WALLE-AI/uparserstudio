@@ -50,14 +50,14 @@ pub enum Command {
         /// stdout. Errors continue to use the normal stdout/stderr contract.
         #[arg(long)]
         output: Option<String>,
-        /// Which producer supplies Markdown for a native PDF. `engine`
-        /// (default) keeps the native engine's own Markdown, which is what
-        /// the published native benchmark score was measured on; `canonical`
-        /// renders that PDF from the canonical model instead, the same way
-        /// every other source is rendered. Has no effect on structured
-        /// sources or model protocols — those have one renderer either way —
-        /// nor on non-Markdown output.
-        #[arg(long, value_enum, default_value_t = MarkdownSource::Engine)]
+        /// Which producer supplies Markdown for a native PDF. `canonical`
+        /// (default) renders it from the canonical model, the same way every
+        /// other source is rendered; `engine-legacy` keeps the native
+        /// engine's own Markdown writer, retained for one release so a
+        /// regression has somewhere to fall back to. Has no effect on
+        /// structured sources or model protocols — those have one renderer
+        /// either way — nor on non-Markdown output.
+        #[arg(long, value_enum, default_value_t = MarkdownSource::Canonical)]
         markdown_source: MarkdownSource,
         /// Execution family. Omit for backward-compatible auto routing or
         /// when selecting a concrete adapter through `--protocol`.
@@ -277,8 +277,12 @@ pub enum OutputFormat {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum MarkdownSource {
-    Engine,
     Canonical,
+    /// The native engine's own Markdown writer. Kept for one release as a
+    /// fallback, hence the name; `engine` still resolves to it so an
+    /// existing invocation does not break on the rename.
+    #[value(name = "engine-legacy", alias = "engine")]
+    EngineLegacy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -707,7 +711,7 @@ fn run_parse(
         // materialization are pure overhead for this request shape.
         markdown_only: effective_protocol == "native"
             && format == OutputFormat::Markdown
-            && markdown_source == MarkdownSource::Engine,
+            && markdown_source == MarkdownSource::EngineLegacy,
         cancellation,
     };
 
@@ -832,7 +836,7 @@ fn run_parse(
             OutputFormat::Markdown => render::render_markdown(
                 &render_input,
                 match markdown_source {
-                    MarkdownSource::Engine => render::MarkdownSource::Engine,
+                    MarkdownSource::EngineLegacy => render::MarkdownSource::EngineLegacy,
                     MarkdownSource::Canonical => render::MarkdownSource::Canonical,
                 },
             ),
