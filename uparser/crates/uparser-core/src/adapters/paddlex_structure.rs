@@ -6,7 +6,7 @@ use super::{
     ResourceHint, StageBackend,
 };
 use crate::ingest::RenderedPage;
-use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
+use crate::types::{Block, CoordinateSystem, PageError};
 use async_trait::async_trait;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -100,25 +100,18 @@ impl PaddleXStructureAdapter {
                 stage: Some("structured-service".into()),
             })?;
 
-        Ok(vec![Block {
-            geom: Geometry::Rect([0.0, 0.0, page.width as f32, page.height as f32]),
-            geom_frame: CoordFrame::Page,
-            bbox_px: Some([0, 0, page.width as i32, page.height as i32]),
-            category_raw: "structured_document".into(),
-            category: Some("text".into()),
-            reading_order: Some(0),
-            text: Some(parsed.markdown.text),
-            html: None,
-            latex: None,
-            spans: vec![],
-            merge_hint: None,
-            confidence: None,
-            source: BlockSource::StructuredService,
-            error: None,
-            asset_bytes: None,
-            asset_path: None,
-            asset_caption: None,
-        }])
+        // This service is authoritative for Markdown, so the structure this
+        // adapter must produce is *in* that string. Keeping it as one block's
+        // `text` would hand Markdown syntax to passes that are contractually
+        // entitled to treat `text` as plain prose, and they would mangle it:
+        // `content_normalize` folds the blank lines away and the renderer
+        // escapes the markers. Parsing it back into blocks is what makes the
+        // IR describe the document the service actually returned.
+        Ok(crate::markdown_ir::blocks_from_markdown(
+            &parsed.markdown.text,
+            page.width,
+            page.height,
+        ))
     }
 }
 
@@ -137,7 +130,10 @@ impl ProtocolAdapter for PaddleXStructureAdapter {
     }
 
     fn category_vocab(&self) -> &[&'static str] {
-        &["structured_document"]
+        // The service returns Markdown, so the vocabulary is whatever
+        // `markdown_ir` can recover from it rather than a layout model's
+        // label set.
+        &["title", "text", "list", "table", "equation", "image"]
     }
 
     fn raw_output_format(&self) -> RawOutputFormat {
@@ -145,7 +141,13 @@ impl ProtocolAdapter for PaddleXStructureAdapter {
     }
 
     fn emitted_signals(&self) -> PostprocessSignals {
-        PostprocessSignals::default()
+        PostprocessSignals {
+            // Inline emphasis becomes span styling, and headings and list
+            // items carry a merge hint. No font sizes: Markdown has none.
+            spans: true,
+            merge_hint: true,
+            font_size: false,
+        }
     }
 
     fn model_stages(&self) -> Vec<ModelStage> {
@@ -188,6 +190,7 @@ impl ProtocolAdapter for PaddleXStructureAdapter {
 mod tests {
     use super::*;
     use crate::testing::MockDispatch;
+    use crate::types::BlockSource;
     use image::{Rgb, RgbImage};
     use std::sync::Arc;
     use tokio::sync::Semaphore;
@@ -223,10 +226,97 @@ mod tests {
         );
         let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(1)));
         let blocks = adapter.parse_page(&fake_page(), &ctx).await.unwrap();
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].text.as_deref(), Some("# Heading\n\nBody"));
-        assert_eq!(blocks[0].bbox_px, Some([0, 0, 120, 80]));
-        assert_eq!(blocks[0].source, BlockSource::StructuredService);
+
+        // The envelope's Markdown is the document's structure, so it arrives
+        // as blocks — not as one block holding the markup as characters.
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].category.as_deref(), Some("title"));
+        assert_eq!(blocks[0].text.as_deref(), Some("Heading"));
+        assert_eq!(blocks[1].category.as_deref(), Some("text"));
+        assert_eq!(blocks[1].text.as_deref(), Some("Body"));
+        assert!(blocks.iter().all(|block| block.bbox_px.is_none()));
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.source == BlockSource::StructuredService)
+        );
+    }
+
+    /// The regression this adapter was rewritten for, asserted end to end
+    /// through the real renderer rather than at the block boundary.
+    ///
+    /// The service is authoritative for Markdown. When its output was kept
+    /// as one block's `text`, two passes that are entitled to treat `text`
+    /// as plain prose destroyed it: `content_normalize` folded the blank
+    /// lines away (so nothing parsed as a heading or a table any more) and
+    /// the renderer escaped the markers — the user saw `\# Heading` and
+    /// `\*\*bold\*\*`. Both passes were right; the input was mislabelled.
+    #[tokio::test]
+    async fn authoritative_markdown_survives_the_shared_renderer_intact() {
+        let adapter = PaddleXStructureAdapter::default();
+        let mock = Arc::new(MockDispatch::new());
+        mock.seed(
+            &adapter.endpoint,
+            serde_json::json!({
+                "logId": "request-1",
+                "errorCode": 0,
+                "errorMsg": "Success",
+                "result": {
+                    "layoutParsingResults": [{
+                        "markdown": {
+                            "text": "# Heading\n\nBody with **bold**\n\n| a | b |\n| --- | --- |\n| 1 | 2 |",
+                            "images": null, "isStart": true, "isEnd": true
+                        }
+                    }],
+                    "dataInfo": {}
+                }
+            }),
+        );
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(1)));
+        let blocks = adapter.parse_page(&fake_page(), &ctx).await.unwrap();
+
+        // Through the same postprocess the CLI and the library API apply —
+        // this is where the blank lines used to be folded away.
+        let pages = vec![crate::types::Page {
+            page_num: 1,
+            width_px: 120,
+            height_px: 80,
+            blocks: crate::postprocess::merge_paragraphs_by_geometry(blocks),
+        }];
+        let result = crate::types::ParseResult {
+            source_path: "doc.pdf".into(),
+            source_sha256: String::new(),
+            protocol: "paddlex-structure".into(),
+            routed_by: crate::types::RoutedBy::Explicit,
+            document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
+            model_endpoint: None,
+            model_name: None,
+            pages,
+            page_errors: Vec::new(),
+            capability_notes: Vec::new(),
+            warnings: Vec::new(),
+            timing: Default::default(),
+        };
+        let markdown = crate::render::render_markdown(
+            &crate::render::RenderInput {
+                result: &result,
+                engine_markdown: None,
+                document: None,
+                source_format: uparser_document_engine::DocumentFormat::Pdf,
+            },
+            crate::render::MarkdownSource::Canonical,
+        );
+
+        assert!(markdown.contains("# Heading"), "{markdown}");
+        assert!(markdown.contains("**bold**"), "{markdown}");
+        assert!(markdown.contains("| a | b |"), "{markdown}");
+        assert!(markdown.contains("| 1 | 2 |"), "{markdown}");
+        assert!(
+            !markdown.contains('\\'),
+            "no escape backslash should survive: {markdown}"
+        );
     }
 
     #[test]

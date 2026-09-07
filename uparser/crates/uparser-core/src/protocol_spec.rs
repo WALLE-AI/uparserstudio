@@ -65,6 +65,11 @@ pub enum CoordinateKind {
     Norm0To1000,
     PixelAbs,
     FullPage,
+    /// The protocol reports no per-block geometry at all — it answers with a
+    /// finished Markdown document, which has none. Distinct from `FullPage`:
+    /// that one *does* give a box (the page), this one gives nothing, and a
+    /// consumer needs to know which before it reads `bbox_px`.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -146,7 +151,7 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         transport: TransportContract::OpenAiChatCompletions,
         preprocess: PreprocessKind::PageImage,
         decode: DecodeKind::Markdown,
-        coordinates: CoordinateKind::FullPage,
+        coordinates: CoordinateKind::None,
         order: OrderSource::FromModel,
         default_endpoint: Some("http://localhost:8000/v1/chat/completions"),
         requires_pdf_native_feature: false,
@@ -182,7 +187,7 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         transport: TransportContract::PaddleOcrService,
         preprocess: PreprocessKind::PageImage,
         decode: DecodeKind::StructuredEnvelope,
-        coordinates: CoordinateKind::FullPage,
+        coordinates: CoordinateKind::None,
         order: OrderSource::FromModel,
         default_endpoint: Some("http://localhost:8080/layout-parsing"),
         requires_pdf_native_feature: false,
@@ -239,7 +244,8 @@ mod tests {
                 CoordinateKind::Norm0To1000 => crate::types::CoordinateSystem::Norm0To1000,
                 CoordinateKind::SourceSemantic
                 | CoordinateKind::PixelAbs
-                | CoordinateKind::FullPage => crate::types::CoordinateSystem::PixelAbs,
+                | CoordinateKind::FullPage
+                | CoordinateKind::None => crate::types::CoordinateSystem::PixelAbs,
             };
             assert_eq!(adapter.coordinate_system(), expected_coordinates);
             assert_eq!(

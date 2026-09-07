@@ -36,6 +36,7 @@ pub mod frontend;
 pub(crate) mod geometry;
 pub mod imaging;
 pub mod ingest;
+pub(crate) mod markdown_ir;
 pub(crate) mod otsl;
 pub(crate) mod output_parse;
 pub(crate) mod page_range;

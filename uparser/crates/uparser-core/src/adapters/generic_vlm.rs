@@ -9,7 +9,7 @@ use super::{
 use crate::imaging;
 use crate::ingest::RenderedPage;
 use crate::transport::ChatCompletionRequest;
-use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
+use crate::types::{Block, BlockSource, CoordinateSystem, PageError};
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -48,7 +48,9 @@ impl ProtocolAdapter for GenericVlmAdapter {
     }
 
     fn category_vocab(&self) -> &[&'static str] {
-        &["document"]
+        // The model answers in Markdown, so the vocabulary is whatever
+        // `markdown_ir` can recover from it.
+        &["title", "text", "list", "table", "equation", "image"]
     }
 
     fn raw_output_format(&self) -> RawOutputFormat {
@@ -56,7 +58,13 @@ impl ProtocolAdapter for GenericVlmAdapter {
     }
 
     fn emitted_signals(&self) -> PostprocessSignals {
-        PostprocessSignals::default()
+        PostprocessSignals {
+            // Inline emphasis becomes span styling; headings and list items
+            // carry a merge hint. Markdown has no font sizes.
+            spans: true,
+            merge_hint: true,
+            font_size: false,
+        }
     }
 
     fn model_stages(&self) -> Vec<ModelStage> {
@@ -107,25 +115,21 @@ impl ProtocolAdapter for GenericVlmAdapter {
             stage: Some("decode".into()),
         })?;
 
-        Ok(vec![Block {
-            geom: Geometry::Rect([0.0, 0.0, page.width as f32, page.height as f32]),
-            geom_frame: CoordFrame::Page,
-            bbox_px: Some([0, 0, page.width as i32, page.height as i32]),
-            category_raw: "document".into(),
-            category: Some("text".into()),
-            reading_order: Some(0),
-            text: Some(markdown.to_owned()),
-            html: None,
-            latex: None,
-            spans: vec![],
-            merge_hint: None,
-            confidence: None,
-            source: BlockSource::OneShotVlm,
-            error: None,
-            asset_bytes: None,
-            asset_path: None,
-            asset_caption: None,
-        }])
+        // The prompt asks for Markdown, so the model's answer *is* the
+        // document's structure. Keeping it as one block's `text` would hand
+        // Markdown syntax to passes entitled to treat `text` as plain prose
+        // — `content_normalize` folds the blank lines away and the renderer
+        // escapes the markers — so it is parsed back into blocks here. Same
+        // reasoning, and the same code, as `paddlex-structure`.
+        Ok(
+            crate::markdown_ir::blocks_from_markdown(markdown, page.width, page.height)
+                .into_iter()
+                .map(|block| Block {
+                    source: BlockSource::OneShotVlm,
+                    ..block
+                })
+                .collect(),
+        )
     }
 }
 
@@ -137,8 +141,11 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
+    /// The model answers in Markdown, so the adapter's job is to turn that
+    /// into structure. Emitting one block holding the markup as characters
+    /// would leave the IR empty *and* get the markup escaped downstream.
     #[tokio::test]
-    async fn returns_one_full_page_markdown_block() {
+    async fn markdown_answer_becomes_structure_not_one_block_of_markup() {
         let adapter = GenericVlmAdapter::default();
         let mock = Arc::new(MockDispatch::new());
         mock.seed(
@@ -156,8 +163,18 @@ mod tests {
         };
         let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(1)));
         let blocks = adapter.parse_page(&page, &ctx).await.unwrap();
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].text.as_deref(), Some("# Title\n\nText"));
-        assert_eq!(blocks[0].bbox_px, Some([0, 0, 40, 30]));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].category.as_deref(), Some("title"));
+        assert_eq!(blocks[0].text.as_deref(), Some("Title"));
+        assert_eq!(blocks[1].category.as_deref(), Some("text"));
+        assert_eq!(blocks[1].text.as_deref(), Some("Text"));
+        // No geometry is invented: a one-shot page model reports none.
+        assert!(blocks.iter().all(|block| block.bbox_px.is_none()));
+        // The protocol's own provenance survives the shared parser.
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.source == BlockSource::OneShotVlm)
+        );
     }
 }

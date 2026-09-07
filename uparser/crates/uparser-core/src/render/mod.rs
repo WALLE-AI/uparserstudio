@@ -98,32 +98,6 @@ pub fn to_json(result: &ParseResult) -> String {
     serde_json::to_string_pretty(result).expect("ParseResult is always serializable")
 }
 
-pub fn to_content_list(result: &ParseResult) -> String {
-    let items: Vec<serde_json::Value> = result
-        .pages
-        .iter()
-        .flat_map(|page| {
-            page.blocks.iter().map(move |block| {
-                let mut item = serde_json::json!({
-                    "page_num": page.page_num,
-                    "category": block.category,
-                    "text": block.text,
-                    "html": block.html,
-                    "latex": block.latex,
-                    "asset_path": block.asset_path,
-                });
-                if let Some(caption) = &block.asset_caption {
-                    item.as_object_mut()
-                        .expect("content-list item is an object")
-                        .insert("asset_caption".to_owned(), serde_json::json!(caption));
-                }
-                item
-            })
-        })
-        .collect();
-    serde_json::to_string_pretty(&items).expect("content list is always serializable")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,34 +181,32 @@ mod tests {
         assert_eq!(markdown(&result), "Hello world");
     }
 
+    /// `to_content_list` used to carry these two fields to a consumer; it was
+    /// removed once `--format json` was shown to contain it (every field, on
+    /// three real documents), so the invariants move onto the format that
+    /// actually ships.
     #[test]
-    fn content_list_includes_asset_path() {
+    fn json_includes_asset_path() {
         let mut result = sample_result();
         result.pages[0].blocks[0].text = None;
         result.pages[0].blocks[0].asset_path = Some("doc_images/abc123.png".into());
-        let list = to_content_list(&result);
-        assert!(list.contains("doc_images/abc123.png"));
+        assert!(to_json(&result).contains("doc_images/abc123.png"));
     }
 
     #[test]
-    fn content_list_includes_asset_caption_only_when_present() {
+    fn json_includes_asset_caption_only_when_present() {
         let mut result = sample_result();
         result.pages[0].blocks[0].asset_caption = Some(AssetCaption {
             text: "Figure 1: Overview".into(),
             bbox_px: Some([0, 20, 100, 30]),
             confidence: 0.92,
         });
-        let list = to_content_list(&result);
-        assert!(list.contains("asset_caption"));
-        assert!(list.contains("Figure 1: Overview"));
+        let json = to_json(&result);
+        assert!(json.contains("asset_caption"));
+        assert!(json.contains("Figure 1: Overview"));
 
         result.pages[0].blocks[0].asset_caption = None;
-        assert!(!to_content_list(&result).contains("asset_caption"));
-    }
-
-    #[test]
-    fn content_list_snapshot() {
-        insta::assert_snapshot!(to_content_list(&sample_result()));
+        assert!(!to_json(&result).contains("asset_caption"));
     }
 
     #[test]
@@ -284,10 +256,17 @@ mod tests {
         let dots_ocr_shaped = result_with(block(BlockSource::OneShotVlm, "Text", Some(0)));
 
         assert_eq!(markdown(&mineru_shaped), markdown(&dots_ocr_shaped));
-        assert_eq!(
-            to_content_list(&mineru_shaped),
-            to_content_list(&dots_ocr_shaped)
-        );
+        // Same for the structured output. `source` and `reading_order` are
+        // legitimately protocol-specific, so compare the blocks' consumer-
+        // facing content rather than the whole serialization.
+        let content = |result: &ParseResult| {
+            result.pages[0]
+                .blocks
+                .iter()
+                .map(|block| (block.category.clone(), block.text.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(content(&mineru_shaped), content(&dots_ocr_shaped));
     }
 
     /// The shared renderer emits Markdown markup from the normalized

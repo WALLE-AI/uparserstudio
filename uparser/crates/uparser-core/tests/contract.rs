@@ -140,12 +140,16 @@ async fn mineru_vlm_and_monkeyocrv2_agree_on_markdown_for_equivalent_text_block(
     assert_eq!(mineru_md, "Hello contract test");
 }
 
-/// The content-list renderer must also agree on the fields that matter
-/// to an Agent consumer (`category`, `text`) across the two protocols,
-/// independent of each protocol's own internal `category_raw` spelling
-/// (`"text"` for mineru-vlm vs. `"Text"` for MonkeyOCRv2).
+/// The IR must also agree on the fields that matter to an Agent consumer
+/// (`category`, `text`) across the two protocols, independent of each
+/// protocol's own internal `category_raw` spelling (`"text"` for mineru-vlm
+/// vs. `"Text"` for MonkeyOCRv2).
+///
+/// Asserted on the blocks themselves rather than through a renderer: these
+/// two fields are what `--format json` ships, and they are what the
+/// normalization contract is actually about.
 #[tokio::test]
-async fn content_list_categories_agree_across_protocols_despite_different_native_spelling() {
+async fn categories_agree_across_protocols_despite_different_native_spelling() {
     let mineru = MineruVlmAdapter::default();
     let monkeyocr = MonkeyOcrV2Adapter::default();
 
@@ -174,30 +178,10 @@ async fn content_list_categories_agree_across_protocols_despite_different_native
     let monkeyocr_ctx = ParseCtx::with_mock(monkeyocr_mock, Arc::new(Semaphore::new(4)));
     let monkeyocr_blocks = monkeyocr.parse_page(&page, &monkeyocr_ctx).await.unwrap();
 
-    let mineru_result = wrap_as_parse_result(
-        "mineru-vlm",
-        Page {
-            page_num: 1,
-            width_px: page.width,
-            height_px: page.height,
-            blocks: mineru_blocks,
-        },
+    assert_ne!(
+        mineru_blocks[0].category_raw, monkeyocr_blocks[0].category_raw,
+        "the point of the test is that the *native* spellings differ"
     );
-    let monkeyocr_result = wrap_as_parse_result(
-        "monkeyocr-v2",
-        Page {
-            page_num: 1,
-            width_px: page.width,
-            height_px: page.height,
-            blocks: monkeyocr_blocks,
-        },
-    );
-
-    let mineru_list: serde_json::Value =
-        serde_json::from_str(&render::to_content_list(&mineru_result)).unwrap();
-    let monkeyocr_list: serde_json::Value =
-        serde_json::from_str(&render::to_content_list(&monkeyocr_result)).unwrap();
-
-    assert_eq!(mineru_list[0]["category"], monkeyocr_list[0]["category"]);
-    assert_eq!(mineru_list[0]["text"], monkeyocr_list[0]["text"]);
+    assert_eq!(mineru_blocks[0].category, monkeyocr_blocks[0].category);
+    assert_eq!(mineru_blocks[0].text, monkeyocr_blocks[0].text);
 }
