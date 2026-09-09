@@ -203,6 +203,29 @@ fn render_blocks(blocks: &[Block], output: &mut String, links: &AssetLinks<'_>) 
                 }
                 output.push_str("\n\n");
             }
+            Block::Formula { source, display } => {
+                // Verbatim: LaTeX is not prose. Running it through
+                // `escape_inline_text` (which is what a text paragraph gets)
+                // escapes `\`, `[` and `]`, producing `\left\[` and `\\\` —
+                // silently invalid math rather than a visible failure.
+                let body = match source {
+                    FormulaSource::Latex(value)
+                    | FormulaSource::MathMl(value)
+                    | FormulaSource::Spreadsheet(value) => value.trim(),
+                };
+                if body.is_empty() {
+                    continue;
+                }
+                if *display {
+                    output.push_str("$$\n");
+                    output.push_str(body);
+                    output.push_str("\n$$\n\n");
+                } else {
+                    output.push('$');
+                    output.push_str(body);
+                    output.push_str("$\n\n");
+                }
+            }
             Block::Rule => output.push_str("---\n\n"),
         }
     }

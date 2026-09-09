@@ -10,10 +10,10 @@ Read this when choosing a protocol beyond the common native/MinerU paths, config
 | `tesseract` | native / one-shot page | in process | local OCR for scanned PDF/images | PDFium, Tesseract, language data |
 | `mineru-vlm` | model / layout-then-recognize | OpenAI chat completions | strong reading order, tables, formulas | PDFium + matching MinerU endpoint |
 | `dots-ocr` | model / one-shot page | OpenAI chat completions | dots.ocr JSON contract | PDFium + matching endpoint |
-| `generic-vlm` | model / one-shot page | OpenAI chat completions | whole-page Markdown | PDFium + prompt-compatible endpoint |
+| `generic-vlm` | model / one-shot page | OpenAI chat completions | whole-page Markdown (no per-block boxes) | PDFium + prompt-compatible endpoint |
 | `monkeyocr-v2` | model / layout-then-recognize | OpenAI chat completions | MonkeyOCR v2 contract | PDFium + matching endpoint |
 | `paddleocr` | model / structured service | PaddleOCR REST | OCR boxes + geometric ordering | PDFium + PaddleOCR service |
-| `paddlex-structure` | model / structured service | `/layout-parsing` REST | server-composed PP-StructureV3 result | PDFium + PaddleX service |
+| `paddlex-structure` | model / structured service | `/layout-parsing` REST | server-composed PP-StructureV3 result (no per-block boxes) | PDFium + PaddleX service |
 | `pipeline` | pipeline / StageGraph | per-stage services/in-process table | client-composed typed stages | configured stage backends |
 | `mock` | test | none | tests only | explicit selection only |
 
@@ -43,10 +43,10 @@ Model protocols are not interchangeable merely because several use OpenAI-compat
 
 - `mineru-vlm`: hard-resized page, layout then per-region recognition, MinerU custom tokens, OTSL tables.
 - `dots-ocr`: smart-resized page, strict JSON with protocol-specific recovery.
-- `generic-vlm`: full-page Markdown. Use only with a prompt/model that actually follows this contract.
+- `generic-vlm`: full-page Markdown, parsed back into blocks so the IR carries real headings/lists/tables. Use only with a prompt/model that actually follows this contract.
 - `monkeyocr-v2`: pixel-bounded layout then recognition with Python-literal decoding.
 - `paddleocr`: PaddleOCR service boxes, not chat completions.
-- `paddlex-structure`: service-side fused layout parsing from `/layout-parsing`.
+- `paddlex-structure`: service-side fused layout parsing from `/layout-parsing`; its authoritative Markdown is parsed back into blocks, same as `generic-vlm`.
 
 Example:
 

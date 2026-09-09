@@ -1,20 +1,29 @@
 # uparser 解析引擎基准评测报告
 
-> 最后更新：2026-09-02；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
+> 最后更新：2026-09-09；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
 > PP-OCRv6 + PP-FormulaNet-plus-M。
 > 该默认指整页 `documents/pages:analyze` 后端；`pipeline_v2.rs` 使用的 standalone
 > stage endpoints 当前仍是 legacy-compatible 模型链，两者必须分开报分。
+>
+> **2026-09-09 双榜单统一复测**（Part A §7、Part B §3）：native / mineru-vlm / pipeline
+> 三种模式在两个榜单上用同一脚本 `benchmark/run_dual_benchmark.py` 全部经 CLI 重跑。
+> 该轮同时定位并修复了一个**公式渲染缺陷**，OmniDocBench Formula CDM 由 `40.1003`
+> 恢复到 `92.1094`（mineru-vlm）、由 `79.2622` 恢复到 `91.1163`（pipeline）。
+> 该缺陷随渲染器统一（M2/M3，把模型协议接入 canonical 渲染器）引入——在此之前
+> `render.rs` 逐字输出 `Block.latex`，不经过转义器（见 `formula_repair::wrap_display_math`
+> 的 D.10 注释），所以 2026-08 及更早的历史行不受影响；受影响的是渲染器统一之后、
+> 本次修复之前产出的任何 Markdown。
 
 本报告包含**两个互相独立的精度评测榜单**，以及**一个无真值的大文档性能测试**。三者的语料、评测器和指标口径不同，阅读时请先确认所在分区：
 
-| | Part A:opendataloader-bench(§1–§6) | Part B:OmniDocBench(§1–§2) | Part C:大文档 OCR 性能 |
+| | Part A:opendataloader-bench(§1–§7) | Part B:OmniDocBench(§1–§3) | Part C:大文档 OCR 性能 |
 |---|---|---|---|
 | 语料位置 | `opensource/opendataloader-bench/pdfs` | `benchmark/OmniDocBenchData` | `datasets/pdf/all_pdf/PDFs/data/黄陂…上册.pdf` |
 | 语料规模 | 200 篇单页真实 PDF | 1651 页(全量)/ 290 页分层子集(prompt 实验) | 1 份、544 页、45,119,340 bytes |
 | 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) | 无；`/usr/bin/time` 端到端计时 |
 | 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 | 墙钟、吞吐、峰值 RSS、输出覆盖；**不评精度** |
 | 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 | Rust Pipeline V2 分阶段路径 vs MinerU-VLM 2605 |
-| 结论一句话 | 服务内部 finalize 路径为 0.85789；本次 `pipeline_v2.rs` Rust CLI 分阶段路径为 0.74323，表格内容装配明显回退 | 服务内部 finalize 路径为 88.4489；本次 Rust CLI 分阶段路径仅 58.6162，同样受表格内容装配拖累 | 两路径均 544/544 成功；当前配置下 VLM 墙钟快 4.314×，但并发不对称且服务端 `>=1000` 门槛未通过 |
+| 结论一句话(最新，2026-09-09 §7/§3) | mineru-vlm 0.9252 > pipeline 0.9086 > native 0.8766；pipeline 的 Rust CLI 分阶段路径已从 2026-08-26 的 0.74323 恢复并超过服务内 finalize 的 0.85789 | mineru-vlm 91.3490 / pipeline 88.3451；修复公式渲染缺陷后 Formula CDM 分别为 92.1094 / 91.1163，均高于此前历史最好值 | 两路径均 544/544 成功；当前配置下 VLM 墙钟快 4.314×，但并发不对称且服务端 `>=1000` 门槛未通过 |
 
 Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。Part C 只是性能/稳定性测试，不得用其输出大小或结构数量代替精度指标。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
 
@@ -44,8 +53,12 @@ Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、
 | **MinerU 3.4.5 Pipeline** | **0.8568** | **0.8745** | **0.9107** | **0.7918** | 0.716(A100) | PP-DocLayoutV2 新模型链 |
 | **uparser Pipeline V2 · MinerU 3.4.5 + PP-Formula** | **0.8579** | **0.8755** | **0.9129** | **0.7924** | 1.286(A100) | 文档 API + 官方 finalize |
 | **uparser Pipeline V2(旧权重)** | 0.8001 | 0.8328 | 0.8364 | 0.7000 | 0.971(A100) | 六阶段 pipeline |
-| **uparser Pipeline V2 · Rust CLI staged(本次)** | **0.7432** | **0.8053** | **0.2768** | **0.7201** | 0.986(A100) | `pipeline_v2.rs` + 独立阶段服务 |
+| **uparser Pipeline V2 · Rust CLI staged(2026-08-26)** | **0.7432** | **0.8053** | **0.2768** | **0.7201** | 0.986(A100) | `pipeline_v2.rs` + legacy profile 阶段服务 |
 | **liteparse(榜单)** | 0.576 | 0.866 | 0.000 | 0.000 | 1.061 | PDFium+OCR |
+| **↓ 2026-09-09 统一复测(§7)，与上表不同批次，勿混排** | | | | | | |
+| **uparser · mineru-vlm(2026-09-09)** | **0.9252** | **0.9415** | **0.9650** | **0.8771** | 0.682(4 workers) | vLLM(MinerU2.5-Pro-2605) |
+| **uparser · pipeline(2026-09-09)** | **0.9086** | **0.9376** | **0.9133** | **0.8361** | 1.177(8 workers) | `pipeline_v2.rs` + bare tensor 服务 |
+| **uparser · native(2026-09-09)** | **0.8766** | **0.9197** | **0.8393** | **0.7826** | **0.044**(1 worker) | **零模型/纯 Rust** |
 
 **主结论:**
 1. **当前 V2 mineru-vlm 仍超过外部榜首 hybrid**(Overall 0.924 vs 0.907)，并以 Table TEDS `0.9682` 超过历史冻结结果 `0.9439`；但 Overall、Reading Order 和 Heading 分别回退 `0.0044`、`0.0037`、`0.0105`。回退均小于 V2 发布闸门 `0.02`，但不能把历史 `0.9284` 写成当前 V2 分数。
@@ -58,7 +71,7 @@ Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、
 6. **新 profile 消除了旧 V2 的装配损失**：ODL Overall `0.857889`，较本地原始 MinerU 3.4.5
    `0.856821` 高 `0.001067`。由于 PaddleOCR 存在小幅非确定性，这证明服务/API 路径未造成可见回退，
    但不能把千分之一差距解释为统计显著的算法提升。
-7. **Rust 分阶段路径仍有明显装配损失**：本次用 CLI 直接经过
+7. **Rust 分阶段路径仍有明显装配损失**（2026-08-26 批次；2026-09-09 复测已不复现，见 §7）：该批次用 CLI 直接经过
    `pipeline_v2.rs` 处理 200/200 PDF，Overall 为 `0.743227`，较旧 V2 HTTP 路径低
    `0.056895`，较原始同模 MinerU 低 `0.109754`。最大问题是 TEDS 从旧 V2 的
    `0.836368` 降至 `0.276770`，而 TEDS-S 仍为 `0.918768`，表明表格结构大致存在，
@@ -97,7 +110,7 @@ Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、
 | MinerU-VLM 差值 | +0.092842 | +0.085948 | +0.091557 | +0.095237 | +0.070261 | +0.124231 | +0.070031 |
 | **uparser Pipeline V2** | **0.800122** | **0.832794** | **0.814841** | **0.836368** | **0.916391** | **0.700005** | **0.874206** |
 | Pipeline 差值 vs 官方 | -0.031014 | -0.024568 | -0.037881 | -0.036623 | +0.012694 | -0.042978 | +0.020582 |
-| **uparser Pipeline V2 · Rust CLI staged(本次)** | **0.743227** | **0.805322** | **0.819593** | **0.276770** | **0.918768** | **0.720052** | **0.877049** |
+| **uparser Pipeline V2 · Rust CLI staged(2026-08-26)** | **0.743227** | **0.805322** | **0.819593** | **0.276770** | **0.918768** | **0.720052** | **0.877049** |
 | Rust staged - 旧 V2 | **-0.056895** | -0.027472 | +0.004752 | **-0.559598** | +0.002377 | +0.020047 | +0.002843 |
 | **原始 MinerU 1.3.5 Pipeline(同模)** | **0.852981** | **0.880607** | **0.858084** | **0.856388** | **0.916453** | **0.786227** | **0.872702** |
 | uparser - 原始同模 | **-0.052859** | **-0.047814** | **-0.043242** | **-0.020020** | **-0.000062** | **-0.086222** | **+0.001505** |
@@ -179,7 +192,7 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 - pdf-inspector baseline:其自带 `cargo build --release --bin pdf2md`。
 - Pipeline V2：`python3 benchmark/run_pipeline_v2_benchmarks.py`；结构化结果见
   `benchmark/results/pipeline_v2_accuracy_20260825.json`。
-- 本次 Rust CLI staged：200 篇预测和官方评分分别见
+- 2026-08-26 Rust CLI staged：200 篇预测和官方评分分别见
   `opensource/opendataloader-bench/prediction/uparser-pipeline-v2-rust-cli-staged-20260826/summary.json`
   和同目录的 `evaluation.json`。
 - 原始同模复跑：`benchmark/run_original_mineru_pipeline.py`；MinerU 3.4.5 复跑：
@@ -198,6 +211,39 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
   不加载模型包；本次已用 release CLI 单独复测，其 ODL Overall 为 `0.743227`，
   不能继承服务内 finalize 的 `0.857889`。
 - 防过拟合:未针对本语料调参;渲染器修复是通用正确性修复(所有 VLM 协议受益),非针对 GT 的 tuning。
+
+---
+
+## 7. 2026-09-09 统一复测:native / mineru-vlm / pipeline
+
+> 语料与评测器同 §1–§6（200 篇、`src/evaluator.py`）。三种模式**全部经 `uparser` CLI
+> 子进程产出预测**（`--no-cache --no-assets`），由 `benchmark/run_dual_benchmark.py`
+> 统一驱动；与 §1 上半张表是不同批次、不同二进制，不要混排成一张榜。
+
+| 模式 | Overall | NID | TEDS | MHS | s/篇 | 生成 |
+|---|---:|---:|---:|---:|---:|---|
+| mineru-vlm | **0.9252** | 0.9415 | 0.9650 | 0.8771 | 0.682 | 200/200 |
+| pipeline | 0.9086 | 0.9376 | 0.9133 | 0.8361 | 1.177 | 200/200 |
+| native | 0.8766 | 0.9197 | 0.8393 | 0.7826 | **0.044** | 199/200 |
+
+**结论：**
+
+1. **pipeline 的 Rust CLI 分阶段路径不再有装配损失**。同为 `pipeline_v2.rs` 经 CLI 的路径，
+   Overall 由 2026-08-26 的 `0.7432` 升至 `0.9086`，TEDS 由 `0.2768` 升至 `0.9133`
+   ——§1 结论 7 记录的"表格内容装配严重错位"在当前 bare tensor 服务 + MinerU 3.4.5
+   profile 下不再复现。注意两次的**服务端 profile 不同**（legacy vs mineru-3.4.5 bare
+   tensor），因此这不是纯 Rust 侧的 A/B。
+2. **pipeline 已超过服务内 finalize 路径**（`0.9086` vs `0.857889`），也超过本地原始
+   MinerU 3.4.5 Pipeline（`0.856821`）。
+3. **native 与 M3 渲染器统一后的冻结值逐位一致**（`0.876629/0.919656/0.839317/0.782614`，
+   修复前后两轮也逐位一致）。native 同样走 canonical 渲染器，但它的块不带 `latex`，
+   本语料上也没有触发行内公式改写——所以这是"实测零影响"，不是"结构上不可能受影响"。
+4. **公式修复对本榜单几乎无影响**（mineru-vlm `0.9251→0.9252`、pipeline
+   `0.9086→0.9086`）：ODL 的三项指标里没有公式项。这恰好是该缺陷能长期潜伏的原因——
+   只看 Part A 是发现不了的。
+
+速度栏是**并发下的吞吐**（墙钟 ÷ 篇数，worker 数见 §1 表），不是单篇延迟，不能与
+单 worker 的历史行直接相减。
 
 ---
 
@@ -245,7 +291,7 @@ MinerU-VLM 的 `92.4279` 与上表 665 个表格 sample aggregate `0.9061` 数�
 | 官方 MinerU2.5-Pro | 95.75 | 0.036 | 97.45 | 93.42 | 95.92 | 0.120 |
 | MinerU-VLM 差值 | -4.3249 | +0.033960 | -8.6067 | -0.9921 | -0.6751 | +0.016131 |
 | **uparser Pipeline V2(旧权重)** | **75.7789** | **0.190804** | **73.3099** | **73.1073** | **84.7475** | **0.294770** |
-| **uparser Pipeline V2 · Rust CLI staged(本次)** | **58.6162** | **0.217967** | **70.1110** | **27.5343** | **84.7622** | **0.288339** |
+| **uparser Pipeline V2 · Rust CLI staged(2026-08-26)** | **58.6162** | **0.217967** | **70.1110** | **27.5343** | **84.7622** | **0.288339** |
 | 官方 MinerU-Pipeline | 86.47 | 0.055 | 83.07 | 81.88 | 88.68 | 0.153 |
 | 旧 V2 差值 vs 官方 | -10.6911 | +0.135804 | -9.7601 | -8.7727 | -3.9325 | +0.141770 |
 | Rust staged 差值 vs 官方 | **-27.8538** | **+0.162967** | **-12.9590** | **-54.3457** | **-3.9178** | **+0.135339** |
@@ -283,7 +329,7 @@ MinerU 直接候选仅低 `0.0634` 分，文本和阅读顺序 Edit 反而分别
 uparser MinerU-VLM `91.4251` 和官方 MinerU2.5-Pro `95.75`；若“所有基线”包含 VLM，必须增加
 质量路由或 VLM fallback，不能声称固定 Pipeline 已达到该门槛。
 
-本次新增的 **Rust CLI staged** 行才是当前
+2026-08-26 新增的 **Rust CLI staged** 行才是当时
 `uparser/crates/uparser-core/src/adapters/pipeline_v2.rs` 的实际路径：release CLI 独立调度
 layout→MFD→OCR→MFR→table→assemble→order，模型服务只提供阶段推理。因为当前
 服务的 standalone stage endpoints 仍是 legacy-compatible 后端，本行使用
@@ -400,6 +446,121 @@ python3 benchmark/run_uparser_omnidoc.py \
 根因两次一致:新增指令在真正困难的类目(`layout_hard`、`table_hard`)上确实让模型更仔细、分数上涨,但在本来就简单规整的类目(`watermark`/`fuzzy_scan`/`magazine` 等)上让模型对规整表格过度分析、反而做坏——子集抽样的分层标签没有覆盖到这些受害类目,导致子集判断方向性错误。纯净端点上模型本身更强,"做坏"的幅度小了很多(不再像混用端点时 `watermark` 类目暴跌 0.53),但简单类目的损失量级仍然和难例类目的收益量级相当,net 结果打平偏负,**不构成一个值得采纳的改进**。
 
 **结论(在混用端点和纯净端点上都成立):Qwen3.8-27B 在 OmniDocBench 上继续用官方基线 prompt(§1),不采纳任何测试过的变体(B/C/BC)。** 完整实验过程、门槛判定、后端拆分复核、逐类目诊断表、纯净端点复测细节、复现命令见 `BENCHMARK_DEV_LOG.md` §3;实验方案见 `QWEN_PROMPT_IMPROVEMENT_PLAN.md`。
+
+---
+
+## 3. 2026-09-09 统一复测:公式渲染缺陷的发现、修复与全量复跑
+
+> 语料与评测器同 §1（全量 1651 页、官方 `run_eval.py` `quick_match`、CDM 8 workers、
+> TEDS 24 workers、match 24 workers）。预测全部经 `uparser` CLI 产出，由
+> `benchmark/run_dual_benchmark.py` 驱动。`native` 不在本 Part 评测：它是零模型纯文本层
+> 引擎，本榜单输入是页面图像，没有可读文本层，跑出来只会是空——不为凑满表格而报一个
+> 注定为 0 的格子。
+
+### 3.1 结果（修复后）
+
+| 模式 | Overall↑ | Text Edit↓ | Formula CDM↑ | Table TEDS↑ | TEDS-S↑ | Order Edit↓ | s/页 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **uparser · mineru-vlm** | **91.3490** | 0.083655 | **92.1094** | 90.3032 | 93.8022 | 0.144774 | 1.223 |
+| **uparser · pipeline** | **88.3451** | 0.070588 | **91.1163** | 80.9780 | 88.1804 | 0.153009 | 2.372 |
+| 官方 MinerU2.5-Pro（参照） | 95.75 | 0.036 | 97.45 | 93.42 | 95.92 | 0.120 | — |
+| 官方 MinerU-Pipeline（参照） | 86.47 | 0.055 | 83.07 | 81.88 | 88.68 | 0.153 | — |
+
+两条路径都是 1651/1651 生成成功、0 失败。
+
+### 3.2 修复前后 A/B
+
+同一语料、同一 vLLM 端点、同一 bare tensor 服务，只差这次的渲染修复：
+
+| | Overall | Formula CDM | Text Edit↓ | Table TEDS | Order Edit↓ |
+|---|---:|---:|---:|---:|---:|
+| mineru-vlm 修复前 | 74.0004 | 40.1003 | 0.084857 | 90.3864 | 0.148516 |
+| mineru-vlm 修复后 | **91.3490** | **92.1094** | 0.083655 | 90.3032 | 0.144774 |
+| pipeline 修复前 | 84.3639 | 79.2622 | 0.071484 | 80.9780 | 0.162814 |
+| pipeline 修复后 | **88.3451** | **91.1163** | 0.070588 | 80.9780 | 0.153009 |
+
+收益集中在 Formula CDM（`+52.01` / `+11.85`）。表格分几乎不动——pipeline 逐位相同
+（`80.977978` 两次一致），mineru-vlm 仅差 `-0.083`，属 VLM 采样非确定性而非改动影响；
+文本与阅读顺序小幅改善。整体与"只改了公式渲染路径"这一事实一致。修复后两者的 CDM
+都**高于本报告此前的历史最好值**（§1.2 的 `88.8433` / `88.4867`）。
+
+### 3.3 缺陷本身
+
+根因是 canonical 模型**没有块级公式表达**：`ascend.rs` 把 `Block.latex` 降级成一个自带
+定界符的**文本段落**，于是 Markdown 渲染器按散文转义它，`\`、`[`、`]` 全部被加反斜杠：
+
+```
+$$
+\\\[\boldsymbol {A} \boldsymbol {B} = \left\[ \begin{array}{c c} 2 & 3 \\\ 1 & 4 \end{array} \right\] ...\\\]
+$$
+```
+
+三个独立表现：
+
+1. **LaTeX 被当散文转义** —— `\left[`→`\left\[`、`\\`→`\\\`。mineru-vlm 与 pipeline 同时中招。
+2. **display math 被包两层** —— 适配器侧 `formula_repair::wrap_display_math` 已经加了
+   `\[…\]`（D.10），渲染器再加一层 `$$…$$`，得到 `$$ \[ … \] $$`，没有任何
+   Markdown+KaTeX 渲染器会把它读成一个公式。仅 mineru-vlm（dots-ocr/MonkeyOCRv2 同类）。
+3. **行内公式被转义** —— 适配器把 `$a_{kj}$` 直接拼进 `Block.text`（`pipeline_v2` 的
+   inline-formula 装配），渲染器把它当散文，输出 `$a\_{k j}$`。修复前
+   **435/1651（mineru-vlm）和 283/1651（pipeline）页**含被转义的 `\_`。
+
+修复（4 处，均在渲染链路，未改任何模型/适配器推理逻辑）：
+
+- `uparser-document-engine/src/model.rs`：新增 `Block::Formula { source, display }`。
+- `uparser-document-engine/src/render/mod.rs`：该块**逐字**输出，不经转义器。
+- `uparser-core/src/formula_repair.rs`：新增 `strip_display_math()`，剥掉适配器自带的
+  一层定界符。保守实现——剥完后正文若仍含闭定界符就不剥，所以 `$a$ + $b$`
+  这种"两个公式"不会被误当成"一个被包裹的公式"。
+- `uparser-core/src/ascend.rs`：改用上述两者；新增 `split_inline_math()` 把行内公式
+  拆成 `Inline::Formula`。护栏与损害对齐——只有 `$…$` 内含转义器真正会破坏的字符
+  （`\ ^ _ {`）时才判定为数学，因此散文金额 `$5 to $10` 原样保留（有专门测试）。
+
+**为什么长期没被发现**：ODL 榜单不评公式（Part A §7 结论 4，修复前后 Overall 几乎不变），
+而单元测试测的是 `wrap_display_math`/`escape_inline_text` 各自的行为，没有一条测试
+把"适配器产出的 latex"走完整条渲染链。已补 3 条端到端回归测试
+（`latex_survives_rendering_without_markdown_escaping`、
+`an_adapter_that_pre_wrapped_its_latex_is_not_wrapped_twice`、
+`inline_math_glued_into_text_is_not_escaped_as_prose`），全部先确认能复现旧行为再修。
+
+### 3.4 复现
+
+```bash
+# 1) bare tensor 模型服务（pipeline 依赖；conda base 的 numpy/scipy ABI 不匹配，
+#    且 transformers 5.9.0 超出服务要求的 >=4.57.3,<5.0.0，必须用 minerUEnv）
+CUDA_VISIBLE_DEVICES=1 PYTHONPATH=services/pipeline-model-server/src \
+UPARSER_PIPELINE_DEVICE=cuda UPARSER_PIPELINE_PROFILE=mineru-3.4.5 \
+UPARSER_MINERU_ROOT=opensource/MinerU UPARSER_MINERU_CONFIG=/home/dataset1/gaojing/mineru.json \
+UPARSER_PIPELINE_MAX_IMAGE_PIXELS=200000000 UPARSER_PIPELINE_PORT=19001 \
+~/anaconda3/envs/minerUEnv/bin/python -m uparser_pipeline_server.bare_app
+
+# 2) 二进制
+cargo build --manifest-path uparser/Cargo.toml -p uparser-core --release --features pdfium,native
+
+# 3) 两个榜单 × 三种模式，生成 + 官方评测 + 汇总
+python3 benchmark/run_dual_benchmark.py --tag 20260909 --force
+```
+
+产物：`benchmark/results/dual_benchmark_20260909.{json,md}`（修复前的对照留在
+`dual_benchmark_20260908.*`），预测在
+`benchmark/omnidoc_pred/uparser-{mineru-vlm,pipeline}-omnidoc-20260909/` 与
+`opensource/opendataloader-bench/prediction/uparser-*-odl-20260909/`。
+
+### 3.5 局限
+
+- **CDM 依赖的 TeX 环境在本机原本不存在**：`pdflatex` 解析到不存在的
+  `/share/texlive/pdflatex`，CDM 对**完全相同的公式也返回 0.0**——不修的话本节所有
+  CDM 与 Overall 都是错的，且不会有任何报错。本轮安装了 TeX Live 2026
+  （`/home/dataset1/gaojing/texlive/2026`，scheme-small + `was/multirow/cjk-ko`），
+  先验证 `identical=1.0 / different=0.0 / 中文=1.0` 才开跑，并把路径固化进脚本的
+  `--texlive-root`（缺失时打警告，不静默出 0）。与 §1 历史行使用的 TeX Live 2022
+  不是同一套渲染环境，CDM 的跨日期比较应视为近似。
+- **两条路径在同样的 2 页上输出为空**（一本英语教材的纯图页）。两个独立协议同页同结果，
+  指向该页本身没有文本内容，而非单协议缺陷。
+- mineru-vlm 的 Table TEDS `90.3032` 比 §1.2 历史的 `92.4279` 低约 2 分；该差距**在修复
+  前后基本一致**（`90.3864` vs `90.3032`，相差 `0.083`），与本次改动无关，属
+  checkpoint/配置差异。
+- 速度栏是并发吞吐（mineru-vlm 4 workers、pipeline 8 workers），不是单页延迟。
 
 ---
 

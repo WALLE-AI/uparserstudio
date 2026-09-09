@@ -111,6 +111,18 @@ pub enum Block {
         language: Option<String>,
         text: String,
     },
+    /// A standalone formula.
+    ///
+    /// Block-level, not a `Paragraph` carrying pre-delimited text: a
+    /// paragraph's content is prose, so the Markdown renderer escapes it —
+    /// and escaping `\`, `[` and `]` turns `\left[` into `\left\[` and `\\`
+    /// into `\\\`, corrupting every formula it touches. A formula is
+    /// structure, so it lives in a field the renderer can emit verbatim.
+    Formula {
+        source: FormulaSource,
+        /// Display math (`$$…$$`) rather than inline (`$…$`).
+        display: bool,
+    },
     Figure {
         asset_id: Option<AssetId>,
         alt: Option<String>,

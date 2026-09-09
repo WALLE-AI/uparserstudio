@@ -130,9 +130,83 @@ pub fn wrap_display_math(latex: &str) -> String {
     }
 }
 
+/// Strip one layer of display/inline math delimiters from `latex`.
+///
+/// `Block.latex` is supposed to be bare LaTeX, with the renderer supplying
+/// the delimiters — but three adapters wrap their own (mineru-vlm and
+/// dots-ocr via [`wrap_display_math`], MonkeyOCRv2 with `$$…$$`, faithful to
+/// its upstream source). Wrapping again on the way out produced
+/// `$$ \[ … \] $$`, which no Markdown+KaTeX renderer reads as one formula.
+/// Stripping at the point of consumption fixes every producer at once,
+/// including results replayed from an older cache.
+///
+/// Conservative by construction: a pair is only removed when the remaining
+/// body does not itself contain the closing delimiter, so `$a$ + $b$` (two
+/// formulas, not one wrapped) is left alone.
+pub fn strip_display_math(latex: &str) -> &str {
+    const PAIRS: &[(&str, &str)] = &[("\\[", "\\]"), ("$$", "$$"), ("\\(", "\\)"), ("$", "$")];
+    let mut current = latex.trim();
+    // Bounded: a doubly-wrapped formula is the realistic worst case, and a
+    // loop with no bound would be one malformed input away from spinning.
+    for _ in 0..3 {
+        let mut stripped = false;
+        for (open, close) in PAIRS {
+            let Some(body) = current
+                .strip_prefix(open)
+                .and_then(|rest| rest.strip_suffix(close))
+            else {
+                continue;
+            };
+            if body.contains(close) {
+                continue;
+            }
+            current = body.trim();
+            stripped = true;
+            break;
+        }
+        if !stripped {
+            break;
+        }
+    }
+    current
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_display_math_removes_bracket_delimiters() {
+        assert_eq!(strip_display_math("\\[\n\\frac{a}{b}\n\\]"), "\\frac{a}{b}");
+    }
+
+    #[test]
+    fn strip_display_math_removes_dollar_delimiters() {
+        assert_eq!(strip_display_math("$$x^2$$"), "x^2");
+        assert_eq!(strip_display_math("$x^2$"), "x^2");
+    }
+
+    #[test]
+    fn strip_display_math_unwraps_a_doubly_wrapped_formula() {
+        assert_eq!(strip_display_math("$$\n\\[ x^2 \\]\n$$"), "x^2");
+    }
+
+    #[test]
+    fn strip_display_math_leaves_bare_latex_untouched() {
+        assert_eq!(strip_display_math("\\frac{a}{b}"), "\\frac{a}{b}");
+    }
+
+    #[test]
+    fn strip_display_math_leaves_two_adjacent_formulas_alone() {
+        // Starts and ends with `$`, but the delimiters are not a pair.
+        assert_eq!(strip_display_math("$a$ + $b$"), "$a$ + $b$");
+    }
+
+    #[test]
+    fn strip_display_math_leaves_an_array_with_inner_brackets_alone() {
+        let latex = "\\left[ \\begin{array}{c} 1 \\end{array} \\right]";
+        assert_eq!(strip_display_math(latex), latex);
+    }
 
     #[test]
     fn balance_brackets_closes_unclosed_braces() {

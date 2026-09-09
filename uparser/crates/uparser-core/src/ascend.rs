@@ -14,8 +14,8 @@
 use crate::types::{Block as IrBlock, MergeHint, ParseResult};
 use uparser_document_engine::{
     Asset, Block as DocBlock, CanonicalDocument, Cell, CellSlot, CellValueKind, DocumentFormat,
-    DocumentUnit, Inline, List, ListItem, ListMarker, ParseWarning, Style, Table, TableKind,
-    UnitKind, WarningCode,
+    DocumentUnit, FormulaSource, Inline, List, ListItem, ListMarker, ParseWarning, Style, Table,
+    TableKind, UnitKind, WarningCode,
 };
 
 pub fn to_canonical_document(result: &ParseResult, format: DocumentFormat) -> CanonicalDocument {
@@ -199,15 +199,20 @@ fn ascend_block(
         });
     }
     if let Some(latex) = &block.latex {
-        // The canonical model has no formula block, so a formula is a
-        // paragraph carrying the delimiters the Markdown renderer would have
-        // emitted anyway — same convention as `render::to_markdown`.
-        let wrapped = if block.category.as_deref() == Some("equation_inline") {
-            format!("${latex}$")
-        } else {
-            format!("$$\n{latex}\n$$")
-        };
-        return Some(DocBlock::paragraph(wrapped));
+        // A formula is block-level structure, not a paragraph of text
+        // carrying its own delimiters: as a paragraph the Markdown renderer
+        // escapes it as prose, and escaping `\`/`[`/`]` corrupts every
+        // formula (`\left[` -> `\left\[`). Delimiters are stripped here
+        // because several adapters add their own, and the renderer adds one
+        // pair of its own on the way out.
+        let body = crate::formula_repair::strip_display_math(latex);
+        if body.is_empty() {
+            return None;
+        }
+        return Some(DocBlock::Formula {
+            source: FormulaSource::Latex(body.to_owned()),
+            display: block.category.as_deref() != Some("equation_inline"),
+        });
     }
     if let Some(text) = &block.text {
         let content = inline_content(block, text);
@@ -262,13 +267,13 @@ fn inline_content(block: &IrBlock, text: &str) -> Vec<Inline> {
             .iter()
             .all(|span| span.style == Default::default())
     {
-        return vec![plain(text)];
+        return split_inline_math(text);
     }
     let rebuilt: String = block.spans.iter().map(|span| span.text.as_str()).collect();
     if rebuilt.trim() != text.trim() {
         // Postprocess rewrote the text (paragraph merge, punctuation
         // normalization); the spans no longer describe it.
-        return vec![plain(text)];
+        return split_inline_math(text);
     }
 
     let mut runs: Vec<(crate::types::SpanStyle, String)> = Vec::new();
@@ -291,6 +296,70 @@ fn inline_content(block: &IrBlock, text: &str) -> Vec<Inline> {
             },
         })
         .collect()
+}
+
+/// Split `$…$` inline math out of prose.
+///
+/// Several adapters glue inline formulas straight into `Block.text` (see
+/// `pipeline_v2`'s inline-formula span assembly), so by the time the text
+/// reaches the renderer it is indistinguishable from prose and gets escaped
+/// as such — `$a_{kj}$` shipped as `$a\_{k j}$` on 17-26% of OmniDocBench
+/// pages. Routing those runs through `Inline::Formula` makes the renderer
+/// emit them verbatim.
+///
+/// The guard is deliberately tied to the damage: a run is only treated as
+/// math when it contains a character the escaper would actually mangle
+/// (`\`, `^`, `_`, `{`). Prose money — `$5 to $10` — contains none of them,
+/// so it stays text and keeps rendering exactly as it did before.
+fn split_inline_math(text: &str) -> Vec<Inline> {
+    // Longer than any real inline formula; past this a stray `$` has almost
+    // certainly paired with an unrelated one further down the paragraph.
+    const MAX_SPAN: usize = 200;
+
+    if !text.contains('$') {
+        return vec![plain(text)];
+    }
+    let mut inlines = Vec::new();
+    let mut pending = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('$') {
+        let after_open = &rest[open + 1..];
+        let close = after_open.find('$').filter(|close| {
+            let body = &after_open[..*close];
+            !body.is_empty()
+                && body.len() <= MAX_SPAN
+                && !body.contains('\n')
+                && !body.starts_with(char::is_whitespace)
+                && !body.ends_with(char::is_whitespace)
+                && body.contains(['\\', '^', '_', '{'])
+        });
+        match close {
+            Some(close) => {
+                pending.push_str(&rest[..open]);
+                if !pending.is_empty() {
+                    inlines.push(plain(&std::mem::take(&mut pending)));
+                }
+                inlines.push(Inline::Formula {
+                    source: FormulaSource::Latex(after_open[..close].to_owned()),
+                    display: None,
+                });
+                rest = &after_open[close + 1..];
+            }
+            // Not math: keep the `$` as the literal character it is.
+            None => {
+                pending.push_str(&rest[..=open]);
+                rest = after_open;
+            }
+        }
+    }
+    pending.push_str(rest);
+    if !pending.is_empty() {
+        inlines.push(plain(&pending));
+    }
+    if inlines.is_empty() {
+        inlines.push(plain(""));
+    }
+    inlines
 }
 
 fn plain(text: &str) -> Inline {
@@ -859,6 +928,59 @@ mod tests {
         let markdown = uparser_document_engine::render::markdown(&document);
         assert!(markdown.contains("$$"), "{markdown}");
         assert!(markdown.contains("$b^2$"), "{markdown}");
+    }
+
+    /// The bug this guards against was found by benchmarking, not by a unit
+    /// test: a formula became a text paragraph, so the Markdown renderer
+    /// escaped it as prose and every `\left[` shipped as `\left\[`. That is
+    /// silently invalid math, not a visible failure — OmniDocBench's formula
+    /// CDM fell from 88.8 to 40.1 while text and table scores stayed put.
+    #[test]
+    fn latex_survives_rendering_without_markdown_escaping() {
+        let mut display = block("equation", None);
+        display.latex =
+            Some("\\left[ \\begin{array}{cc} 2 & 3 \\\\ 1 & 4 \\end{array} \\right]".to_owned());
+        let document = to_canonical_document(&result(vec![display]), DocumentFormat::Pdf);
+        let markdown = uparser_document_engine::render::markdown(&document);
+
+        assert!(markdown.contains("\\left["), "{markdown}");
+        assert!(!markdown.contains("\\left\\["), "{markdown}");
+        assert!(!markdown.contains("\\\\\\"), "{markdown}");
+    }
+
+    /// mineru-vlm/dots-ocr wrap their own `\[…\]` and MonkeyOCRv2 its own
+    /// `$$…$$`; the renderer adds a pair too. Both wraps shipped, giving
+    /// `$$ \[ … \] $$`, which no Markdown+KaTeX renderer reads as math.
+    #[test]
+    fn an_adapter_that_pre_wrapped_its_latex_is_not_wrapped_twice() {
+        let mut display = block("equation", None);
+        display.latex = Some("\\[\n\\frac{1}{2}\n\\]".to_owned());
+        let document = to_canonical_document(&result(vec![display]), DocumentFormat::Pdf);
+        let markdown = uparser_document_engine::render::markdown(&document);
+
+        assert!(markdown.contains("$$\n\\frac{1}{2}\n$$"), "{markdown}");
+        assert!(!markdown.contains("\\["), "{markdown}");
+    }
+
+    #[test]
+    fn inline_math_glued_into_text_is_not_escaped_as_prose() {
+        let mut paragraph = block("text", Some("the coefficients $a_{k j}$ are stored"));
+        paragraph.text = Some("the coefficients $a_{k j}$ are stored".to_owned());
+        let document = to_canonical_document(&result(vec![paragraph]), DocumentFormat::Pdf);
+        let markdown = uparser_document_engine::render::markdown(&document);
+
+        assert!(markdown.contains("$a_{k j}$"), "{markdown}");
+        assert!(!markdown.contains("a\\_{k j}"), "{markdown}");
+    }
+
+    #[test]
+    fn prose_dollar_amounts_are_not_mistaken_for_math() {
+        let mut paragraph = block("text", Some("it cost $5 to $10 per unit"));
+        paragraph.text = Some("it cost $5 to $10 per unit".to_owned());
+        let document = to_canonical_document(&result(vec![paragraph]), DocumentFormat::Pdf);
+        let markdown = uparser_document_engine::render::markdown(&document);
+
+        assert!(markdown.contains("$5 to $10"), "{markdown}");
     }
 
     #[test]
