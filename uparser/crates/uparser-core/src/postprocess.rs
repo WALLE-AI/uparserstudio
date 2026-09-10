@@ -19,6 +19,12 @@ const HORIZONTAL_ALIGN_TOLERANCE_PX: i32 = 20;
 /// typical top-to-bottom layout scan order.
 pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
     let mut merged: Vec<Block> = Vec::with_capacity(blocks.len());
+    // Index of the last text block emitted, for `MergeHint::SameParagraph`.
+    // The signal targets the last *text* block, not the immediately preceding
+    // one, because a paragraph continued across a column break can have a
+    // figure, a page number or a footer detected between its two halves —
+    // this mirrors `json2markdown.py`'s `last_text_contd_idx`.
+    let mut last_text: Option<usize> = None;
 
     for mut block in blocks {
         // Normalize model-generated text (halfwidth/fullwidth punctuation
@@ -31,6 +37,19 @@ pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
             block.text = Some(crate::content_normalize::normalize(text));
         }
 
+        // An explicit signal from the model beats the geometric guess: it is
+        // the only thing that can join a paragraph across a column or page
+        // break, where the two halves are nowhere near each other.
+        if block.merge_hint == Some(crate::types::MergeHint::SameParagraph)
+            && let Some(index) = last_text
+        {
+            let target = &mut merged[index];
+            let a = target.bbox_px;
+            let b = block.bbox_px;
+            merge_into(target, &block, a, b);
+            continue;
+        }
+
         if block.category.as_deref() == Some("text")
             && let Some(last) = merged.last_mut()
             && last.category.as_deref() == Some("text")
@@ -41,9 +60,12 @@ pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
             if (0..=VERTICAL_GAP_THRESHOLD_PX).contains(&vertical_gap)
                 && left_diff <= HORIZONTAL_ALIGN_TOLERANCE_PX
             {
-                merge_into(last, &block, a, b);
+                merge_into(last, &block, Some(a), Some(b));
                 continue;
             }
+        }
+        if block.category.as_deref() == Some("text") {
+            last_text = Some(merged.len());
         }
         merged.push(block);
     }
@@ -51,7 +73,7 @@ pub fn merge_paragraphs_by_geometry(blocks: Vec<Block>) -> Vec<Block> {
     merged
 }
 
-fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
+fn merge_into(last: &mut Block, next: &Block, a: Option<[i32; 4]>, b: Option<[i32; 4]>) {
     if let Some(next_text) = &next.text {
         let joined = match &last.text {
             Some(existing) => join_wrapped_lines(existing, next_text),
@@ -64,19 +86,28 @@ fn merge_into(last: &mut Block, next: &Block, a: [i32; 4], b: [i32; 4]) {
         merge_spans(last, next, &joined);
         last.text = Some(joined);
     }
-    let combined_bbox = [
-        a[0].min(b[0]),
-        a[1].min(b[1]),
-        a[2].max(b[2]),
-        a[3].max(b[3]),
-    ];
-    last.bbox_px = Some(combined_bbox);
-    last.geom = Geometry::Rect([
-        combined_bbox[0] as f32,
-        combined_bbox[1] as f32,
-        combined_bbox[2] as f32,
-        combined_bbox[3] as f32,
-    ]);
+    // A continuation across a column or page break has no meaningful joint
+    // bounding box, and either side may carry no geometry at all — keep
+    // whichever box exists rather than inventing one.
+    let combined_bbox = match (a, b) {
+        (Some(a), Some(b)) => Some([
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+    if let Some(bbox) = combined_bbox {
+        last.bbox_px = Some(bbox);
+        last.geom = Geometry::Rect([
+            bbox[0] as f32,
+            bbox[1] as f32,
+            bbox[2] as f32,
+            bbox[3] as f32,
+        ]);
+    }
 }
 
 /// Join two consecutive wrapped lines of the same paragraph with the

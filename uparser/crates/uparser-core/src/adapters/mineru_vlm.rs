@@ -24,7 +24,9 @@ use crate::otsl;
 use crate::output_parse;
 use crate::robustness;
 use crate::transport::ChatCompletionRequest;
-use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
+use crate::types::{
+    Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, PageError,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
@@ -96,12 +98,26 @@ impl MineruVlmAdapter {
         }
     }
 
-    fn layout_sampling() -> Value {
+    /// The sampling defaults every `DEFAULT_SAMPLING_PARAMS` entry inherits
+    /// from `MinerUSamplingParams`' constructor defaults (`mineru_vl_utils`
+    /// 1.0.5/1.2.1 `mineru_client.py`): greedy decoding plus a repetition
+    /// guard. Callers override only the two penalties, exactly as the real
+    /// client does.
+    ///
+    /// `no_repeat_ngram_size` is **not** a top-level OpenAI field: the real
+    /// client sends it inside `vllm_xargs` (`vlm_client/http_client.py`), where
+    /// vLLM's custom logits processor picks it up. Sent at the top level (as
+    /// this adapter did before) vLLM silently ignores it, so the layout stage
+    /// ran with no repetition guard at all.
+    fn base_sampling(presence_penalty: f64, frequency_penalty: f64) -> Value {
         serde_json::json!({
             "temperature": 0.0,
             "top_p": 0.01,
             "top_k": 1,
-            "no_repeat_ngram_size": 100,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "repetition_penalty": 1.0,
+            "vllm_xargs": {"no_repeat_ngram_size": 100},
             // Required: vLLM's OpenAI-compatible endpoint defaults to
             // stripping special tokens from decoded text, which would eat
             // the `<|box_start|>`/`<|ref_start|>` wrapper tokens the
@@ -110,34 +126,17 @@ impl MineruVlmAdapter {
         })
     }
 
+    fn layout_sampling() -> Value {
+        Self::base_sampling(0.0, 0.0)
+    }
+
     /// Per-category stage-2 prompt/sampling, confirmed from
-    /// `mineru_vl_utils` v0.1.14's `DEFAULT_PROMPTS`/`DEFAULT_SAMPLING_PARAMS`.
+    /// `mineru_vl_utils`' `DEFAULT_PROMPTS`/`DEFAULT_SAMPLING_PARAMS`.
     fn stage2_prompt_and_sampling(category_raw: &str) -> (&'static str, Value) {
         match category_raw {
-            "table" => (
-                "\nTable Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.005,
-                    "skip_special_tokens": false,
-                }),
-            ),
-            "equation" => (
-                "\nFormula Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.05,
-                    "skip_special_tokens": false,
-                }),
-            ),
-            _ => (
-                "\nText Recognition:",
-                serde_json::json!({
-                    "presence_penalty": 1.0,
-                    "frequency_penalty": 0.05,
-                    "skip_special_tokens": false,
-                }),
-            ),
+            "table" => ("\nTable Recognition:", Self::base_sampling(1.0, 0.005)),
+            "equation" => ("\nFormula Recognition:", Self::base_sampling(1.0, 0.05)),
+            _ => ("\nText Recognition:", Self::base_sampling(1.0, 0.05)),
         }
     }
 }
@@ -147,7 +146,31 @@ struct PendingBlock {
     category_raw: String,
     category: String,
     angle: Option<u32>,
+    merge_prev: bool,
 }
+
+/// Categories the real `parse_layout_output` drops before anything else:
+/// an inline formula is already part of the text block that contains it, so
+/// recognizing it as a block of its own emits the same formula twice.
+const DROP_LAYOUT_CATEGORIES: &[&str] = &["inline_formula"];
+
+/// A block fully inside a container of one of these types is the container's
+/// own content, not a sibling. `mineru_vl_utils` removes both sets before
+/// stage 2 (`_filter_table_internal_layout_blocks` and the `image_caption`
+/// pass at the top of `prepare_for_extract`); without them a table's text is
+/// emitted once inside the table HTML and once again as a loose paragraph.
+const CONTAINED_BLOCK_RULES: &[(&[&str], &[&str])] = &[
+    (
+        &["text", "equation", "equation_block"],
+        &["table"],
+    ),
+    (
+        &["image_caption"],
+        &["image", "chart", "image_block"],
+    ),
+];
+
+const CONTAINED_BLOCK_THRESHOLD: f32 = 0.9;
 
 fn overlap_over_first_area(first: [i32; 4], second: [i32; 4]) -> f32 {
     let first_width = (first[2] - first[0]).max(0) as f32;
@@ -187,6 +210,32 @@ fn absorb_image_block_members(pending: Vec<PendingBlock>) -> Vec<PendingBlock> {
         .collect()
 }
 
+/// Drop every block that sits (at least `CONTAINED_BLOCK_THRESHOLD` of its own
+/// area) inside a container it belongs to, per `CONTAINED_BLOCK_RULES`.
+fn drop_contained_blocks(pending: Vec<PendingBlock>) -> Vec<PendingBlock> {
+    let contained: Vec<bool> = pending
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            CONTAINED_BLOCK_RULES.iter().any(|(candidates, containers)| {
+                candidates.contains(&block.category_raw.as_str())
+                    && pending.iter().enumerate().any(|(other_index, container)| {
+                        other_index != index
+                            && containers.contains(&container.category_raw.as_str())
+                            && overlap_over_first_area(block.bbox_px, container.bbox_px)
+                                >= CONTAINED_BLOCK_THRESHOLD
+                    })
+            })
+        })
+        .collect();
+
+    pending
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| (!contained[index]).then_some(block))
+        .collect()
+}
+
 #[async_trait]
 impl ProtocolAdapter for MineruVlmAdapter {
     fn name(&self) -> &'static str {
@@ -210,7 +259,12 @@ impl ProtocolAdapter for MineruVlmAdapter {
     }
 
     fn emitted_signals(&self) -> PostprocessSignals {
-        PostprocessSignals::default()
+        // The checkpoint's `txt_contd_tgt` marker is a real `merge_hint`
+        // signal, so this is no longer a pure-geometry protocol.
+        PostprocessSignals {
+            merge_hint: true,
+            ..PostprocessSignals::default()
+        }
     }
 
     fn model_stages(&self) -> Vec<ModelStage> {
@@ -265,16 +319,28 @@ impl ProtocolAdapter for MineruVlmAdapter {
         // Denormalize + category-map, then dedupe near-identical boxes.
         let mut pending: Vec<PendingBlock> = Vec::with_capacity(layout_boxes.len());
         for lb in &layout_boxes {
+            if DROP_LAYOUT_CATEGORIES.contains(&lb.category_raw.as_str()) {
+                continue;
+            }
             let bbox_px = geometry::denormalize_0to1000_bbox(lb.bbox_1000, page.width, page.height);
-            let (category, warning) = category_map::map_mineru_vlm_category(&lb.category_raw);
+            // `unknown` is a picture the model couldn't name, not prose: the
+            // real client rewrites it to `image` before anything else, which
+            // is what keeps a text prompt from being aimed at it.
+            let category_raw = if lb.category_raw == "unknown" {
+                "image".to_string()
+            } else {
+                lb.category_raw.clone()
+            };
+            let (category, warning) = category_map::map_mineru_vlm_category(&category_raw);
             if let Some(w) = warning {
                 ctx.warn(format!("mineru-vlm page {}: {w}", page.page_num));
             }
             pending.push(PendingBlock {
                 bbox_px,
-                category_raw: lb.category_raw.clone(),
+                category_raw,
                 category,
                 angle: lb.angle,
+                merge_prev: lb.merge_prev,
             });
         }
 
@@ -290,10 +356,12 @@ impl ProtocolAdapter for MineruVlmAdapter {
                     category_raw: p.category_raw.clone(),
                     category: p.category.clone(),
                     angle: p.angle,
+                    merge_prev: p.merge_prev,
                 }
             })
             .collect();
         let pending = absorb_image_block_members(pending);
+        let pending = drop_contained_blocks(pending);
 
         // Stage 2: per-block content extraction, concurrent within the
         // page (bounded by the shared document-level permit budget).
@@ -445,7 +513,7 @@ impl ProtocolAdapter for MineruVlmAdapter {
                 html,
                 latex,
                 spans: vec![],
-                merge_hint: None,
+                merge_hint: p.merge_prev.then_some(MergeHint::SameParagraph),
                 confidence: None,
                 source: BlockSource::LayoutThenRecognize,
                 error,
@@ -671,6 +739,7 @@ mod tests {
         assert!(!adapter.provides_reading_order());
         assert_eq!(adapter.raw_output_format(), RawOutputFormat::CustomToken);
         let signals = adapter.emitted_signals();
-        assert!(!signals.spans && !signals.merge_hint && !signals.font_size);
+        assert!(!signals.spans && !signals.font_size);
+        assert!(signals.merge_hint, "txt_contd_tgt is a real merge signal");
     }
 }

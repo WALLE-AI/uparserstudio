@@ -44,10 +44,15 @@ pub fn crop(img: &RgbImage, bbox_px: [i32; 4]) -> Option<RgbImage> {
 /// Rotate by a multiple of 90 degrees (0/90/180/270), matching
 /// mineru-vlm's rotation token semantics.
 pub fn rotate_90n(img: &RgbImage, angle: u32) -> RgbImage {
+    // Counter-clockwise, matching PIL's `Image.rotate(angle, expand=True)` —
+    // the call `mineru_vl_utils`' `prepare_for_extract` makes on a rotated
+    // block crop. `image::imageops::rotate90` is *clockwise*, so using it for
+    // the model's `<|rotate_right|>`/`<|rotate_left|>` angles fed every
+    // rotated block to the model 180 degrees off.
     match angle % 360 {
-        90 => image::imageops::rotate90(img),
+        90 => image::imageops::rotate270(img),
         180 => image::imageops::rotate180(img),
-        270 => image::imageops::rotate270(img),
+        270 => image::imageops::rotate90(img),
         _ => img.clone(),
     }
 }
@@ -242,6 +247,21 @@ mod tests {
         assert_eq!(rotate_90n(&img, 270).dimensions(), (10, 30));
         assert_eq!(rotate_90n(&img, 180).dimensions(), (30, 10));
         assert_eq!(rotate_90n(&img, 0).dimensions(), (30, 10));
+    }
+
+    /// Direction, not just shape: PIL's `rotate(90)` (what the real client
+    /// calls) is counter-clockwise, so the pixel at the top-left must land at
+    /// the bottom-left. `rotate90` from `imageops` would send it top-right.
+    #[test]
+    fn rotate_90n_turns_counter_clockwise_like_pil() {
+        let mut img = RgbImage::from_pixel(2, 2, Rgb([0, 0, 0]));
+        img.put_pixel(0, 0, Rgb([255, 0, 0]));
+
+        let rotated = rotate_90n(&img, 90);
+        assert_eq!(rotated.get_pixel(0, 1), &Rgb([255, 0, 0]));
+
+        let rotated = rotate_90n(&img, 270);
+        assert_eq!(rotated.get_pixel(1, 0), &Rgb([255, 0, 0]));
     }
 
     #[test]

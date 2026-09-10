@@ -5,131 +5,129 @@ description: Parse, classify, plan, and route PDF, Office, OpenDocument, EPUB, R
 
 # uparser
 
-Use uparser as an Agent-first subprocess. Keep its streams separate:
+`uparser` is a subprocess built for coding agents. Contract:
 
-- stdout is the requested Markdown/JSON result only;
-- stderr contains routing, progress, and warnings;
-- exit codes are semantic: `0` success, `1` invalid/unsupported request, `2` dependency or environment failure, `3` partial result, `4` internal failure.
+- **stdout** = the requested result only (JSON / Markdown / NDJSON), never logs.
+- **stderr** = routing, progress, warnings. Never merge it into stdout before `jq`.
+- **exit code** = `0` ok · `1` bad request or unusable input · `2` environment/dependency · `3` partial (usable, check `page_errors`) · `4` internal defect.
+- On failure, stdout still carries `{"error":{"code","message","protocol","stage"}}` for `--format json`.
 
-## V2 mental model
-
-V2 has one preparation chain and three execution families:
-
-```text
-detect -> analyze (L1/L2, optional L3) -> route -> PreprocessPlan
-       -> materialize only the selected channel -> execute -> postprocess/assets/result
-```
-
-- `--mode auto`: run the complete chain and select a feasible protocol. This is the default when neither mode nor protocol is supplied.
-- `--mode native`: source-semantic, in-process parsing. PDF analysis is reused by execution; structured documents reuse their canonical source artifact.
-- `--mode protocol --protocol <name>`: use one service/model protocol whose endpoint returns a complete page result.
-- `--mode pipeline`: let core compose typed layout/OCR/formula/table stages.
-
-`--protocol native|tesseract|mineru-vlm|...|auto` remains a compatibility shortcut. Do not combine a mode with a conflicting protocol. `--mode protocol` requires a concrete model protocol; select local OCR as `--protocol tesseract`.
-
-Read [references/v2-architecture.md](references/v2-architecture.md) when debugging routing, artifact reuse, or execution-family boundaries. Read [references/protocols.md](references/protocols.md) before choosing a less common protocol or configuring its service contract.
-
-## Default workflow
-
-For an unfamiliar document or a batch where model cost matters:
-
-1. Run `uparser plan --mode auto --prefer quality <file>`.
-2. Inspect `profile.source_format`, `profile.source_quality`, genre confidence/evidence, candidate feasibility/rejections, selected protocol, and `preprocess`.
-3. If the selected protocol is remote, run `uparser doctor <protocol> --endpoint <url>`. A candidate being listed as feasible is not proof that its endpoint is running.
-4. Parse. Prefer JSON for automation and Markdown for direct reading.
-5. On exit `0` or `3`, inspect `warnings`, `capability_notes`, `page_errors`, `route_decision`, and `preprocess_plan`. Surface meaningful recovery or fidelity warnings to the user.
-
-`--prefer quality|speed|cost` belongs to `plan`; `parse --mode auto` currently executes the quality policy. To execute a speed/cost plan exactly, pass the selected concrete mode/protocol to `parse`.
+## Start here
 
 ```bash
-# Inspect without executing a parser.
-uparser classify mystery.pdf
-uparser plan mystery.pdf --mode auto --prefer quality
-
-# Fast, source-faithful local parse.
-uparser parse report.pdf --mode native --format markdown --output report.md
-
-# Lossless source structure for a non-PDF document.
-uparser parse contract.docx --mode native --format document-json --output contract.json
-
-# Explicit MinerU model protocol.
-uparser parse scan.pdf --mode protocol --protocol mineru-vlm \
-  --endpoint http://127.0.0.1:19122/v1/chat/completions \
-  --model MinerU2.5-Pro-2605-1.2B --format json
-
-# Local full-page OCR. Requires PDFium and a working Tesseract installation.
-uparser doctor tesseract
-uparser parse scan.pdf --protocol tesseract --format markdown
+UP=$(scripts/find_uparser.sh)          # or: export UPARSER_BIN=/path/to/uparser
+"$UP" --version                        # need >= 0.4.0-rc.1 (has `plan`, `--mode`, `--output`)
 ```
 
-## Choose the execution path
+Then pick one line — do not over-plan a document you already understand:
 
-| Input or requirement | Preferred path | Important boundary |
-|---|---|---|
-| Born-digital PDF | `--mode native` | Fast, local text/structure path; preserves engine Markdown by default |
-| PDF with a few scanned or garbled pages | `--mode native` | With PDFium + Tesseract, only flagged pages may be replaced by bounded local OCR |
-| Fully scanned PDF or PNG/JPEG | `--protocol tesseract` for local OCR, or `mineru-vlm` for layout quality | Explicit native rejects inputs without reliable text/source semantics |
-| DOC(X), PPT(X), Excel, ODF, EPUB, RTF, CSV/TSV | `--mode native` for source fidelity/offline work | Reads source structure directly; no conversion or model |
-| Presentation where visual grouping matters | `plan` then a model protocol | Visual mode converts structured input through LibreOffice first |
-| Complex layout, reading order, tables/formulas | `mineru-vlm` or another verified model protocol | Match the adapter to the deployed response contract |
-| Separately deployable layout/OCR/formula/table stages | `--mode pipeline` | Select only after all real stage endpoints/backends are validated |
+| You know | Run |
+|---|---|
+| Born-digital PDF, want text/Markdown fast, offline | `"$UP" parse f.pdf --mode native --format markdown` |
+| DOCX/PPTX/XLSX/ODF/EPUB/RTF/CSV | `"$UP" parse f.docx --mode native --format markdown` |
+| …and you need lossless structure (lists, table grids, notes) | `--mode native --format document-json` |
+| Scanned PDF / PNG / JPEG, local only | `"$UP" doctor tesseract && "$UP" parse f.pdf --protocol tesseract --format markdown` |
+| Scanned or complex layout, VLM endpoint available | `"$UP" parse f.pdf --mode protocol --protocol mineru-vlm --endpoint <url> --model <name> --format json` |
+| Nothing — unknown file, or cost matters | `"$UP" plan f.pdf --prefer quality` first, then execute what it chose |
 
-Do not promise that auto routing is a quality oracle. It ranks candidates from observed evidence and compiled/runtime signals. Preserve its reason codes, rejected candidates, and confidence when auditability matters.
+`--mode auto` (the default when neither `--mode` nor `--protocol` is given) runs the whole chain and picks for you. It is a ranker over observed evidence, not an oracle — when the answer must be auditable, keep `route_decision` from the result.
 
-## Native and structured documents
-
-The `native` family contains two in-process engines:
-
-- PDF: text layer, reading order, headings, lists, tables, formula/semantic hints, and image/vector region discovery.
-- Structured documents: DOC/DOCX, PPT/PPTX, Excel variants, ODT/ODS/ODP, EPUB, RTF, and CSV/TSV from their own source semantics.
-
-For structured inputs, choose output deliberately:
-
-- `--format markdown`: readable flattened output.
-- `--format json`: common page/block IR shared with PDF and model protocols.
-- `--format document-json`: lossless canonical units, lists, table grids, notes, assets, and structured warnings. Valid only for structured native documents, not PDF or model routes.
-
-Structured-only flags are `--no-notes`, `--headers-footers`, and `--max-input-mib <N>`. Scheduler flags (`--pages`, `--stream`, `--window-size`, `--max-concurrency`) have no effect on native whole-document execution and produce a warning.
-
-Native PDF asset geometry is retained even without PDFium. Actual PDF image/vector crops require PDFium; `--no-assets` prevents rasterization and writes. Native page-level OCR additionally requires Tesseract and the requested language data. `UPARSER_OCR_LANG` overrides automatic `eng` / `chi_sim+eng` / `chi_tra+eng` selection.
-
-Known structured-format losses should remain visible through warnings. Notable current gaps include limited style/heading recovery for legacy DOC, flattened legacy PPT tables and unsupported EMF/WMF pictures, and ordered-only RTF list typing.
-
-## Results and side effects
-
-Use `--format json` when downstream code needs blocks, bounding boxes, normalized categories, formulas, tables, provenance, or routing metadata. `--markdown-source canonical` is the default: every source, native PDF included, is rendered by the one shared renderer. `engine-legacy` keeps the native engine's own Markdown writer for one release as a fallback.
-
-Assets are written by default to `<source_stem>_images/`. Use `--assets-dir <dir>` to control the location or `--no-assets` to avoid filesystem writes. `--output <path>` writes the aggregate successful result to a file while preserving errors on the normal channels.
-
-`--redact-pii` redacts common email, mainland-China phone, and resident-ID values only in emitted CLI output. Parsing and cache content remain source-faithful; do not treat it as a general anonymizer.
-
-Model/scheduler execution supports `--pages`, `--stream` (NDJSON windows), `--window-size`, and `--max-concurrency`. Native bypasses the model result cache; model protocols use the content/plan/options fingerprint cache unless `--no-cache` is set. Always use `--no-cache` for benchmarks or reproducibility checks.
-
-## Failure handling
-
-- Exit `1`: fix arguments/mode/output selection, or stop retrying an unchanged corrupt/unsupported input.
-- Exit `2`: repair the dependency or environment (endpoint, LibreOffice, PDFium, Tesseract/language data, encryption, resource budget, output/assets path), then retry.
-- Exit `3`: keep the usable result and inspect `page_errors`; retry only failed pages if appropriate.
-- Exit `4`: preserve the structured error and report the defect; one retry with `--no-cache` can distinguish a stale cache issue.
-
-For JSON requests, failures use `{"error":{"code","message","protocol","stage"}}`. Never merge stderr into stdout before parsing JSON.
-
-## Binary and helpers
-
-The skill scripts can locate, download, or build the binary:
+## Recipes
 
 ```bash
-scripts/uparser-check.sh
-scripts/uparser-parse.sh report.pdf
-scripts/find_uparser.sh --build
+# Inspect before spending money/time. Both are cheap and never call a model.
+"$UP" classify f.pdf | jq '{quality:.source_quality, kind, dominant_content}'
+"$UP" plan f.pdf --prefer quality | jq '{picked:.plan.route.protocol, why:.plan.route.reason,
+  rejected:[.plan.route.candidates[]|select(.feasible|not)|{protocol,rejection}]}'
+
+# Validate a remote protocol BEFORE parsing. "Feasible" in plan != endpoint running.
+"$UP" doctor mineru-vlm --endpoint http://127.0.0.1:19122/v1/chat/completions
+
+# Machine consumption: text + geometry + category per block.
+"$UP" parse f.pdf --mode native --format json --no-assets \
+  | jq -r '.pages[].blocks[] | select(.text) | .text'
+
+# Tables only (HTML strings), formulas only (LaTeX).
+jq -r '.pages[].blocks[]|select(.category=="table").html' result.json
+jq -r '.pages[].blocks[]|select(.category=="equation").latex' result.json
+
+# One page of a big document, to validate an endpoint cheaply.
+"$UP" parse big.pdf --pages 3 --protocol mineru-vlm --endpoint "$UPARSER_ENDPOINT"
+
+# Long document, incremental consumption (one JSON object per completed window).
+"$UP" parse big.pdf --stream --window-size 16 | while read -r line; do ...; done
+
+# Reproducible measurement / benchmarking.
+"$UP" parse f.pdf --no-cache --no-assets --output out.json
+
+# Batch: keep going past a single bad file, and record which failed.
+for f in docs/*.pdf; do
+  "$UP" parse "$f" --mode native --format markdown --output "out/$(basename "$f" .pdf).md" \
+    || echo "$f exit=$?" >> out/failures.txt
+done
 ```
 
-The pinned downloader assets may lag Architecture V2. If `uparser --version` or help lacks `--mode`, `plan`, `--output`, `--redact-pii`, or `tesseract`, build the current workspace and set `UPARSER_BIN` rather than silently using an older CLI. Build from `uparser/` with:
+## Reading the result
 
-```bash
-cargo build --release --features native,pdfium
-```
+`--format json` top level: `source_path`, `source_sha256`, `protocol`, `routed_by`, `document_profile`,
+`route_decision`, `preprocess_plan`, `model_endpoint`, `model_name`, `pages`, `page_errors`,
+`capability_notes`, `warnings`, `timing`.
 
-PDFium is needed for page rasterization, vision protocols, native PDF asset crops, and local OCR. Pure native text/source parsing does not need it.
+Each block: `geom`, `geom_frame`, `bbox_px`, `category_raw`, `category`, `reading_order`, `text`,
+`html` (tables), `latex` (formulas), `spans`, `merge_hint`, `confidence`, `source`, `error`, `asset_path`.
 
-Endpoint/model resolution is: explicit flag, `UPARSER_ENDPOINT` / `UPARSER_MODEL`, then `~/.config/uparser/config.toml` (or `UPARSER_CONFIG`) under the effective protocol section. See [references/config.example.toml](references/config.example.toml).
+After any exit `0` or `3`, read `warnings`, `capability_notes`, and `page_errors` — surface fidelity
+losses to the user instead of silently presenting degraded text as complete.
+`bbox_px` is `null` for protocols that answer with a finished document rather than geometry
+(`generic-vlm`, `paddlex-structure`); don't build geometry logic on those.
+
+`--format document-json` (structured native sources only, not PDF, not model routes) is the lossless
+canonical view: typed table grids with row/column spans, list structure, notes, assets. It is **not** a
+superset of `--format json` — that one has the geometry, provenance, and routing metadata.
+Merged table cells are only recoverable from `document-json`.
+
+## Flags that change behaviour, not just output
+
+- Assets are written by default to `<source_stem>_images/`. `--assets-dir <dir>` relocates them;
+  `--no-assets` avoids the filesystem side effect entirely (use it whenever you only want text —
+  including for `--format json`, which otherwise still writes files).
+- `--markdown-source canonical` is the default; `engine-legacy` is a one-release fallback for the
+  native PDF engine's own writer.
+- `--redact-pii` masks email / mainland-China phone / resident-ID in emitted output only. Cache and
+  parsing stay source-faithful — it is not an anonymizer.
+- `--pages`, `--stream`, `--window-size` (default 64), `--max-concurrency` (default 16) apply to model
+  and pipeline execution. On native whole-document execution they are ignored and warn.
+- `--raster-dpi` (default 200) only affects visual-page protocols.
+- Model protocols cache on `(bytes, protocol, endpoint, model, options)`; native bypasses the cache.
+- Structured-native only: `--no-notes`, `--headers-footers`, `--max-input-mib`.
+
+Full flag list: `references/cli.md`. Protocol catalog and service contracts: `references/protocols.md`.
+Routing/artifact internals: `references/v2-architecture.md`.
+
+## When it fails
+
+| Exit | Do |
+|---|---|
+| 1 | Fix the arguments, mode/protocol conflict, or output format. If the input itself is corrupt/unsupported, stop — retrying is pointless. |
+| 2 | Repair the environment named in the message (endpoint down, LibreOffice, PDFium, Tesseract language data, encrypted PDF, missing file, unwritable output), then retry once. |
+| 3 | Keep the result. Inspect `page_errors`; re-run only those pages with `--pages`. |
+| 4 | Report the structured error as a defect. One retry with `--no-cache` distinguishes a stale cache entry from a real bug. |
+
+Garbled or empty text from `--mode native` means the PDF has no reliable text layer — switch to
+`--protocol tesseract` (local) or a VLM protocol. Do not retry native with different flags.
+
+Never select `--protocol mock`; it is explicit-only placeholder output.
+
+## Binary, endpoints, config
+
+`scripts/find_uparser.sh [--build]` locates or builds it; `scripts/uparser-check.sh` reports readiness;
+`scripts/uparser-parse.sh <file>` is a one-shot wrapper that picks native vs. VLM from the resolvable
+endpoint. `.ps1` equivalents exist for Windows.
+
+Build from `uparser/`: `cargo build --release --features native,pdfium`. PDFium is needed for page
+rasterization, every vision protocol, native PDF asset crops, and local OCR — pure native text
+extraction is not.
+
+Endpoint/model resolution order: explicit flag → `UPARSER_ENDPOINT` / `UPARSER_MODEL` →
+`~/.config/uparser/config.toml` (or `UPARSER_CONFIG`) under the effective protocol's section. See
+`references/config.example.toml`. `UPARSER_OCR_LANG` overrides OCR language selection.

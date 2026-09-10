@@ -17,6 +17,14 @@ pub struct LayoutBox {
     pub bbox_1000: [u32; 4],
     pub category_raw: String,
     pub angle: Option<u32>,
+    /// The model's own "this block continues the previous paragraph" signal
+    /// (`txt_contd_tgt` in the line's trailing segment). Only `text` blocks
+    /// ever carry it, matching `mineru_vl_utils`' `_parse_merge_prev`.
+    ///
+    /// Without this the same paragraph split across two columns, two layout
+    /// boxes or two pages comes out as separate paragraphs — the single
+    /// largest structural signal this adapter used to discard.
+    pub merge_prev: bool,
 }
 
 static LAYOUT_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -116,11 +124,13 @@ pub fn parse_custom_tokens(raw: &str) -> (Vec<LayoutBox>, Vec<String>) {
         let category_raw = caps[5].to_lowercase();
         let tail = &caps[6];
         let angle = parse_rotation(tail);
+        let merge_prev = category_raw == "text" && tail.contains("txt_contd_tgt");
 
         boxes.push(LayoutBox {
             bbox_1000: [xa, ya, xb, yb],
             category_raw,
             angle,
+            merge_prev,
         });
     }
 
@@ -835,8 +845,27 @@ mod tests {
                 bbox_1000: [100, 200, 300, 400],
                 category_raw: "text".into(),
                 angle: None,
+                merge_prev: false,
             }]
         );
+    }
+
+    #[test]
+    fn parses_merge_prev_continuation_marker() {
+        let raw = "<|box_start|>0 0 10 10<|box_end|><|ref_start|>text<|ref_end|>txt_contd_tgt";
+        let (boxes, warnings) = parse_custom_tokens(raw);
+        assert!(warnings.is_empty());
+        assert!(boxes[0].merge_prev);
+    }
+
+    /// `_parse_merge_prev` is only consulted for `text` in the real client —
+    /// a title that happens to carry the marker must not silently be glued
+    /// onto the paragraph above it.
+    #[test]
+    fn merge_prev_is_only_read_for_text_blocks() {
+        let raw = "<|box_start|>0 0 10 10<|box_end|><|ref_start|>title<|ref_end|>txt_contd_tgt";
+        let (boxes, _) = parse_custom_tokens(raw);
+        assert!(!boxes[0].merge_prev);
     }
 
     #[test]

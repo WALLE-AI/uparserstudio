@@ -46,6 +46,10 @@ fn ascend_blocks(
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
+        if is_paratext(block) {
+            index += 1;
+            continue;
+        }
         // A model protocol's `text` is content the model *wrote*, which may
         // already use Markdown syntax — mineru-vlm routinely emits a bullet
         // inside a `text` block and an empty `list` block as its container.
@@ -83,6 +87,32 @@ fn ascend_blocks(
         index += 1;
     }
     out
+}
+
+/// Page furniture: running headers and footers, page numbers, gutter text and
+/// page-level footnotes. These are page-level artefacts of the *print* layout,
+/// not of the document, and repeating them between every page's content is the
+/// single most common way a page-at-a-time extractor pollutes a document.
+///
+/// MinerU makes the same call: `mk_blocks_to_markdown` simply has no branch
+/// for `HEADER`/`FOOTER`/`PAGE_NUMBER`/`ASIDE_TEXT`/`PAGE_FOOTNOTE`, so they
+/// fall through and are dropped.
+///
+/// This is a *rendering* decision, not an IR one: `--format json` still
+/// carries every block, so nothing is lost — only the assembled document view
+/// (`--format markdown` / `document-json`) leaves them out.
+///
+/// `category_raw` decides the footnote case, because the normalized
+/// `"footnote"` also covers table and image footnotes, which are real content
+/// attached to a table or figure.
+fn is_paratext(block: &IrBlock) -> bool {
+    if matches!(
+        block.category.as_deref(),
+        Some("header" | "footer" | "page_number")
+    ) {
+        return true;
+    }
+    matches!(block.category_raw.as_str(), "aside_text" | "page_footnote")
 }
 
 /// Whether this block is one item of a list — either because the protocol
