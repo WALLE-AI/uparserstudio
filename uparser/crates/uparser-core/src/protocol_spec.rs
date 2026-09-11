@@ -55,6 +55,11 @@ pub enum DecodeKind {
     Markdown,
     StructuredEnvelope,
     StageOutputs,
+    /// NaviDC-OCR's line-oriented `<box:...><label:...><direction>`
+    /// layout grammar — distinct from `CustomToken` (mineru-vlm) and
+    /// `PythonLiteral` (MonkeyOCRv2), which share neither syntax nor
+    /// parser with it.
+    NaviLayoutTokens,
     Mock,
 }
 
@@ -166,6 +171,18 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         coordinates: CoordinateKind::Norm0To1000,
         order: OrderSource::FromModel,
         default_endpoint: Some("http://localhost:8888/v1/chat/completions"),
+        requires_pdf_native_feature: false,
+    },
+    ProtocolSpec {
+        name: "navidc-ocr",
+        mode: ModeKind::ModelProtocol,
+        shape: ProtocolShape::LayoutThenRecognize,
+        transport: TransportContract::OpenAiChatCompletions,
+        preprocess: PreprocessKind::HardResize,
+        decode: DecodeKind::NaviLayoutTokens,
+        coordinates: CoordinateKind::Norm0To1000,
+        order: OrderSource::FromModel,
+        default_endpoint: Some("http://localhost:8000/v1/chat/completions"),
         requires_pdf_native_feature: false,
     },
     ProtocolSpec {
@@ -285,6 +302,14 @@ mod tests {
             get("monkeyocr-v2").unwrap().default_endpoint,
             Some(
                 crate::adapters::monkeyocr_v2::MonkeyOcrV2Adapter::default()
+                    .endpoint_base
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            get("navidc-ocr").unwrap().default_endpoint,
+            Some(
+                crate::adapters::navidc_ocr::NavidcOcrAdapter::default()
                     .endpoint_base
                     .as_str()
             )

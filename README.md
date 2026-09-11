@@ -2,13 +2,13 @@
 
 **统一文档解析 CLI(Rust)** —— 把 PDF / Word / PPT / Excel / 图片解析成干净的 **Markdown** 或结构化 **JSON**(带 bbox、类别、表格、公式、阅读顺序的 block)。专为**编码 Agent 作为子进程驱动**而设计:`stdout=结果`、`stderr=日志`、`exit code=语义化`。
 
-支持六种可插拔解析协议:从**零模型纯 Rust**(`native`,~ms/页、无 GPU)到**视觉大模型**(`mineru-vlm`,质量最佳)。`native` 协议已从"仅 PDF 文本层"扩展为**完整的本地多格式结构化文档引擎**——DOCX/PPTX/XLS(X)/ODT/ODS/ODP/RTF/EPUB/CSV,以及 legacy 二进制 `.doc`/`.ppt`,全部离线解析,不依赖 LibreOffice、不调用任何模型。
+支持七种可插拔解析协议:从**零模型纯 Rust**(`native`,~ms/页、无 GPU)到**视觉大模型**(`mineru-vlm`,质量最佳)。`native` 协议已从"仅 PDF 文本层"扩展为**完整的本地多格式结构化文档引擎**——DOCX/PPTX/XLS(X)/ODT/ODS/ODP/RTF/EPUB/CSV,以及 legacy 二进制 `.doc`/`.ppt`,全部离线解析,不依赖 LibreOffice、不调用任何模型。
 
 ---
 
 ## ✨ 亮点
 
-- **一个 CLI,六种协议**:`native` / `mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `pipeline` / `paddleocr`,外加 `auto`(自动路由)。
+- **一个 CLI,七种协议**:`native` / `mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `navidc-ocr` / `pipeline` / `paddleocr`,外加 `auto`(自动路由)。`navidc-ocr` 首版仅离线验证(无可用真实端点),不参与 `auto` 路由。
 - **`native` = PDF 引擎 + 多格式结构化文档引擎**:PDF 走纯 Rust 文本层提取;DOCX/PPTX/XLS(X)/ODT/ODS/ODP/RTF/EPUB/CSV/TSV 以及 legacy `.doc`/`.ppt` 走独立的 `uparser-document-engine`(同样纯 Rust、零外部依赖)。两者共享同一套 CLI/输出契约。
 - **Agent-first 契约**:stdout 只放结果,stderr 放日志,exit code 0–4 语义化,JSON 错误结构化。
 - **模型推理一律外置**(vLLM/LMDeploy OpenAI 兼容端点或轻量 REST),不在进程内跑重模型。
@@ -109,7 +109,7 @@ uparser parse --protocol native --max-input-mib 64 report.docx  # 解析前拒�
 
 ## 🏗️ 技术架构
 
-三种调用面(CLI / Node / Python)共用同一个 `uparser-core`;`--protocol native` 在 core 内部按文件是否为 PDF 再分流到两个各自独立、零外部依赖的纯 Rust 引擎,其余五个协议(`mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `pipeline` / `paddleocr`)统一经 `scheduler` 调度、把请求发给外置模型服务——**推理永远不在进程内跑**。
+三种调用面(CLI / Node / Python)共用同一个 `uparser-core`;`--protocol native` 在 core 内部按文件是否为 PDF 再分流到两个各自独立、零外部依赖的纯 Rust 引擎,其余六个协议(`mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `navidc-ocr` / `pipeline` / `paddleocr`)统一经 `scheduler` 调度、把请求发给外置模型服务——**推理永远不在进程内跑**。
 
 ```mermaid
 flowchart TB
@@ -128,13 +128,13 @@ flowchart TB
     INGEST --> SELECT{"--protocol"}
     SELECT -- auto --> PROFILER["profiler + router<br/>(内容预分析,选协议)"]
     PROFILER --> DISPATCH
-    SELECT -- 显式指定 --> DISPATCH{"六大协议"}
+    SELECT -- 显式指定 --> DISPATCH{"七大协议"}
 
     DISPATCH -- native --> NATIVEADAPTER["adapters::native<br/>(绕过 scheduler,单次整篇解析)"]
     NATIVEADAPTER -- ".pdf" --> PDFENGINE["uparser-native-engine<br/>纯 Rust · lopdf<br/>PDF 文本层/版面/表格"]
     NATIVEADAPTER -- "docx/pptx/xls(x)/odt/ods/odp<br/>rtf/epub/csv/doc/ppt" --> DOCENGINE["uparser-document-engine<br/>纯 Rust · 零 LibreOffice"]
 
-    DISPATCH -- "mineru-vlm · dots-ocr<br/>monkeyocr-v2 · pipeline · paddleocr" --> SCHED["scheduler.rs<br/>处理窗口 · 并发预算 · 按页失败隔离"]
+    DISPATCH -- "mineru-vlm · dots-ocr<br/>monkeyocr-v2 · navidc-ocr<br/>pipeline · paddleocr" --> SCHED["scheduler.rs<br/>处理窗口 · 并发预算 · 按页失败隔离"]
     SCHED --> ADAPTERS["adapters::* + 共享层<br/>otsl · formula_repair · postprocess"]
     ADAPTERS --> TRANS["transport.rs<br/>重试/退避/信号量"]
     TRANS --> EXT["外置模型服务<br/>vLLM/LMDeploy(OpenAI 兼容)<br/>或轻量 REST(Pipeline/Paddle)"]

@@ -1,6 +1,6 @@
 # uparser 解析引擎基准评测报告
 
-> 最后更新：2026-09-09；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
+> 最后更新：2026-09-11；当前 Pipeline V2 默认 profile：MinerU 3.4.5 + PP-DocLayoutV2 +
 > PP-OCRv6 + PP-FormulaNet-plus-M。
 > 该默认指整页 `documents/pages:analyze` 后端；`pipeline_v2.rs` 使用的 standalone
 > stage endpoints 当前仍是 legacy-compatible 模型链，两者必须分开报分。
@@ -14,6 +14,15 @@
 > 的 D.10 注释），所以 2026-08 及更早的历史行不受影响；受影响的是渲染器统一之后、
 > 本次修复之前产出的任何 Markdown。
 
+> **2026-09-11 新协议 navidc-ocr 接入双榜单**（Part A §8、Part B §4）：opendataloader-bench
+> Overall `0.9089`（榜单第 5/44），OmniDocBench Table TEDS `0.9585` / CDM `0.9419`（TEDS 高于
+> 同 harness 的 mineru-vlm `0.9200`；CDM 与上游模型卡宣称的 `0.9636` 同量级）。
+> 该轮定位并修复了一处**跨协议渲染分歧**：`ascend.rs::is_paratext` 此前按 MinerU 规则对所有
+> 协议一刀切丢弃 header/footer，而 NaviDC-OCR 上游的 `mk_blocks_to_markdown` 把二者当正文渲染。
+> **该修复在两个榜单上方向相反**——opendataloader Overall `0.8929 → 0.9089`，OmniDocBench 各项
+> 小幅变差，根因是两个榜单对"页眉页脚是否属于正文"的真值口径相反（Part B §4.4 有源码级核对）。
+> 按"与上游对齐"的目标保留该修复。默认分支未改，**mineru-vlm / pipeline / native 历史分数不受影响**。
+
 本报告包含**两个互相独立的精度评测榜单**，以及**一个无真值的大文档性能测试**。三者的语料、评测器和指标口径不同，阅读时请先确认所在分区：
 
 | | Part A:opendataloader-bench(§1–§7) | Part B:OmniDocBench(§1–§3) | Part C:大文档 OCR 性能 |
@@ -22,8 +31,8 @@
 | 语料规模 | 200 篇单页真实 PDF | 1651 页(全量)/ 290 页分层子集(prompt 实验) | 1 份、544 页、45,119,340 bytes |
 | 官方评测器 | opendataloader-bench 自带 harness/evaluator | OmniDocBench 官方 `run_eval.py`(`quick_match`) | 无；`/usr/bin/time` 端到端计时 |
 | 指标定义 | Reading Order=NID、Table=TEDS、Heading=MHS,Overall=三者等权均值 | Text/Reading Order=Edit_dist(越低越好)，Formula=CDM、Table=TEDS(越高越好)，Overall 按官方三项公式计算 | 墙钟、吞吐、峰值 RSS、输出覆盖；**不评精度** |
-| 评测对象 | uparser V2 各模式、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 | Rust Pipeline V2 分阶段路径 vs MinerU-VLM 2605 |
-| 结论一句话(最新，2026-09-09 §7/§3) | mineru-vlm 0.9252 > pipeline 0.9086 > native 0.8766；pipeline 的 Rust CLI 分阶段路径已从 2026-08-26 的 0.74323 恢复并超过服务内 finalize 的 0.85789 | mineru-vlm 91.3490 / pipeline 88.3451；修复公式渲染缺陷后 Formula CDM 分别为 92.1094 / 91.1163，均高于此前历史最好值 | 两路径均 544/544 成功；当前配置下 VLM 墙钟快 4.314×，但并发不对称且服务端 `>=1000` 门槛未通过 |
+| 评测对象 | uparser V2 各模式、navidc-ocr、原始 MinerU 同模 Pipeline、MinerU 3.4.5 新模型 Pipeline 与公开榜单 | 当前 uparser V2、navidc-ocr、原始 MinerU 同模 Pipeline、MinerU 3.4.5、历史结果与官方参考值 | Rust Pipeline V2 分阶段路径 vs MinerU-VLM 2605 |
+| 结论一句话(最新，2026-09-11 §8/§4) | mineru-vlm 0.9252 > **navidc-ocr 0.9089** > pipeline 0.9086 > native 0.8766；navidc-ocr 的 TEDS 0.9618 为全榜第二档 | mineru-vlm 91.3490 / pipeline 88.3451；**navidc-ocr Table TEDS 0.9585、CDM 0.9419**，Text Edit 0.0626 仍落后上游宣称的 0.027 | 两路径均 544/544 成功；当前配置下 VLM 墙钟快 4.314×，但并发不对称且服务端 `>=1000` 门槛未通过 |
 
 Part A/B 之间的数字**不可跨表比较**(不同语料、不同评测器、不同指标口径),即使指标名字看起来一样(如都有"Table TEDS")。Part C 只是性能/稳定性测试，不得用其输出大小或结构数量代替精度指标。调试过程、探索性发现、失败尝试的完整记录见 `BENCHMARK_DEV_LOG.md`——本报告只保留干净的榜单结果与结论。
 
@@ -244,6 +253,80 @@ native 的 Markdown 当前直通内嵌引擎(即 pdf-inspector 核心)，V2 与�
 
 速度栏是**并发下的吞吐**（墙钟 ÷ 篇数，worker 数见 §1 表），不是单篇延迟，不能与
 单 worker 的历史行直接相减。
+
+---
+
+## 8. 2026-09-11 新协议接入:navidc-ocr(并修复一处跨协议渲染分歧)
+
+> 语料与评测器同 §1–§7(200 篇、`src/evaluator.py`)。预测经 `uparser` CLI 子进程产出
+> (`--mode protocol --protocol navidc-ocr --no-cache --no-assets --max-concurrency 16`),
+> bench 适配器 `src/pdf_parser_uparser_navidc_ocr.py` + `engine_registry.py` 注册,
+> 与既有引擎同一路径。生成 200/200、**零空输出**,592 s(2.96 s/篇,冷跑无缓存)。
+
+### 8.1 结果与 A/B
+
+| 版本 | Overall | NID | TEDS | MHS |
+|---|---:|---:|---:|---:|
+| navidc-ocr(修复前:丢弃 header/footer) | 0.8929 | 0.9153 | **0.9624** | 0.8220 |
+| **navidc-ocr(修复后:按上游渲染 header/footer)** | **0.9089** | 0.9299 | 0.9618 | 0.8503 |
+| 差值 | **+0.0160** | +0.0146 | −0.0006 | +0.0283 |
+
+修复后榜单位次 **12/44 → 5/44**,超过 `opendataloader-hybrid`(0.9066)与全部 pipeline 变体;
+仅次于四个 mineru-vlm 变体。
+
+| 引擎 | Overall | NID | TEDS | MHS |
+|---|---:|---:|---:|---:|
+| uparser · mineru-vlm(历史冻结) | 0.9284 | 0.9470 | 0.9439 | 0.8777 |
+| uparser V2 · mineru-vlm 2605 | 0.9240 | 0.9433 | 0.9682 | 0.8672 |
+| **uparser · navidc-ocr** | **0.9089** | 0.9299 | **0.9618** | 0.8503 |
+| uparser V2 · pipeline | 0.9086 | 0.9376 | 0.9133 | 0.8361 |
+| opendataloader-hybrid(榜首参照) | 0.9066 | 0.934 | 0.928 | 0.821 |
+
+**表格是 navidc-ocr 的强项**:TEDS `0.9618` 在全榜第二档,明显高于 mineru-vlm 历史冻结值
+`0.9439` 与 pipeline 的 `0.9133`,与该模型卡宣称的表格能力一致。
+
+### 8.2 修复的分歧:`is_paratext` 此前按 MinerU 的规则对所有协议一刀切
+
+逐条比对上游 `opensource/NaviDC-OCR/NaviOCR/src/vlm_middle_json_mkcontent.py` 的
+`mk_blocks_to_markdown` 后确认:
+
+```python
+# 上游第 76 行 —— FOOTER / HEADER 与 TEXT 同一分支，按正文渲染
+if para_type in [TEXT, INTERLINE_EQUATION, PHONETIC, REF_TEXT, FOOTER, HEADER]:
+```
+
+而 `ascend.rs::is_paratext` 会丢弃 `header`/`footer`/`page_number` 与 `aside_text`/
+`page_footnote`,其注释写明是对齐 MinerU 的 `mk_blocks_to_markdown`——**该判断对 MinerU
+成立,对 NaviDC 不成立**。
+
+这造成一种**反向惩罚**:NaviDC 把页眉页脚精确分类成 `header`/`footer` 后被丢弃;
+MinerU 在同一篇里把相同内容归为 `text` 则被保留,而榜单真值是包含这些文字的。
+分类越准,得分越低。
+
+修法是把该策略改为**按协议复现各自上游的组装规则**:新增
+`ascend::ParatextPolicy::for_protocol()`,默认(MinerU 对齐)行为完全不变,仅
+`navidc-ocr` 保留 header/footer。`page_number`/`aside_text`/`page_footnote` 仍然丢弃
+——**上游 NaviDC 同样没有这些分支**,这三类本来就一致。回归测试
+`header_footer_follow_the_protocols_own_upstream_renderer` 断言两个协议的不同行为,
+并已验证:移除 navidc 分支后该测试立即失败。
+
+因为默认分支未改,**mineru-vlm / pipeline / native 的历史分数不受影响**,无需重跑。
+
+### 8.3 已核对、确认不是分歧的点
+
+| 项 | 上游实现 | uparser | 结论 |
+|---|---|---|---|
+| `title_level` | `block.get('level', 1)`,该字段全仓从未赋值 | 恒 `#` 一级 | 一致 |
+| `full_to_half_exclude_marks` | 只转全角**字母数字**(FF10–FF5A),不碰标点 | 标点规范化不涉及该区间 | 不冲突 |
+| `page_number`/`aside_text`/`page_footnote` | 无渲染分支 | 丢弃 | 一致 |
+
+### 8.4 尚未对齐的上游分歧(已知,未实现)
+
+1. **`CODE` 围栏块**:上游用 ` ```{guess_lang} ` 包裹并带语言猜测,uparser 输出纯文本。
+2. **`LIST` 容器**:上游把子块渲染成 `item  \n`(**不加 `- ` 项目符号**);uparser 的
+   `list` 容器块为空、子块各自成段。词一致、空白结构不同(NID 归一化空白,影响有限)。
+3. **`CHAR` 的 `len<=5` 过滤**:上游跳过过短内容,uparser 不过滤。
+
 
 ---
 
@@ -561,6 +644,151 @@ python3 benchmark/run_dual_benchmark.py --tag 20260909 --force
   前后基本一致**（`90.3864` vs `90.3032`，相差 `0.083`），与本次改动无关，属
   checkpoint/配置差异。
 - 速度栏是并发吞吐（mineru-vlm 4 workers、pipeline 8 workers），不是单页延迟。
+
+---
+
+## 4. 2026-09-11 新协议接入:navidc-ocr
+
+> 语料与评测器同 §1/§3(全量 1651 页、官方 `run_eval.py` `quick_match`、
+> TEDS 24 workers、match 24 workers)。预测经 `uparser` CLI 产出
+> (`--mode protocol --protocol navidc-ocr --layout-mode detection --no-cache --no-assets`),
+> 驱动脚本 `benchmark/gen_navidc.sh`,1651/1651 生成成功。
+> 服务端为 vLLM 0.11.0 + 上游 `NaviOCR-vllm` out-of-tree 插件(见下 §4.3)。
+
+### 4.1 首轮结果(Part A §8 的 header/footer 修复**之前**)
+
+| 指标 | uparser · navidc-ocr | 模型卡宣称(OmniDocBench v1.6) | uparser · mineru-vlm-2605-official(同 harness) |
+|---|---:|---:|---:|
+| **Table TEDS↑** | **0.9644** | 0.9705 | 0.9200 |
+| **TEDS-S↑** | **0.9707** | 0.9852 | — |
+| Text Edit↓ | 0.0603 | **0.027** | 0.0377 |
+| Formula Edit↓ | 0.0981 | — | 0.0935 |
+| Order Edit↓ | 0.1381 | 0.122 | 0.1296 |
+| Formula CDM↑ | **不可用** | 0.9636 | — |
+| Overall↑ | **不可计算** | 96.87 | — |
+
+**表格已基本对齐上游宣称值**(TEDS `0.9644` vs `0.9705`;TEDS-S `0.9707` vs `0.9852`),
+且显著优于同一 harness 下的 mineru-vlm(`0.9200`)。主要差距在 **Text Edit
+(`0.0603` vs `0.027`)**,这正是 Part A §8 那处 header/footer 渲染分歧指向的方向。
+
+### 4.2 首轮的 CDM 与 Overall 为何作废
+
+首轮直接调用 `run_eval.py`,**未设置 `CDM_TEXLIVE_ROOT`**,CDM 对每个样本都返回
+`0.0`——包括完全相同的公式。`benchmark/run_dual_benchmark.py::cdm_environment` 的
+注释早就写明了这个陷阱("without a working TeX it returns 0.0 for *every* sample …
+which would silently drag the official Overall down by a third rather than failing
+loudly"),我第一轮没有走那个入口,踩了同一个坑。
+
+因此上表的 CDM 与 Overall **标注为不可用而非报 0**;Text/Table/Order 三项不依赖
+pdflatex,不受影响,仍然有效。带 texlive 的复测结果见 §4.4(进行中)。
+
+### 4.3 部署:原版 vLLM 装不下该 checkpoint,须用上游插件
+
+`config.json` 声明 `architectures: ["Qwen2_5_VLForConditionalGeneration"]`,但权重里的
+文本塔实际是 **Qwen3 结构**,与 vLLM 内置 Qwen2_5_VL 实现有三处结构性不匹配:
+
+| | 权重实际 | vLLM 内置 Qwen2_5_VL |
+|---|---|---|
+| `head_dim` | `q_proj [2048,1024]` = 16×**128** | `qwen2.py` 无条件 `hidden_size//num_heads`=**64**,该类无 `head_dim` 参数 |
+| qkv bias | **无 bias 张量** | 硬编码 `bias=True` |
+| q/k_norm | 28 层全有(`Qwen3RMSNorm`) | 读 `getattr(config,"qk_norm",False)`,而 config 里**没有该字段** → 静默为 False |
+
+且 `qwen2_5_vl.py` 把文本塔硬编码成 `architectures=["Qwen2ForCausalLM"]`(已核对 vLLM
+**main 分支**,三处至今未改)。启动时报的
+`assert sum(mrope_section) == rotary_dim // 2` 只是最先触发的一个;**最危险的是
+`qk_norm`**——若绕过前两处,vLLM 会静默丢掉 28 层 QK normalization,模型能加载能出字
+但输出是错的。
+
+上游把修复作为 out-of-tree 插件提供:`opensource/NaviDC-OCR/NaviOCR-vllm/`,其
+`qwen2_5_vl.py` 把文本塔改为 `architectures=["Qwen3ForCausalLM"]`(Qwen3 实现支持
+decoupled `head_dim`、无 qkv bias、自带 q/k_norm),正对上述三处。
+
+```bash
+pip install vllm==0.11.0                              # 插件 pin 的版本
+pip install -e opensource/NaviDC-OCR/NaviOCR-vllm     # 注册插件
+CUDA_VISIBLE_DEVICES=1 vllm serve /path/to/NaviDC-OCR \
+  --served-model-name StarDoc-AI/NaviDC-OCR --port 8010 \
+  --max-model-len 8192 --trust-remote-code \
+  --gpu-memory-utilization 0.30 --limit-mm-per-prompt '{"image":4}'
+```
+
+同一输入下,该插件路径与 transformers sidecar(`trust_remote_code=True` 加载模型自带的
+`modeling_naviocr.py`)输出**逐字节一致**,可互为交叉验证。
+
+> **`--max-model-len` 注意**:adapter 的 stage-2 输出预算为 4096(与模型卡 Quick Start
+> 的 `max_new_tokens=4096` 一致)。若 `--max-model-len` ≤ 4096,vLLM 会以
+> `'max_tokens' is too large` 拒绝所有 stage-2 请求——错误会逐块上浮到 `Block.error`,
+> 不会静默。保持 ≥8192。
+
+### 4.4 复测(带 texlive 的 CDM,header/footer 修复之后)
+
+| 指标 | 首轮(修复前) | **复测(修复后)** | 模型卡宣称 | mineru-vlm-2605-official(同 harness) |
+|---|---:|---:|---:|---:|
+| Table TEDS↑ | 0.9644 | 0.9585 | 0.9705 | 0.9200 |
+| TEDS-S↑ | 0.9707 | 0.9645 | 0.9852 | 0.9486 |
+| Text Edit↓ | 0.0603 | 0.0626 | **0.027** | 0.0377 |
+| Formula Edit↓ | 0.0981 | 0.1009 | — | 0.0935 |
+| **Formula CDM↑** | 不可用 | **0.9419** | 0.9636 | **该轮未测** |
+| Order Edit↓ | 0.1381 | 0.1405 | 0.122 | 0.1296 |
+
+CDM 在复测中有效(`pdflatex` 报错归零),`0.9419` 与上游宣称的 `0.9636` 同一量级。
+`mineru-vlm-2605-official` 那轮**没有跑 CDM**(结果文件里为 `None`),因此该格留空
+——§3.1 的 `uparser · mineru-vlm` 有 CDM `0.9211`,但那是**另一批预测**,
+与本表其余列不同源,不并入同一行比较。
+
+**重要:header/footer 修复在两个榜单上的方向相反。**
+opendataloader-bench Overall `+0.0160`(Part A §8),OmniDocBench 各项则**小幅变差**。
+
+原因是两个榜单的**真值口径相反**,已核对源码确认:
+
+- OmniDocBench 的 `text_block` 指标**只对 GT 类别 `title`/`text_block` 计分**
+  (`OmniDocBench/src/dataset/end2end_dataset.py:484`
+  `if gt_category not in ['title', 'text_block']`)。`header`/`footer`/`page_number`
+  是**独立且被排除**的 GT 类别(全量语料中 header 374、footer 143、page_number 276 个标注)。
+  预测里多出的页眉页脚文字无处匹配,只会抬高 edit distance。
+- opendataloader-bench 的真值 Markdown **包含**这些文字,所以同样的改动在那边是净收益。
+
+因此这不是"修复引入了退化",而是**两个榜单对页眉页脚是否属于正文的定义不同**。
+就本次目标(与 `opensource/NaviDC-OCR` 上游对齐)而言,上游
+`mk_blocks_to_markdown` 明确把 `FOOTER`/`HEADER` 与 `TEXT` 同列渲染,**保留修复是
+与上游一致的选择**;代价是 OmniDocBench 上约 `+0.0023` 的 Text Edit。
+
+> **未完全解释的部分**:TEDS 由 `0.9644` 降至 `0.9585`——页眉页脚与表格结构无关,
+> 该差异无法由本次改动直接解释,可能来自块序变化导致的匹配漂移,或 vLLM 连续批处理
+> 的非确定性。两轮之间除渲染器外无其他改动。此处不作过度归因,记录待查。
+
+**与上游宣称值的剩余差距**:Text Edit `0.0626` vs `0.027` 仍是主要缺口(约 2.3×)。
+已确认不是 `title_level`、`full_to_half_exclude_marks`、`page_number`/`aside_text`/
+`page_footnote` 处理导致(见 Part A §8.3);尚未实现的上游分歧见 §8.4
+(`CODE` 围栏块、`LIST` 容器渲染、`CHAR` 的 `len<=5` 过滤)。
+
+### 4.5 复现
+
+```bash
+# 1) 部署(见 §4.3;需先装 NaviOCR-vllm 插件)
+CUDA_VISIBLE_DEVICES=1 vllm serve /path/to/NaviDC-OCR \
+  --served-model-name StarDoc-AI/NaviDC-OCR --port 8010 \
+  --max-model-len 8192 --trust-remote-code --gpu-memory-utilization 0.30
+
+# 2) opendataloader-bench(Part A §8)
+cd opensource/opendataloader-bench
+uv run src/pdf_parser.py --engine uparser-navidc-ocr   # 适配器:src/pdf_parser_uparser_navidc_ocr.py
+uv run src/evaluator.py
+
+# 3) OmniDocBench(Part B §4)——注意必须带 CDM 的 texlive 环境，否则 CDM 恒为 0
+cd benchmark
+ls OmniDocBenchData/images/* | xargs -P 8 -I{} ./gen_navidc.sh {}
+cd OmniDocBench
+TL=/home/dataset1/gaojing/texlive/2026
+PATH="$TL/bin/x86_64-linux:$PATH" CDM_TEXLIVE_ROOT="$TL" \
+  CDM_PDFLATEX="$TL/bin/x86_64-linux/pdflatex" \
+  .venv/bin/python run_eval.py --config configs/omnidoc_uparser-navidc-ocr-20260911.yaml
+```
+
+> **务必用 release build**:debug 下图像裁剪/缩放/PNG 编码慢约 10 倍。同一张 52 块的
+> 报纸页 release 31.7 s、debug >300 s(超时)——瓶颈在客户端 CPU,不是模型服务。
+> 首次测量时误用 debug 二进制,曾把该现象错判为"sidecar 串行导致慢"。
+
 
 ---
 

@@ -144,6 +144,67 @@ pub fn resize_by_pixel_bounds(img: &RgbImage, min_pixels: u32, max_pixels: u32) 
     image::imageops::resize(img, new_w, new_h, FilterType::Lanczos3)
 }
 
+/// Crop to the bounding rect of `points_px`, then white-fill every pixel
+/// outside the polygon itself (even-odd ray-casting point-in-polygon
+/// test) — NaviDC-OCR's Segmentation layout mode returns multi-point
+/// polygons for non-rectangular regions (rotated/warped photographed
+/// text), and taking only the bounding-rect crop would feed the model
+/// neighboring content outside the actual region, corrupting recognition
+/// on exactly the documents polygon mode exists to handle.
+///
+/// Returns `None` if the bounding rect doesn't overlap the image at all
+/// (delegates to `crop`'s own off-page guard) or if `points_px` has fewer
+/// than 3 points (degenerate, not a real polygon).
+pub fn crop_polygon_masked(img: &RgbImage, points_px: &[[i32; 2]]) -> Option<RgbImage> {
+    if points_px.len() < 3 {
+        return None;
+    }
+    let x0 = points_px.iter().map(|p| p[0]).min().unwrap();
+    let y0 = points_px.iter().map(|p| p[1]).min().unwrap();
+    let x1 = points_px.iter().map(|p| p[0]).max().unwrap();
+    let y1 = points_px.iter().map(|p| p[1]).max().unwrap();
+    let mut cropped = crop(img, [x0, y0, x1, y1])?;
+
+    // Translate polygon points into the cropped image's local coordinate
+    // frame before the per-pixel containment test.
+    let local: Vec<[f64; 2]> = points_px
+        .iter()
+        .map(|p| [(p[0] - x0) as f64, (p[1] - y0) as f64])
+        .collect();
+
+    let (w, h) = cropped.dimensions();
+    for y in 0..h {
+        for x in 0..w {
+            // Sample at the pixel center so edge-adjacent pixels aren't
+            // spuriously excluded by exact-boundary ray hits.
+            if !point_in_polygon(x as f64 + 0.5, y as f64 + 0.5, &local) {
+                cropped.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+    }
+    Some(cropped)
+}
+
+/// Even-odd rule ray casting: count edge crossings of a horizontal ray
+/// cast rightward from `(px, py)`.
+fn point_in_polygon(px: f64, py: f64, points: &[[f64; 2]]) -> bool {
+    let n = points.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (points[i][0], points[i][1]);
+        let (xj, yj) = (points[j][0], points[j][1]);
+        if (yi > py) != (yj > py) {
+            let x_intersect = xi + (py - yi) / (yj - yi) * (xj - xi);
+            if px < x_intersect {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
 fn round_by_factor(number: f64, factor: u32) -> u32 {
     ((number / factor as f64).round() * factor as f64) as u32
 }
@@ -366,5 +427,35 @@ mod tests {
         let (w, h) = out.dimensions();
         let area = (w as f64) * (h as f64);
         assert!((area - 1_003_520.0).abs() / 1_003_520.0 < 0.01);
+    }
+
+    #[test]
+    fn crop_polygon_masked_rectangle_matches_plain_crop_dimensions() {
+        let img = solid(100, 100);
+        let masked = crop_polygon_masked(&img, &[[10, 10], [60, 10], [60, 70], [10, 70]]).unwrap();
+        assert_eq!(masked.dimensions(), (50, 60));
+    }
+
+    #[test]
+    fn crop_polygon_masked_fills_outside_polygon_white() {
+        let img = solid(100, 100);
+        // A triangle inscribed in a 100x100 bounding box — the far
+        // corners of the bounding rect must be white-filled.
+        let masked = crop_polygon_masked(&img, &[[50, 0], [99, 99], [0, 99]]).unwrap();
+        assert_eq!(*masked.get_pixel(0, 0), Rgb([255, 255, 255]));
+        // Interior point near the triangle's centroid keeps original color.
+        assert_eq!(*masked.get_pixel(50, 70), Rgb([10, 20, 30]));
+    }
+
+    #[test]
+    fn crop_polygon_masked_returns_none_for_degenerate_point_count() {
+        let img = solid(100, 100);
+        assert!(crop_polygon_masked(&img, &[[10, 10], [20, 20]]).is_none());
+    }
+
+    #[test]
+    fn crop_polygon_masked_returns_none_when_entirely_off_page() {
+        let img = solid(100, 100);
+        assert!(crop_polygon_masked(&img, &[[150, 10], [200, 10], [200, 60]]).is_none());
     }
 }

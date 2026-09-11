@@ -21,10 +21,16 @@ use uparser_document_engine::{
 pub fn to_canonical_document(result: &ParseResult, format: DocumentFormat) -> CanonicalDocument {
     let mut document = CanonicalDocument::new(format);
     document.metadata.variant = Some(result.protocol.clone());
+    let policy = ParatextPolicy::for_protocol(&result.protocol);
 
     for (index, page) in result.pages.iter().enumerate() {
         let mut unit = DocumentUnit::new(UnitKind::Page, index, None);
-        unit.blocks = ascend_blocks(&page.blocks, &mut document.assets, &mut document.warnings);
+        unit.blocks = ascend_blocks(
+            &page.blocks,
+            &mut document.assets,
+            &mut document.warnings,
+            policy,
+        );
         document.units.push(unit);
     }
     for warning in &result.warnings {
@@ -41,12 +47,13 @@ fn ascend_blocks(
     blocks: &[IrBlock],
     assets: &mut Vec<Asset>,
     warnings: &mut Vec<ParseWarning>,
+    policy: ParatextPolicy,
 ) -> Vec<DocBlock> {
     let mut out: Vec<DocBlock> = Vec::new();
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
-        if is_paratext(block) {
+        if is_paratext(block, policy) {
             index += 1;
             continue;
         }
@@ -98,6 +105,15 @@ fn ascend_blocks(
 /// for `HEADER`/`FOOTER`/`PAGE_NUMBER`/`ASIDE_TEXT`/`PAGE_FOOTNOTE`, so they
 /// fall through and are dropped.
 ///
+/// **Not every protocol agrees.** NaviDC-OCR's own
+/// `vlm_middle_json_mkcontent.py::mk_blocks_to_markdown` lists `FOOTER` and
+/// `HEADER` *alongside* `TEXT` in its first branch, so upstream renders them
+/// as ordinary content; only `PAGE_NUMBER`/`ASIDE_TEXT`/`PAGE_FOOTNOTE` fall
+/// through there. Dropping them for that protocol is a real divergence from
+/// its reference implementation, so the policy is per-protocol rather than
+/// one global rule — each adapter should reproduce its own upstream's
+/// document assembly.
+///
 /// This is a *rendering* decision, not an IR one: `--format json` still
 /// carries every block, so nothing is lost — only the assembled document view
 /// (`--format markdown` / `document-json`) leaves them out.
@@ -105,11 +121,39 @@ fn ascend_blocks(
 /// `category_raw` decides the footnote case, because the normalized
 /// `"footnote"` also covers table and image footnotes, which are real content
 /// attached to a table or figure.
-fn is_paratext(block: &IrBlock) -> bool {
-    if matches!(
-        block.category.as_deref(),
-        Some("header" | "footer" | "page_number")
-    ) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParatextPolicy {
+    /// Drop running headers/footers. `false` for protocols whose own
+    /// reference renderer emits them as content (navidc-ocr).
+    pub drop_header_footer: bool,
+}
+
+impl Default for ParatextPolicy {
+    fn default() -> Self {
+        Self {
+            drop_header_footer: true,
+        }
+    }
+}
+
+impl ParatextPolicy {
+    /// The policy that reproduces `protocol`'s own upstream document
+    /// assembly. Unknown/other protocols keep the MinerU-aligned default.
+    pub fn for_protocol(protocol: &str) -> Self {
+        match protocol {
+            "navidc-ocr" => Self {
+                drop_header_footer: false,
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
+fn is_paratext(block: &IrBlock, policy: ParatextPolicy) -> bool {
+    if policy.drop_header_footer && matches!(block.category.as_deref(), Some("header" | "footer")) {
+        return true;
+    }
+    if block.category.as_deref() == Some("page_number") {
         return true;
     }
     matches!(block.category_raw.as_str(), "aside_text" | "page_footnote")
@@ -672,6 +716,48 @@ mod tests {
             warnings: Vec::new(),
             timing: HashMap::new(),
         }
+    }
+
+    /// `navidc-ocr`'s own reference renderer
+    /// (`vlm_middle_json_mkcontent.py::mk_blocks_to_markdown`) lists
+    /// `FOOTER`/`HEADER` in the same branch as `TEXT`, so upstream emits
+    /// them as ordinary content. Dropping them — correct for MinerU — is a
+    /// real content loss against that protocol's reference output, and it
+    /// penalises NaviDC precisely *because* it classifies page furniture
+    /// more precisely than a protocol that leaves it as `text`.
+    ///
+    /// `page_number`/`aside_text`/`page_footnote` stay dropped for both:
+    /// upstream NaviDC has no branch for those either.
+    #[test]
+    fn header_footer_follow_the_protocols_own_upstream_renderer() {
+        let blocks = vec![
+            block("header", Some("RUNNING HEAD")),
+            block("text", Some("Body")),
+            block("footer", Some("Journal 2026")),
+            block("page_number", Some("74")),
+        ];
+
+        let mut mineru = result(blocks.clone());
+        mineru.protocol = "mineru-vlm".into();
+        let text = format!("{:?}", to_canonical_document(&mineru, DocumentFormat::Pdf));
+        assert!(!text.contains("RUNNING HEAD"), "mineru drops headers");
+        assert!(!text.contains("Journal 2026"), "mineru drops footers");
+
+        let mut navidc = result(blocks.clone());
+        navidc.protocol = "navidc-ocr".into();
+        let text = format!("{:?}", to_canonical_document(&navidc, DocumentFormat::Pdf));
+        assert!(
+            text.contains("RUNNING HEAD"),
+            "navidc-ocr upstream renders headers as content"
+        );
+        assert!(
+            text.contains("Journal 2026"),
+            "navidc-ocr upstream renders footers as content"
+        );
+        assert!(
+            !text.contains("74"),
+            "page_number is dropped by upstream navidc too"
+        );
     }
 
     #[test]

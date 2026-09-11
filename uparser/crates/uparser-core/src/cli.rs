@@ -64,8 +64,8 @@ pub enum Command {
         #[arg(long, value_enum)]
         mode: Option<ParseMode>,
         /// Protocol name (`native`, `tesseract`, `mineru-vlm`, `dots-ocr`,
-        /// `generic-vlm`, `monkeyocr-v2`, `pipeline`, `paddleocr`,
-        /// `paddlex-structure`, `mock`), or `auto`
+        /// `generic-vlm`, `monkeyocr-v2`, `navidc-ocr`, `pipeline`,
+        /// `paddleocr`, `paddlex-structure`, `mock`), or `auto`
         /// (the default) to run the Profiler+Router first and pick one
         /// automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto`
         /// rather than `mock` keeps an Agent that omits `--protocol` from
@@ -156,6 +156,12 @@ pub enum Command {
         /// OCR language forwarded to the model service (default: ch).
         #[arg(long)]
         pipeline_language: Option<String>,
+        /// `navidc-ocr` stage-1 layout mode. `detection` (default) returns
+        /// axis-aligned rects; `segmentation` returns multi-point polygons
+        /// for photographed/perspective-distorted pages, cropped with a
+        /// polygon mask rather than a bounding rect. Keyed into the cache.
+        #[arg(long, value_enum)]
+        layout_mode: Option<crate::adapters::NavidcLayoutMode>,
         /// Bypass the content-hash cache (T-9.1) entirely — forces a
         /// real re-parse even if an identical `(bytes, protocol,
         /// endpoint, model)` fingerprint was cached from a prior run.
@@ -326,6 +332,7 @@ pub fn run(cli: Cli) -> i32 {
             bare_table_endpoint_base,
             table_model_path,
             pipeline_language,
+            layout_mode,
             no_cache,
             stream,
             no_postprocess,
@@ -439,6 +446,7 @@ pub fn run(cli: Cli) -> i32 {
                 table_model_path,
                 language: pipeline_language,
             };
+            let navidc_config = crate::adapters::NavidcConfig { layout_mode };
             run_parse(
                 path,
                 format,
@@ -450,6 +458,7 @@ pub fn run(cli: Cli) -> i32 {
                 window_size,
                 max_concurrency,
                 pipeline_config,
+                navidc_config,
                 no_cache,
                 stream,
                 no_postprocess,
@@ -532,6 +541,7 @@ fn run_parse(
     window_size: usize,
     max_concurrency: usize,
     pipeline_config: PipelineConfig,
+    navidc_config: crate::adapters::NavidcConfig,
     no_cache: bool,
     stream: bool,
     no_postprocess: bool,
@@ -699,6 +709,7 @@ fn run_parse(
         window_size,
         max_concurrency,
         pipeline_config,
+        navidc_config,
         no_cache,
         no_postprocess,
         pages: wanted_pages,

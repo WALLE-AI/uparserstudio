@@ -6,7 +6,7 @@
 //!
 //! CLI and API are thin shells over the shared runner.
 
-use crate::adapters::PipelineConfig;
+use crate::adapters::{NavidcConfig, PipelineConfig};
 #[cfg(test)]
 use crate::types::RoutedBy;
 use crate::types::{DocumentProfile, ParseResult};
@@ -21,6 +21,8 @@ pub struct ParseOptions {
     pub window_size: usize,
     pub max_concurrency: usize,
     pub pipeline_config: PipelineConfig,
+    /// `navidc-ocr`-only layout-mode override.
+    pub navidc_config: NavidcConfig,
     pub no_cache: bool,
     /// Skip `postprocess::merge_paragraphs_by_geometry` and return each
     /// adapter's raw per-block output unmerged. Exists mainly so a
@@ -68,6 +70,7 @@ impl Default for ParseOptions {
             window_size: 64,
             max_concurrency: 16,
             pipeline_config: PipelineConfig::default(),
+            navidc_config: NavidcConfig::default(),
             no_cache: false,
             no_postprocess: false,
             pages: None,
@@ -198,6 +201,7 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         window_size: options.window_size,
         max_concurrency: options.max_concurrency,
         pipeline_config: options.pipeline_config.clone(),
+        navidc_config: options.navidc_config.clone(),
         no_cache: options.no_cache,
         no_postprocess: options.no_postprocess,
         pages: options.pages.clone(),

@@ -53,7 +53,7 @@ Options:
           [possible values: auto, native, protocol, pipeline]
 
       --protocol <PROTOCOL>
-          Protocol name (`native`, `tesseract`, `mineru-vlm`, `dots-ocr`, `generic-vlm`, `monkeyocr-v2`, `pipeline`, `paddleocr`, `paddlex-structure`, `mock`), or `auto` (the default) to run the Profiler+Router first and pick one automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto` rather than `mock` keeps an Agent that omits `--protocol` from silently getting placeholder output — `mock` is now explicit-only
+          Protocol name (`native`, `tesseract`, `mineru-vlm`, `dots-ocr`, `generic-vlm`, `monkeyocr-v2`, `navidc-ocr`, `pipeline`, `paddleocr`, `paddlex-structure`, `mock`), or `auto` (the default) to run the Profiler+Router first and pick one automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto` rather than `mock` keeps an Agent that omits `--protocol` from silently getting placeholder output — `mock` is now explicit-only
 
       --endpoint <ENDPOINT>
           Override the adapter's default endpoint (ignored by adapters with no endpoint, e.g. `mock`/`native`)
@@ -125,6 +125,11 @@ Options:
 
       --pipeline-language <PIPELINE_LANGUAGE>
           OCR language forwarded to the model service (default: ch)
+
+      --layout-mode <LAYOUT_MODE>
+          `navidc-ocr` stage-1 layout mode. `detection` (default) returns axis-aligned rects; `segmentation` returns multi-point polygons for photographed/perspective-distorted pages, cropped with a polygon mask rather than a bounding rect. Keyed into the cache
+          
+          [possible values: detection, segmentation]
 
       --no-cache
           Bypass the content-hash cache (T-9.1) entirely — forces a real re-parse even if an identical `(bytes, protocol, endpoint, model)` fingerprint was cached from a prior run
@@ -241,4 +246,3 @@ Usage: uparser cache clear
 Options:
   -h, --help  Print help
 ```
-

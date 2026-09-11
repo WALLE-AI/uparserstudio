@@ -1223,12 +1223,86 @@ fn protocols_lists_every_builtin_adapter() {
         "dots-ocr",
         "generic-vlm",
         "monkeyocr-v2",
+        "navidc-ocr",
         "paddleocr",
         "paddlex-structure",
         "pipeline",
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
+}
+
+/// T-9.3: `doctor navidc-ocr` uses the protocol's own declared default
+/// endpoint, not some other protocol's.
+#[test]
+fn doctor_navidc_ocr_uses_the_correct_default_endpoint() {
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "navidc-ocr"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["protocol"], "navidc-ocr");
+    assert_eq!(
+        parsed["endpoint"],
+        "http://localhost:8000/v1/chat/completions"
+    );
+    assert!(parsed["reachable"].is_boolean());
+}
+
+/// Same shape as `mineru_vlm_with_overridden_endpoint_surfaces_connection_failure_as_partial`:
+/// proves `--protocol navidc-ocr --endpoint ...` genuinely constructs and
+/// dispatches through the real adapter, not a silently-ignored override.
+#[test]
+fn navidc_ocr_with_overridden_endpoint_surfaces_connection_failure_as_partial() {
+    let png_bytes = {
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([255, 255, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&png_bytes).unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "navidc-ocr",
+            "--endpoint",
+            "http://127.0.0.1:1/v1/chat/completions",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .code(3)
+        .get_output()
+        .clone();
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is valid JSON");
+    assert_eq!(parsed["protocol"], "navidc-ocr");
+    let page_errors = parsed["page_errors"].as_array().unwrap();
+    assert_eq!(page_errors.len(), 1);
+    assert!(
+        page_errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("127.0.0.1:1"),
+        "unexpected pipeline error: {page_errors:#?}"
+    );
 }
 
 /// Proves `postprocess.rs` is genuinely wired into the real CLI `parse`

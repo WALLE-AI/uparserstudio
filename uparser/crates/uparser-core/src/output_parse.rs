@@ -4,6 +4,7 @@
 //! dots.ocr's single-round cell array, with a fault-tolerant repair
 //! chain ported from `output_cleaner.py`.
 
+use crate::types::Geometry;
 use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -830,6 +831,135 @@ pub fn parse_python_literal_list(raw: &str) -> (Vec<MonkeyCell>, Vec<String>) {
     (best, warnings)
 }
 
+/// A parsed NaviDC-OCR stage-1 layout line, before category mapping or
+/// coordinate denormalization. Deliberately independent from `LayoutBox`
+/// (mineru-vlm's `custom_token` grammar) and `MonkeyCell` (MonkeyOCRv2's
+/// Python-literal grammar) — NaviDC-OCR's own line-oriented
+/// `<box:...><label:...><direction>` grammar shares no syntax with
+/// either, per the execution plan's explicit "do not reuse the MinerU
+/// custom-token parser" note.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavidcLayoutBlock {
+    /// Raw `[0,1000]`-space geometry: `Rect` for exactly 4 numbers,
+    /// `Polygon` for an even count greater than 4 (consecutive `[x,y]`
+    /// pairs) — Segmentation mode's multi-point output.
+    pub geometry_1000: Geometry,
+    pub category_raw: String,
+    /// `up`/`right`/`down`/`left` -> `0`/`90`/`180`/`270`. `None` if no
+    /// recognized direction tag was present — the block is still kept
+    /// (not dropped), matching the real client's own behavior of
+    /// printing a warning and proceeding.
+    pub angle: Option<u32>,
+}
+
+static NAVIDC_LAYOUT_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^<box:([\d\s]+)><label:(\w+)><([^>]*)>$").expect("static regex is valid")
+});
+
+/// Fallback for a line that doesn't fit the strict, anchored shape:
+/// tolerates leading/trailing junk and a missing/incomplete trailing
+/// direction tag (a generation truncated right after `<label:...>` still
+/// has every piece needed to build a valid, if angle-less, block).
+static NAVIDC_LAYOUT_LINE_RELAXED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<box:\s*([\d\s]+?)\s*>\s*<label:\s*(\w+)\s*>(?:<([^>]*)>)?")
+        .expect("static regex is valid")
+});
+
+const NAVIDC_ANGLE_TAGS: &[(&str, u32)] = &[("up", 0), ("right", 90), ("down", 180), ("left", 270)];
+
+fn parse_navidc_angle(tag: &str) -> Option<u32> {
+    let lower = tag.to_lowercase();
+    NAVIDC_ANGLE_TAGS
+        .iter()
+        .find(|(name, _)| lower.contains(name))
+        .map(|(_, angle)| *angle)
+}
+
+/// Parse NaviDC-OCR's stage-1 layout output: one candidate block per
+/// line, `<box:n n n n [n n...]><label:category><direction>`. Malformed
+/// lines are skipped (recorded as warnings), and a missing/unrecognized
+/// direction tag keeps the block with `angle: None` rather than dropping
+/// it — one bad line must not lose an otherwise-valid box, matching the
+/// real client's own tolerant `print(f"Warning: ...")`-and-continue
+/// behavior (`NaviOCR_client.py`).
+pub fn parse_navidc_layout_lines(raw: &str) -> (Vec<NavidcLayoutBlock>, Vec<String>) {
+    let mut blocks = Vec::new();
+    let mut warnings = Vec::new();
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let (caps, rescued) = match NAVIDC_LAYOUT_LINE_RE.captures(line) {
+            Some(caps) => (caps, false),
+            None => match NAVIDC_LAYOUT_LINE_RELAXED_RE.captures(line) {
+                Some(caps) => (caps, true),
+                None => {
+                    warnings.push(format!("unparseable navidc-ocr layout line: {line:?}"));
+                    continue;
+                }
+            },
+        };
+        if rescued {
+            warnings.push(format!(
+                "rescued a malformed navidc-ocr layout line via relaxed matching: {line:?}"
+            ));
+        }
+
+        let raw_tokens: Vec<&str> = caps[1].split_whitespace().collect();
+        let parsed: Option<Vec<i64>> = raw_tokens
+            .iter()
+            .map(|tok| tok.parse::<i64>().ok())
+            .collect();
+        let Some(parsed) = parsed else {
+            warnings.push(format!(
+                "non-numeric token in box coordinates, skipping line: {line:?}"
+            ));
+            continue;
+        };
+        if parsed.len() < 4 || parsed.len() % 2 != 0 {
+            warnings.push(format!(
+                "box coordinate count must be even and at least 4, got {}: {line:?}",
+                parsed.len()
+            ));
+            continue;
+        }
+
+        let clamped: Vec<i64> = parsed.iter().map(|&n| n.clamp(0, 1000)).collect();
+        if clamped != parsed {
+            warnings.push(format!(
+                "clamped out-of-range box coordinate(s) to [0,1000]: {line:?}"
+            ));
+        }
+        let nums: Vec<f32> = clamped.iter().map(|&n| n as f32).collect();
+
+        let geometry_1000 = if nums.len() == 4 {
+            Geometry::Rect([nums[0], nums[1], nums[2], nums[3]])
+        } else {
+            Geometry::Polygon(nums.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+        };
+
+        let category_raw = caps[2].to_string();
+        let angle_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+        let angle = parse_navidc_angle(angle_tag);
+        if angle.is_none() {
+            warnings.push(format!(
+                "missing or unrecognized navidc-ocr rotation tag {angle_tag:?}, keeping block with angle=None: {line:?}"
+            ));
+        }
+
+        blocks.push(NavidcLayoutBlock {
+            geometry_1000,
+            category_raw,
+            angle,
+        });
+    }
+
+    (blocks, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,5 +1322,105 @@ mod tests {
         fn python_literal_list_arbitrary_input_never_panics(s in ".*") {
             let _ = parse_python_literal_list(&s);
         }
+
+        #[test]
+        fn navidc_layout_lines_arbitrary_input_never_panics(s in ".*") {
+            let _ = parse_navidc_layout_lines(&s);
+        }
+    }
+
+    #[test]
+    fn navidc_layout_parses_a_rect_line_with_direction() {
+        let (blocks, warnings) = parse_navidc_layout_lines("<box:100 200 300 400><label:text><up>");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].geometry_1000,
+            Geometry::Rect([100.0, 200.0, 300.0, 400.0])
+        );
+        assert_eq!(blocks[0].category_raw, "text");
+        assert_eq!(blocks[0].angle, Some(0));
+    }
+
+    #[test]
+    fn navidc_layout_parses_all_four_directions() {
+        for (tag, expected) in [("up", 0), ("right", 90), ("down", 180), ("left", 270)] {
+            let line = format!("<box:0 0 10 10><label:text><{tag}>");
+            let (blocks, warnings) = parse_navidc_layout_lines(&line);
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(blocks[0].angle, Some(expected));
+        }
+    }
+
+    #[test]
+    fn navidc_layout_parses_a_polygon_line() {
+        let (blocks, warnings) =
+            parse_navidc_layout_lines("<box:10 20 30 25 50 60 15 70><label:table><down>");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            blocks[0].geometry_1000,
+            Geometry::Polygon(vec![[10.0, 20.0], [30.0, 25.0], [50.0, 60.0], [15.0, 70.0]])
+        );
+    }
+
+    #[test]
+    fn navidc_layout_skips_blank_lines_and_recovers_valid_ones() {
+        let raw = "\n<box:0 0 10 10><label:text><up>\n\n<box:20 20 30 30><label:table><down>\n";
+        let (blocks, warnings) = parse_navidc_layout_lines(raw);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn navidc_layout_skips_noise_lines_with_a_warning_not_a_failure() {
+        let raw = "garbage line with no box\n<box:0 0 10 10><label:text><up>";
+        let (blocks, warnings) = parse_navidc_layout_lines(raw);
+        assert_eq!(blocks.len(), 1);
+        assert!(warnings.iter().any(|w| w.contains("unparseable")));
+    }
+
+    #[test]
+    fn navidc_layout_rejects_odd_coordinate_count() {
+        let (blocks, warnings) = parse_navidc_layout_lines("<box:0 0 10><label:text><up>");
+        assert!(blocks.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("even")));
+    }
+
+    #[test]
+    fn navidc_layout_clamps_out_of_range_coordinates_with_warning() {
+        let (blocks, warnings) = parse_navidc_layout_lines("<box:0 0 2000 2000><label:text><up>");
+        assert_eq!(
+            blocks[0].geometry_1000,
+            Geometry::Rect([0.0, 0.0, 1000.0, 1000.0])
+        );
+        assert!(warnings.iter().any(|w| w.contains("clamped")));
+    }
+
+    #[test]
+    fn navidc_layout_missing_direction_keeps_block_with_none_angle() {
+        let (blocks, warnings) = parse_navidc_layout_lines("<box:0 0 10 10><label:text><>");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].angle, None);
+        assert!(warnings.iter().any(|w| w.contains("rotation tag")));
+    }
+
+    #[test]
+    fn navidc_layout_truncated_line_missing_direction_tag_is_rescued() {
+        // A generation truncated right after the label — no closing
+        // direction tag at all, not even an empty `<>`.
+        let (blocks, warnings) = parse_navidc_layout_lines("<box:0 0 10 10><label:text>");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].category_raw, "text");
+        assert_eq!(blocks[0].angle, None);
+        assert!(warnings.iter().any(|w| w.contains("rescued")));
+    }
+
+    #[test]
+    fn navidc_layout_leading_garbage_before_tags_is_rescued() {
+        let (blocks, warnings) =
+            parse_navidc_layout_lines("noise<box:0 0 10 10><label:text><up>trailing");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].angle, Some(0));
+        assert!(warnings.iter().any(|w| w.contains("rescued")));
     }
 }

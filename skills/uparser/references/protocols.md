@@ -12,6 +12,7 @@ Read this when choosing a protocol beyond the common native/MinerU paths, config
 | `dots-ocr` | model / one-shot page | OpenAI chat completions | dots.ocr JSON contract | PDFium + matching endpoint |
 | `generic-vlm` | model / one-shot page | OpenAI chat completions | whole-page Markdown (no per-block boxes) | PDFium + prompt-compatible endpoint |
 | `monkeyocr-v2` | model / layout-then-recognize | OpenAI chat completions | MonkeyOCR v2 contract | PDFium + matching endpoint |
+| `navidc-ocr` | model / layout-then-recognize | OpenAI chat completions | NaviDC-OCR contract, Detection + Segmentation polygons | PDFium + vLLM **with the upstream `NaviOCR-vllm` plugin** (stock vLLM cannot load it — see below) |
 | `paddleocr` | model / structured service | PaddleOCR REST | OCR boxes + geometric ordering | PDFium + PaddleOCR service |
 | `paddlex-structure` | model / structured service | `/layout-parsing` REST | server-composed PP-StructureV3 result (no per-block boxes) | PDFium + PaddleX service |
 | `pipeline` | pipeline / StageGraph | per-stage services/in-process table | client-composed typed stages | configured stage backends |
@@ -45,6 +46,8 @@ Model protocols are not interchangeable merely because several use OpenAI-compat
 - `dots-ocr`: smart-resized page, strict JSON with protocol-specific recovery.
 - `generic-vlm`: full-page Markdown, parsed back into blocks so the IR carries real headings/lists/tables. Use only with a prompt/model that actually follows this contract.
 - `monkeyocr-v2`: pixel-bounded layout then recognition with Python-literal decoding.
+- `navidc-ocr`: hard-resized layout image, line-oriented `<box:...><label:...><direction>` grammar (own parser, shares no syntax with mineru-vlm or monkeyocr-v2), rect or polygon geometry, per-category recognition prompt. `--layout-mode detection|segmentation` picks the stage-1 prompt (segmentation returns multi-point polygons, cropped with a polygon mask rather than a bounding rect); it is part of the cache key. `--protocol auto` never selects it. `image`/`list`/`equation_block` skip recognition entirely (kept as boxes with no text — no upstream `MagicModel` child-containment ported yet).
+  **Deployment**: stock vLLM cannot load this checkpoint at any version (verified against `main`). It declares `Qwen2_5_VLForConditionalGeneration` but ships a Qwen3 text tower — decoupled `head_dim=128`, no qkv bias, and 28 layers of q/k_norm that `config.json` never declares via `qk_norm`; vLLM's Qwen2 backbone hardcodes all three the other way, and it ignores the bundled `modeling_naviocr.py` (it does not honor `trust_remote_code` for model implementations). Upstream ships the fix as an out-of-tree plugin: `pip install -e opensource/NaviDC-OCR/NaviOCR-vllm` (pins `vllm==0.11.0`), which re-registers the architecture against `Qwen3ForCausalLM`. A transformers sidecar works too and was verified byte-identical. Keep `--max-model-len >= 8192`: stage-2 requests a 4096-token budget and vLLM rejects `max_tokens >= max_model_len`. See `UPARSER_GUIDE.md` §5.3.
 - `paddleocr`: PaddleOCR service boxes, not chat completions.
 - `paddlex-structure`: service-side fused layout parsing from `/layout-parsing`; its authoritative Markdown is parsed back into blocks, same as `generic-vlm`.
 

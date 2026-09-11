@@ -113,6 +113,27 @@ pub fn sanitize_bbox_px(bbox: [i32; 4], width: u32, height: u32) -> [i32; 4] {
     [cx0, cy0, cx1, cy1]
 }
 
+/// Convert a `[0,1000]`-normalized polygon (a flat list of `[x,y]`
+/// points) to page pixels, clamping each point independently — NaviDC-OCR
+/// Segmentation mode's per-point analogue of `map_bbox_0to1000_clamped`.
+/// Unlike a bbox there's no axis-swap concept for an arbitrary polygon;
+/// each point is just scaled and clamped to the page bounds.
+pub fn map_polygon_0to1000_clamped(
+    points_1000: &[[f32; 2]],
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 2]> {
+    let (w, h) = (width as f32, height as f32);
+    points_1000
+        .iter()
+        .map(|p| {
+            let x = (p[0] / 1000.0 * w).clamp(0.0, (width.max(1) - 1) as f32);
+            let y = (p[1] / 1000.0 * h).clamp(0.0, (height.max(1) - 1) as f32);
+            [x, y]
+        })
+        .collect()
+}
+
 /// Intersection-over-union of two axis-aligned pixel rects.
 pub fn iou(a: [i32; 4], b: [i32; 4]) -> f32 {
     let ix0 = a[0].max(b[0]);
@@ -307,5 +328,17 @@ mod tests {
         let [x0, y0, x1, y1] = sanitize_bbox_px([500, 500, 500, 500], 1000, 1000);
         assert!(x1 > x0);
         assert!(y1 > y0);
+    }
+
+    #[test]
+    fn map_polygon_0to1000_clamped_scales_each_point() {
+        let pts = map_polygon_0to1000_clamped(&[[100.0, 200.0], [500.0, 600.0]], 1000, 2000);
+        assert_eq!(pts, vec![[100.0, 400.0], [500.0, 1200.0]]);
+    }
+
+    #[test]
+    fn map_polygon_0to1000_clamped_clips_out_of_bounds_points() {
+        let pts = map_polygon_0to1000_clamped(&[[-500.0, -500.0], [2000.0, 2000.0]], 100, 100);
+        assert_eq!(pts, vec![[0.0, 0.0], [99.0, 99.0]]);
     }
 }

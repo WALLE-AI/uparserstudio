@@ -8,6 +8,7 @@ pub mod mock;
 pub mod monkeyocr_v2;
 #[cfg(feature = "native")]
 pub mod native;
+pub mod navidc_ocr;
 pub mod paddleocr;
 pub mod paddlex_structure;
 pub mod pipeline_v2;
@@ -32,6 +33,11 @@ pub enum RawOutputFormat {
     StrictJson,
     PythonLiteralEval,
     OcrBoxes,
+    /// NaviDC-OCR's line-oriented `<box:...><label:...><direction>`
+    /// layout grammar — shares no syntax with `CustomToken`
+    /// (mineru-vlm's `<|box_start|>...` tokens) or `PythonLiteralEval`
+    /// (MonkeyOCRv2), so it gets its own variant rather than reusing one.
+    NaviLayoutTokens,
     /// No wire format at all — a zero-model adapter (e.g. `native`) that
     /// doesn't dispatch any request to parse.
     None,
@@ -209,8 +215,24 @@ impl ParseCtx {
                 result = transport.dispatch(req) => Ok(result?),
                 _ = self.cancellation.cancelled() => Err(DispatchError::Cancelled),
             },
+            // Record the prompt/messages, not just the endpoint key, so a
+            // test can assert on what an adapter genuinely put on the wire.
+            // Two adapters can dispatch to the same endpoint with
+            // materially different payloads (navidc-ocr's Detection vs.
+            // Segmentation layout prompt is the same URL, different prompt
+            // string) — without this, a mode switch that silently never
+            // reached the request body would still pass every mock test.
+            // Purely additive: `dispatch_recording` returns exactly what
+            // `dispatch` returns.
             Dispatcher::Mock(mock) => mock
-                .dispatch(&req.endpoint)
+                .dispatch_recording(
+                    &req.endpoint,
+                    serde_json::json!({
+                        "model": req.model,
+                        "messages": req.messages,
+                        "sampling": req.sampling,
+                    }),
+                )
                 .ok_or_else(|| DispatchError::MockKeyMissing(req.endpoint.clone())),
         }
     }
@@ -315,6 +337,31 @@ pub enum StageBackendChoice {
     Remote,
 }
 
+/// Which layout prompt `navidc-ocr` sends in stage 1.
+///
+/// The real NaviDC-OCR protocol selects between these purely by prompt
+/// text — same model, same endpoint (confirmed against a live
+/// deployment), which is why this is a plain enum rather than a separate
+/// endpoint/model configuration.
+///
+/// `Detection` returns 4-number axis-aligned rects; `Segmentation`
+/// returns multi-point polygons for non-rectangular (photographed,
+/// curved, perspective-distorted) regions, which the adapter crops with
+/// a polygon mask instead of a bounding rect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Serialize)]
+#[value(rename_all = "lowercase")]
+pub enum NavidcLayoutMode {
+    #[default]
+    Detection,
+    Segmentation,
+}
+
+/// `navidc-ocr`-only overrides; ignored by every other adapter.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct NavidcConfig {
+    pub layout_mode: Option<NavidcLayoutMode>,
+}
+
 /// Per-stage endpoint overrides for the `pipeline` protocol. Pipeline V2
 /// keeps every model stage in the service process; backend/path fields remain
 /// only for CLI/config compatibility and local model selection is rejected.
@@ -349,6 +396,9 @@ pub struct AdapterOverrides {
     /// `pipeline`-only stage-backend overrides; ignored by every other
     /// adapter.
     pub pipeline: Option<PipelineConfig>,
+    /// `navidc-ocr`-only layout-mode override; ignored by every other
+    /// adapter.
+    pub navidc: Option<NavidcConfig>,
 }
 
 type AdapterFactory = Box<dyn Fn(&AdapterOverrides) -> Arc<dyn ProtocolAdapter> + Send + Sync>;
@@ -439,6 +489,22 @@ impl Registry {
             }
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
+            }
+            Arc::new(adapter)
+        });
+
+        registry.register("navidc-ocr", |overrides| {
+            let mut adapter = navidc_ocr::NavidcOcrAdapter::default();
+            if let Some(endpoint) = &overrides.endpoint {
+                adapter.endpoint_base = endpoint.clone();
+            }
+            if let Some(model) = &overrides.model {
+                adapter.model = model.clone();
+            }
+            if let Some(cfg) = &overrides.navidc
+                && let Some(mode) = cfg.layout_mode
+            {
+                adapter.layout_mode = mode;
             }
             Arc::new(adapter)
         });

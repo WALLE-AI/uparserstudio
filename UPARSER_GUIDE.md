@@ -95,7 +95,7 @@ uparser parse --protocol auto --format markdown mystery.pdf > out.md
 
 | 参数 | 说明 | 默认 |
 |---|---|---|
-| `--protocol <name>` | `native` / `mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `pipeline` / `paddleocr` / `auto` / `mock` | `mock` |
+| `--protocol <name>` | `native` / `mineru-vlm` / `dots-ocr` / `monkeyocr-v2` / `navidc-ocr` / `pipeline` / `paddleocr` / `auto` / `mock` | `mock` |
 | `--format <markdown\|json>` | 输出格式 | `json` |
 | `--endpoint <url>` | 覆盖适配器默认端点(VLM/OCR 协议用;`native`/`mock` 忽略) | — |
 | `--model <name>` | 覆盖默认模型名 | — |
@@ -409,6 +409,7 @@ sequenceDiagram
 | `mineru-vlm` | VLM(MinerU2.5) | 是(OpenAI 兼容) | 是 | 阅读顺序+表格最佳 | ~1–2 s/页 |
 | `dots-ocr` | VLM | 是 | 是 | 单轮 OCR VLM | ~1–2 s/页 |
 | `monkeyocr-v2` | VLM | 是 | 是 | 两阶段 layout→recognize | ~1–2 s/页 |
+| `navidc-ocr` | VLM | 是 | 是 | 两阶段 layout→recognize,Detection/Segmentation 双模式 | 需上游 vLLM 插件,见 5.3 |
 | `pipeline` | 多模型(layout/ocr/formula/table) | 多为是 | 是 | 经典模块化流水线 | 视配置 |
 | `paddleocr` | OCR | 是 | 是 | detect+recognize + 几何阅读顺序 | 视配置 |
 | `auto` | — | 视路由 | — | 由 profile 自动选协议 | — |
@@ -437,9 +438,54 @@ uparser parse --protocol mineru-vlm \
 - 已针对真实 `MinerU2.5-2604-1.2B` vLLM 端点端到端验证(7 页/107 页真实 PDF)。
 - 关键修正:请求体须显式 `skip_special_tokens: false`,否则 vLLM 会吃掉 `custom_token` 文法依赖的 `<|box_start|>` 等特殊 token。
 
-### 5.3 `dots-ocr` / `monkeyocr-v2`
+### 5.3 `dots-ocr` / `monkeyocr-v2` / `navidc-ocr`
 
 与 `mineru-vlm` 同样的调用形态(`--endpoint`/`--model`),不同模型契约。`dots-ocr` 单轮;`monkeyocr-v2` 两阶段(其原始输出是 Python 字面量列表,用手写递归下降解析器处理,绝不 `eval`)。均离线验证,尚无各自的真实端点验证。
+
+`navidc-ocr` 同样是两阶段(layout→per-block recognize),但版面行文法是独立的 `<box:...><label:...><方向>` 逐行格式(不复用 mineru-vlm 的 custom-token 或 monkeyocr-v2 的 Python 字面量解析器)。坐标为 `[0,1000]` 归一化,支持 Detection(4 坐标矩形)与 Segmentation(>4 坐标多边形,按多边形 mask 裁剪,非外接矩形)两种模式,用 `--layout-mode detection|segmentation` 选择(默认 `detection`,与上游默认一致;该参数计入 cache key);方向 token(`up`/`right`/`down`/`left`)映射为 `0/90/180/270` 旋转。已对真实 `StarDoc-AI/NaviDC-OCR` 端到端验证,不参与 `--protocol auto` 路由。
+
+#### NaviDC-OCR 部署:必须用上游 vLLM 插件(实测)
+
+**原版 vLLM 起不来,但上游提供了 out-of-tree 插件,装上即可正常部署。**
+
+这份 checkpoint 的 `config.json` 声明 `architectures: ["Qwen2_5_VLForConditionalGeneration"]`,但文本塔实际是 **Qwen3 结构**,与 vLLM 内置的 Qwen2_5_VL 实现有三处不兼容:
+
+| | 权重实际 | vLLM 内置 Qwen2_5_VL |
+|---|---|---|
+| `head_dim` | `q_proj [2048,1024]` = 16×**128** | `qwen2.py` 无条件 `hidden_size//num_heads`=**64**(该类无 `head_dim` 参数) |
+| qkv bias | **无 bias 张量** | 硬编码 `bias=True` |
+| q/k_norm | 28 层全有(`Qwen3RMSNorm`) | 读 `getattr(config,"qk_norm",False)`,而 config 里**没有该字段** → 静默为 False |
+
+且 `qwen2_5_vl.py` 把文本塔硬编码成 `architectures=["Qwen2ForCausalLM"]`(已核对 vLLM **main 分支**,三处至今未改)。启动时报 `assert sum(mrope_section) == rotary_dim // 2` 只是最先炸的一个;**最危险的是 `qk_norm`**——若绕过前两个,vLLM 会静默丢掉 28 层 QK normalization,能加载能出字但输出是错的。
+
+**上游的解决办法**:仓库里的 `NaviOCR-vllm/` 是一个 vLLM 插件包,通过 `vllm.general_plugins` entry point 覆盖模型注册,其 `qwen2_5_vl.py` 把文本塔改成 `architectures=["Qwen3ForCausalLM"]`(Qwen3 实现支持 decoupled `head_dim`、无 qkv bias、自带 q/k_norm)——正对上面三处。
+
+```bash
+# 插件 pin 的是 vllm==0.11.0 / transformers==4.57.1,版本要对上
+pip install vllm==0.11.0
+pip install -e opensource/NaviDC-OCR/NaviOCR-vllm   # 注册插件
+
+CUDA_VISIBLE_DEVICES=1 vllm serve /path/to/NaviDC-OCR \
+  --served-model-name StarDoc-AI/NaviDC-OCR \
+  --port 8010 --max-model-len 8192 --trust-remote-code \
+  --gpu-memory-utilization 0.30 --limit-mm-per-prompt '{"image":4}'
+# 启动日志应出现:
+#   Model architecture Qwen2_5_VLForConditionalGeneration ... will be overwritten
+#   by the new model class NaviOCR_vllm.qwen2_5_vl:...
+```
+
+> **`--max-model-len` 注意**:adapter 的 stage-2 输出预算是 4096(与模型卡 Quick Start 的 `max_new_tokens=4096` 一致)。若把 `--max-model-len` 设成 4096 或更小,vLLM 会以 `'max_tokens' is too large` 拒绝所有 stage-2 请求(错误会逐块上浮到 `Block.error`,不会静默)。保持 ≥8192。
+
+也可以用 transformers sidecar(`trust_remote_code=True` 加载模型自带的 `modeling_naviocr.py`),两条路径实测输出一致;但 vLLM 有连续批处理,并发下更快。
+
+```bash
+uparser doctor navidc-ocr --endpoint http://127.0.0.1:8010/v1/chat/completions
+uparser parse doc.pdf --mode protocol --protocol navidc-ocr \
+  --endpoint http://127.0.0.1:8010/v1/chat/completions \
+  --model StarDoc-AI/NaviDC-OCR --layout-mode segmentation --format markdown
+```
+
+> **务必用 release build**。debug build 下图像裁剪/缩放/PNG 编码慢约 10 倍:同一张 52 块的报纸页,release 31.7s,debug >300s(超时)——瓶颈在客户端 CPU,不是模型服务。
 
 ### 5.4 `pipeline` — 传统多模型流水线
 

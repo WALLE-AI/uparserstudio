@@ -112,6 +112,8 @@ pub struct ExecutionOptions {
     pub window_size: usize,
     pub max_concurrency: usize,
     pub pipeline_config: adapters::PipelineConfig,
+    /// `navidc-ocr`-only layout-mode override.
+    pub navidc_config: adapters::NavidcConfig,
     pub no_cache: bool,
     pub no_postprocess: bool,
     pub pages: Option<Vec<u32>>,
@@ -144,6 +146,7 @@ impl Default for ExecutionOptions {
             window_size: 64,
             max_concurrency: 16,
             pipeline_config: adapters::PipelineConfig::default(),
+            navidc_config: adapters::NavidcConfig::default(),
             no_cache: false,
             no_postprocess: false,
             pages: None,
@@ -455,6 +458,7 @@ pub async fn execute_with_hooks(
         endpoint: options.endpoint.clone(),
         model: options.model.clone(),
         pipeline: Some(options.pipeline_config.clone()),
+        navidc: Some(options.navidc_config.clone()),
     };
     let adapter = registry
         .build(&protocol, &overrides)
@@ -576,6 +580,9 @@ fn execution_fingerprint(options: &ExecutionOptions, plan: &RunPlan) -> String {
         "window_size": options.window_size,
         "max_concurrency": options.max_concurrency,
         "pipeline": options.pipeline_config,
+        // Layout mode changes the stage-1 prompt and therefore the whole
+        // result, so it must key the cache (plan §5).
+        "navidc": options.navidc_config,
         "no_postprocess": options.no_postprocess,
         // A markdown-only run carries no Page/Block IR, so its entry must
         // never be served to a `--format json` request for the same file.
@@ -1550,6 +1557,7 @@ fn canonical_protocol(protocol: &str) -> Option<&'static str> {
         "dots-ocr" => "dots-ocr",
         "generic-vlm" => "generic-vlm",
         "monkeyocr-v2" => "monkeyocr-v2",
+        "navidc-ocr" => "navidc-ocr",
         "paddleocr" => "paddleocr",
         "paddlex-structure" => "paddlex-structure",
         "pipeline" => "pipeline",

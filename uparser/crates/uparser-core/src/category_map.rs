@@ -274,6 +274,71 @@ pub fn map_pipeline_category(raw: &str) -> (String, Option<String>) {
     (normalized.to_string(), None)
 }
 
+/// NaviDC-OCR's native category vocabulary (`BLOCK_TYPES` in
+/// `opensource/NaviDC-OCR/NaviOCR/vlm_utils/structs.py`, read directly —
+/// not the plan draft's smaller sketch, which omitted `algorithm` and
+/// `code_caption`).
+pub const NAVIDC_OCR_CATEGORIES: &[&str] = &[
+    "text",
+    "title",
+    "table",
+    "image",
+    "code",
+    "header",
+    "footer",
+    "page_number",
+    "page_footnote",
+    "aside_text",
+    "equation",
+    "equation_block",
+    "ref_text",
+    "table_caption",
+    "image_caption",
+    "table_footnote",
+    "image_footnote",
+    "algorithm",
+    "code_caption",
+    "list",
+    "phonetic",
+    "unknown",
+    "seal",
+    "char",
+];
+
+/// Map a NaviDC-OCR native category to this project's normalized
+/// category string. `seal`/`char` are recognized (not `unknown`) but
+/// have no dedicated normalized category of their own — both map to
+/// `"text"` while `category_raw` (set by the adapter, not here) keeps
+/// the original label, so a consumer can still tell a seal-recognition
+/// block from ordinary text. Unrecognized input falls back to
+/// `"unknown"` with a warning, per D.8's shared-normalization
+/// discipline.
+pub fn map_navidc_ocr_category(raw: &str) -> (String, Option<String>) {
+    let normalized = match normalize_key(raw).as_str() {
+        "title" => "title",
+        "text" | "asidetext" | "phonetic" | "seal" | "char" => "text",
+        "table" => "table",
+        "image" => "image",
+        "equation" | "equationblock" => "equation",
+        "code" | "algorithm" => "code",
+        "list" => "list",
+        "reftext" => "reference",
+        "tablecaption" | "imagecaption" | "codecaption" => "caption",
+        "tablefootnote" | "imagefootnote" | "pagefootnote" => "footnote",
+        "header" => "header",
+        "footer" => "footer",
+        "pagenumber" => "page_number",
+        "unknown" => "unknown",
+        _ => {
+            return (
+                "unknown".to_string(),
+                Some(format!("unrecognized navidc-ocr category: {raw:?}")),
+            );
+        }
+    };
+    (normalized.to_string(), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,5 +552,45 @@ mod tests {
             );
             assert!(warning.is_none(), "real label {raw} should not warn");
         }
+    }
+
+    #[test]
+    fn navidc_ocr_category_full_vocab_maps_to_something_known() {
+        for raw in NAVIDC_OCR_CATEGORIES {
+            let (normalized, warning) = map_navidc_ocr_category(raw);
+            // The literal native "unknown" category is itself recognized
+            // (not a mapping failure) — it legitimately normalizes to
+            // "unknown" with no warning, unlike an *unrecognized* label.
+            if *raw != "unknown" {
+                assert_ne!(
+                    normalized, "unknown",
+                    "native label {raw} mapped to unknown"
+                );
+            }
+            assert!(warning.is_none(), "native label {raw} should not warn");
+        }
+    }
+
+    #[test]
+    fn navidc_ocr_seal_and_char_map_to_text_but_are_recognized() {
+        let (normalized, warning) = map_navidc_ocr_category("seal");
+        assert_eq!(normalized, "text");
+        assert!(warning.is_none());
+        let (normalized, warning) = map_navidc_ocr_category("char");
+        assert_eq!(normalized, "text");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn navidc_ocr_unrecognized_category_falls_back_to_unknown_with_warning() {
+        let (normalized, warning) = map_navidc_ocr_category("totally_made_up_label");
+        assert_eq!(normalized, "unknown");
+        assert!(warning.is_some());
+    }
+
+    #[test]
+    fn navidc_ocr_category_matching_is_case_and_hyphen_insensitive() {
+        assert_eq!(map_navidc_ocr_category("Table-Caption").0, "caption");
+        assert_eq!(map_navidc_ocr_category("EQUATION_BLOCK").0, "equation");
     }
 }

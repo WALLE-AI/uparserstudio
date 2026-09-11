@@ -20,4 +20,12 @@ model    = "MinerU2.5-Pro-2605-1.2B"
 # endpoint = "http://127.0.0.1:8000/v1/chat/completions"
 # model    = "MonkeyOCR-v2"
 
+# [navidc-ocr]
+# NOTE: stock vLLM cannot load this checkpoint (its config says
+# qwen2_5_vl but the text tower is Qwen3-shaped). Install the upstream
+# plugin first: pip install -e opensource/NaviDC-OCR/NaviOCR-vllm
+# (pins vllm==0.11.0). Keep --max-model-len >= 8192.
+# endpoint = "http://127.0.0.1:8010/v1/chat/completions"
+# model    = "StarDoc-AI/NaviDC-OCR"
+
 # native needs no endpoint/model — nothing to configure here.
