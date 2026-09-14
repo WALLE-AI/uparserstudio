@@ -18,15 +18,16 @@ use super::{
     ResourceHint, StageBackend, extract_chat_content,
 };
 use crate::category_map::{self, MONKEYOCR_V2_CATEGORIES};
-use crate::formula_repair;
 use crate::geometry;
 use crate::imaging;
 use crate::ingest::RenderedPage;
-use crate::otsl;
+use crate::monkeyocr_post;
 use crate::output_parse;
 use crate::robustness;
 use crate::transport::ChatCompletionRequest;
-use crate::types::{Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, PageError};
+use crate::types::{
+    Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, PageError,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
@@ -106,21 +107,6 @@ impl MonkeyOcrV2Adapter {
             timeout: self.timeout,
             max_retries: self.max_retries,
         }
-    }
-}
-
-/// Wrap in `$$...$$`, matching the real vendored `core_runner.py`'s own
-/// convention exactly — including its idempotency check
-/// (`not content.lstrip().startswith("$$")`), which this port previously
-/// lacked: without it, formula content the model already wrapped itself
-/// would get double-wrapped into `$$\n$$\n...\n$$\n$$` (D.10-adjacent —
-/// found while unifying formula-wrapping behavior across protocols).
-fn wrap_display_math(latex: &str) -> String {
-    let trimmed = latex.trim();
-    if trimmed.starts_with("$$") {
-        trimmed.to_string()
-    } else {
-        format!("$$\n{trimmed}\n$$")
     }
 }
 
@@ -321,19 +307,32 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             let (text, html, latex, error) = match outcome {
                 Ok(None) => (None, None, None, None),
                 Ok(Some(content)) => match p.label.as_str() {
-                    "Table" => {
-                        let (html, warnings) = otsl::to_html(&content);
-                        for w in &warnings {
-                            ctx.warn(format!("monkeyocr-v2 page {}: {w}", page.page_num));
-                        }
-                        (None, Some(html), None, None)
-                    }
-                    "Formula" => {
-                        let repaired =
-                            formula_repair::repair_chain(formula_repair::DEFAULT_CHAIN, &content);
-                        (None, None, Some(wrap_display_math(&repaired)), None)
-                    }
-                    _ => (Some(content), None, None, None),
+                    // Upstream's own `otsl_to_html`, not the shared
+                    // `otsl::to_html` — they disagree on `xcel` (see
+                    // `monkeyocr_post`'s module doc).
+                    "Table" => (
+                        None,
+                        Some(monkeyocr_post::otsl_to_html(&content)),
+                        None,
+                        None,
+                    ),
+                    // Upstream's `process_formula` + `$$…$$` wrap, with the
+                    // equation label moved outside the math.
+                    "Formula" => (
+                        None,
+                        None,
+                        Some(monkeyocr_post::format_formula(&content)),
+                        None,
+                    ),
+                    // `result2md` strips U+FFFD from the finished Markdown;
+                    // doing it per block keeps `--format json` consistent
+                    // with `--format markdown`.
+                    _ => (
+                        Some(monkeyocr_post::strip_replacement_chars(&content)),
+                        None,
+                        None,
+                        None,
+                    ),
                 },
                 Err(e) => (None, None, None, Some(e)),
             };
@@ -348,6 +347,16 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 None
             };
 
+            // Upstream emits `# ` for `Title` and `## ` for
+            // `Section-header`; `category_map` normalizes both to
+            // `"title"`, so the level has to be carried explicitly or the
+            // renderer flattens every heading to H1.
+            let merge_hint = match p.label.as_str() {
+                "Title" => Some(MergeHint::TitleLevel(1)),
+                "Section-header" => Some(MergeHint::TitleLevel(2)),
+                _ => None,
+            };
+
             let [x0, y0, x1, y1] = p.bbox_px;
             blocks.push(Block {
                 geom: Geometry::Rect([x0 as f32, y0 as f32, x1 as f32, y1 as f32]),
@@ -360,7 +369,7 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                 html,
                 latex,
                 spans: vec![],
-                merge_hint: None,
+                merge_hint,
                 confidence: None,
                 source: BlockSource::LayoutThenRecognize,
                 error,
@@ -386,21 +395,6 @@ mod tests {
         serde_json::json!({
             "choices": [{"message": {"content": content}}]
         })
-    }
-
-    #[test]
-    fn wrap_display_math_wraps_bare_latex() {
-        assert_eq!(wrap_display_math(r"\frac{1}{2}"), "$$\n\\frac{1}{2}\n$$");
-    }
-
-    #[test]
-    fn wrap_display_math_is_idempotent_when_already_dollar_wrapped() {
-        // Real vendored `core_runner.py` has the same idempotency check
-        // (`not content.lstrip().startswith("$$")`) — without it, formula
-        // content the model already wrapped itself would get
-        // double-wrapped.
-        let s = "$$\n\\frac{1}{2}\n$$";
-        assert_eq!(wrap_display_math(s), s);
     }
 
     fn fake_page(width: u32, height: u32) -> RenderedPage {
@@ -452,15 +446,16 @@ mod tests {
             Some("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>")
         );
 
-        // Gate G3 proof: this exercises the *unmodified* shared
-        // formula_repair::DEFAULT_CHAIN (balance_brackets closes the
-        // unbalanced brace) and wraps it in MonkeyOCRv2's own `$$...$$`
-        // delimiter — no new formula logic was added anywhere.
         let equation_block = &blocks[2];
         assert_eq!(equation_block.category.as_deref(), Some("equation"));
+        // Upstream's `process_formula` has **no** brace repair, so the
+        // unbalanced `\frac{1}{2` survives verbatim — confirmed by running
+        // `core_runner.py::process_formula` on the same input. The shared
+        // `formula_repair::balance_brackets` used to "fix" it here, which
+        // was a silent divergence from this protocol's reference output.
         assert_eq!(
             equation_block.latex.as_deref(),
-            Some("$$\n\\frac{1}{2}\n$$")
+            Some("$$\n\\frac{1}{2\n$$\n")
         );
 
         let picture_block = &blocks[3];
@@ -577,6 +572,36 @@ mod tests {
         assert!(
             warnings.iter().any(|w| w.contains("truncated")),
             "{warnings:?}"
+        );
+    }
+
+    /// Upstream emits `# ` for `Title` and `## ` for `Section-header`
+    /// (`_format_block_fields`). `category_map` normalizes both native
+    /// labels to `"title"`, so without an explicit `TitleLevel` the
+    /// renderer flattens a document's whole heading hierarchy to H1 —
+    /// which is what this adapter did before the alignment pass.
+    #[tokio::test]
+    async fn title_and_section_header_carry_distinct_heading_levels() {
+        let adapter = MonkeyOcrV2Adapter::default();
+        let mock = Arc::new(MockDispatch::new());
+        let layout = r#"[{'bbox': [0, 0, 200, 100], 'label': 'Title'}, {'bbox': [0, 200, 200, 300], 'label': 'Section-header'}]"#;
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        mock.seed(&adapter.stage2_endpoint(0), chat_response("Doc Title"));
+        mock.seed(&adapter.stage2_endpoint(1), chat_response("A Section"));
+
+        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(2)));
+        let blocks = adapter
+            .parse_page(&fake_page(400, 600), &ctx)
+            .await
+            .expect("parse_page succeeds");
+
+        assert_eq!(blocks[0].category.as_deref(), Some("title"));
+        assert_eq!(blocks[0].merge_hint, Some(MergeHint::TitleLevel(1)));
+        assert_eq!(blocks[1].category.as_deref(), Some("title"));
+        assert_eq!(
+            blocks[1].merge_hint,
+            Some(MergeHint::TitleLevel(2)),
+            "Section-header is H2 upstream, not H1"
         );
     }
 

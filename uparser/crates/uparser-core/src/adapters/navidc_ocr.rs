@@ -40,10 +40,10 @@ use super::{
     RemoteEndpointSpec, ResourceHint, StageBackend, extract_chat_content,
 };
 use crate::category_map::{self, NAVIDC_OCR_CATEGORIES};
-use crate::formula_repair;
 use crate::geometry;
 use crate::imaging;
 use crate::ingest::RenderedPage;
+use crate::navidc_post;
 use crate::otsl;
 use crate::output_parse;
 use crate::robustness;
@@ -69,6 +69,34 @@ const MIN_EDGE: u32 = 28;
 /// a real vLLM deployment where every stage-2 block failed with a 400
 /// while stage-1 (already 4096) succeeded.
 const STAGE2_MAX_TOKENS: u32 = 4096;
+
+/// Upstream's `NaviOCRSamplingParams` defaults (`NaviOCR_client.py:16-27`):
+/// greedy decoding plus an anti-repetition budget. The penalties are the
+/// mechanism that keeps this model out of its "loops one phrase forever"
+/// failure mode — omitting them (as this adapter originally did, because
+/// no real endpoint was available to confirm the wire encoding) let a
+/// single block degenerate into 9 KB of `"because 1-3."` repeated 567
+/// times on a real OmniDocBench page.
+///
+/// `no_repeat_ngram_size` is *not* a stock vLLM sampling field; upstream
+/// ships it as an out-of-tree logits processor read from `extra_args`
+/// (`vlm_utils/vlm_client/vllm_v1_no_repeat_ngram.py`), which the
+/// OpenAI server layer exposes as `vllm_xargs`. It is sent
+/// unconditionally: a server without that processor registered simply
+/// ignores the key, so this degrades rather than failing.
+const NO_REPEAT_NGRAM_SIZE: u32 = 100;
+
+/// `DEFAULT_SAMPLING_PARAMS[key]` per prompt category
+/// (`NaviOCR_client.py:57-69`) — `(presence_penalty, frequency_penalty)`.
+/// The `layout` key alone keeps the zero defaults.
+fn sampling_penalties(category_raw: &str) -> (f64, f64) {
+    match category_raw {
+        // table / char / seal use the smaller frequency penalty, so a
+        // legitimately repetitive table row or seal string isn't damaged.
+        "table" | "char" | "seal" => (1.0, 0.005),
+        _ => (1.0, 0.05),
+    }
+}
 
 const LAYOUT_PROMPT_DETECTION: &str = "\nAnalyze the image layout.";
 /// Segmentation mode: multi-point polygons for non-rectangular regions.
@@ -128,12 +156,16 @@ impl NavidcOcrAdapter {
         format!("{}#recognize:{block_index}", self.endpoint_base)
     }
 
+    /// `penalties` is `(presence_penalty, frequency_penalty)`; pass
+    /// `(0.0, 0.0)` for the layout stage, matching upstream's `layout`
+    /// entry in `DEFAULT_SAMPLING_PARAMS`.
     fn request(
         &self,
         endpoint: String,
         prompt: &str,
         image_data_url: &str,
         max_tokens: u32,
+        penalties: (f64, f64),
     ) -> ChatCompletionRequest {
         let messages = vec![
             serde_json::json!({"role": "system", "content": SYSTEM_PROMPT}),
@@ -149,16 +181,22 @@ impl NavidcOcrAdapter {
             endpoint,
             model: self.model.clone(),
             messages,
-            // Base sampling per `DEFAULT_SAMPLING_PARAMS` in
-            // `NaviOCR_client.py`: greedy-ish decoding (temperature 0,
-            // top_p 0.01, top_k 1). Per-category presence/frequency
-            // penalty overrides are not yet wired (real endpoint not
-            // available to confirm their exact request-body encoding —
-            // plan §2.1).
+            // Full `NaviOCRSamplingParams` contract, confirmed against a
+            // real vLLM deployment (plan §2.1's open question, now closed).
             sampling: serde_json::json!({
                 "temperature": 0,
                 "top_p": 0.01,
+                "top_k": 1,
+                "repetition_penalty": 1.0,
+                "presence_penalty": penalties.0,
+                "frequency_penalty": penalties.1,
                 "max_tokens": max_tokens,
+                // Upstream sets this on the engine path; without it a
+                // backend that strips special tokens can eat wrapper
+                // tokens the output grammar depends on (the same trap
+                // mineru-vlm hit).
+                "skip_special_tokens": false,
+                "vllm_xargs": {"no_repeat_ngram_size": NO_REPEAT_NGRAM_SIZE},
             }),
             timeout: self.timeout,
             max_retries: self.max_retries,
@@ -245,6 +283,8 @@ impl ProtocolAdapter for NavidcOcrAdapter {
             layout_prompt,
             &layout_data_url,
             4096,
+            // Upstream's `"layout"` entry keeps the zero penalties.
+            (0.0, 0.0),
         );
         let layout_resp =
             crate::shape_executor::chat_stage(page, ctx, layout_req, "layout").await?;
@@ -345,8 +385,13 @@ impl ProtocolAdapter for NavidcOcrAdapter {
                 };
 
                 let prompt = stage2_prompt(&p.category_raw);
-                let req =
-                    self.request(self.stage2_endpoint(index), prompt, &data_url, STAGE2_MAX_TOKENS);
+                let req = self.request(
+                    self.stage2_endpoint(index),
+                    prompt,
+                    &data_url,
+                    STAGE2_MAX_TOKENS,
+                    sampling_penalties(&p.category_raw),
+                );
                 let _permit = ctx.acquire_permit().await;
                 let content = match ctx.dispatch(req).await {
                     Ok(resp) => match extract_chat_content(&resp) {
@@ -383,6 +428,7 @@ impl ProtocolAdapter for NavidcOcrAdapter {
                             prompt,
                             &data_url,
                             STAGE2_MAX_TOKENS,
+                            sampling_penalties(&p.category_raw),
                         );
                         if let Value::Object(m) = &mut req.sampling {
                             m.insert("temperature".to_string(), serde_json::json!(temp));
@@ -413,6 +459,14 @@ impl ProtocolAdapter for NavidcOcrAdapter {
 
         let mut blocks = Vec::with_capacity(pending.len());
         for (index, p) in pending.iter().enumerate() {
+            // Upstream's `post_process` drops `equation_block`
+            // unconditionally ("drop equation_block anyway"), before the
+            // document is ever assembled — it is a container whose
+            // children are emitted separately, so keeping it produced an
+            // empty, text-less block in the IR.
+            if p.category_raw == "equation_block" {
+                continue;
+            }
             let outcome = content_by_index.remove(&index).unwrap_or(Ok(None));
             let (text, html, latex, error) = match outcome {
                 Ok(None) => (None, None, None, None),
@@ -422,19 +476,37 @@ impl ProtocolAdapter for NavidcOcrAdapter {
                         for w in &warnings {
                             ctx.warn(format!("navidc-ocr page {}: {w}", page.page_num));
                         }
-                        (None, Some(html), None, None)
-                    }
-                    "equation" => {
-                        let repaired =
-                            formula_repair::repair_chain(formula_repair::DEFAULT_CHAIN, &content);
+                        // Upstream runs `remove_useless_label` over the
+                        // converted HTML (`post_process/__init__.py`).
                         (
                             None,
+                            Some(navidc_post::remove_useless_label(&html)),
                             None,
-                            Some(formula_repair::wrap_display_math(&repaired)),
                             None,
                         )
                     }
-                    _ => (Some(content), None, None, None),
+                    // Upstream's `_process_equation` chain, *not* MinerU's
+                    // `formula_repair::DEFAULT_CHAIN` — the two disagree on
+                    // the delimiter (`$$` vs `\[`) and on whether an
+                    // unmatched brace is deleted or completed.
+                    "equation" => (
+                        None,
+                        None,
+                        Some(navidc_post::process_equation(&content)),
+                        None,
+                    ),
+                    "code" | "algorithm" => {
+                        let (_lang, cleaned) = navidc_post::strip_code_language_marker(&content);
+                        (Some(cleaned), None, None, None)
+                    }
+                    // Upstream applies `normalize_inline_math` to every
+                    // text block, not only to formulas.
+                    _ => (
+                        Some(navidc_post::normalize_inline_math(&content)),
+                        None,
+                        None,
+                        None,
+                    ),
                 },
                 Err(e) => (None, None, None, Some(e)),
             };
@@ -565,15 +637,18 @@ mod tests {
         assert_eq!(table_block.category.as_deref(), Some("table"));
         assert_eq!(
             table_block.html.as_deref(),
-            Some("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>")
+            // `remove_useless_label` adds upstream's border attribute.
+            Some(
+                "<table border=\"1\"><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>"
+            )
         );
 
         let equation_block = &blocks[2];
         assert_eq!(equation_block.category.as_deref(), Some("equation"));
-        assert_eq!(
-            equation_block.latex.as_deref(),
-            Some("\\[\n\\frac{1}{2}\n\\]")
-        );
+        // Upstream's `_process_equation` wraps in `$$…$$` and *deletes*
+        // the unmatched brace (`try_fix_unbalanced_braces`), where MinerU's
+        // chain would have appended a closing one.
+        assert_eq!(equation_block.latex.as_deref(), Some("$$\\frac{1}2$$"));
 
         let image_block = &blocks[3];
         assert_eq!(image_block.category.as_deref(), Some("image"));
@@ -608,7 +683,10 @@ mod tests {
             .parse_page(&page, &ctx)
             .await
             .expect("parse_page succeeds");
-        assert_eq!(blocks.len(), 2);
+        // `equation_block` is dropped outright (upstream's `post_process`
+        // does so unconditionally); only the `list` container survives.
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].category_raw, "list");
         assert!(blocks.iter().all(|b| b.text.is_none() && b.error.is_none()));
     }
 
@@ -684,6 +762,55 @@ mod tests {
                 "mode {mode:?} sent the wrong prompt"
             );
         }
+    }
+
+    /// Upstream's anti-repetition sampling must actually reach the wire.
+    /// This adapter originally sent only temperature/top_p/max_tokens, and
+    /// on a real OmniDocBench page that let one block degenerate into 9 KB
+    /// of the same phrase repeated 567 times — the client-side
+    /// `robustness` retry cannot reliably recover from it because every
+    /// attempt loops the same way. Asserted on the recorded request body,
+    /// not on the adapter struct, because "the constant exists" is a
+    /// different claim from "the backend was told".
+    #[tokio::test]
+    async fn upstream_sampling_contract_reaches_the_wire() {
+        let adapter = NavidcOcrAdapter::default();
+        let mock = Arc::new(MockDispatch::new());
+        // One text block and one table block: they take different
+        // frequency penalties upstream.
+        let layout = "\
+<box:0 0 200 100><label:text><up>
+<box:0 200 200 400><label:table><up>";
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        mock.seed(&adapter.stage2_endpoint(0), chat_response("hello"));
+        mock.seed(&adapter.stage2_endpoint(1), chat_response("<fcel>a"));
+
+        let ctx = ParseCtx::with_mock(mock.clone(), Arc::new(Semaphore::new(2)));
+        adapter
+            .parse_page(&fake_page(400, 1000), &ctx)
+            .await
+            .expect("parse_page succeeds");
+
+        // Layout stage keeps upstream's zero penalties.
+        let layout_req = &mock.recorded_requests(&adapter.stage1_endpoint())[0];
+        let sp = &layout_req["sampling"];
+        assert_eq!(sp["top_k"], 1);
+        assert_eq!(sp["repetition_penalty"], 1.0);
+        assert_eq!(sp["presence_penalty"], 0.0);
+        assert_eq!(sp["frequency_penalty"], 0.0);
+        assert_eq!(sp["skip_special_tokens"], false);
+        assert_eq!(sp["vllm_xargs"]["no_repeat_ngram_size"], 100);
+
+        // text -> frequency_penalty 0.05; table -> 0.005.
+        let text_sp = &mock.recorded_requests(&adapter.stage2_endpoint(0))[0]["sampling"];
+        assert_eq!(text_sp["presence_penalty"], 1.0);
+        assert_eq!(text_sp["frequency_penalty"], 0.05);
+        let table_sp = &mock.recorded_requests(&adapter.stage2_endpoint(1))[0]["sampling"];
+        assert_eq!(table_sp["presence_penalty"], 1.0);
+        assert_eq!(
+            table_sp["frequency_penalty"], 0.005,
+            "table keeps the smaller penalty so a legitimately repetitive row survives"
+        );
     }
 
     #[tokio::test]

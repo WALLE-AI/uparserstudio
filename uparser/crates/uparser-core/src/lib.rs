@@ -37,6 +37,8 @@ pub(crate) mod geometry;
 pub mod imaging;
 pub mod ingest;
 pub(crate) mod markdown_ir;
+pub(crate) mod monkeyocr_post;
+pub(crate) mod navidc_post;
 pub(crate) mod otsl;
 pub(crate) mod output_parse;
 pub(crate) mod page_range;
