@@ -72,4 +72,103 @@ uparser 同时在两个**互相独立**的公开榜单上评测。两者语料�
 
 ---
 
-<!--DATA_SECTION-->
+## 三、opendataloader-bench 对比（200 篇单页 PDF）
+
+指标：Overall = NID / TEDS / MHS 等权均值。Speed 为并发吞吐（墙钟 ÷ 篇数）。
+
+### 3.1 uparser 各模式
+
+| 模式 | Overall ↑ | Reading Order (NID) ↑ | Table (TEDS) ↑ | Heading (MHS) ↑ | Speed s/篇 ↓ |
+|---|---:|---:|---:|---:|---:|
+| `mineru-vlm` | **0.9252** | 0.9415 | **0.9650** | **0.8771** | 0.682 |
+| `pipeline` | 0.9086 | **0.9376** | 0.9133 | 0.8361 | 1.177 |
+| `navidc-ocr` | 0.9052 | 0.9302 | 0.9645 | 0.8322 | 2.508 |
+| `auto` | 0.8920 | 0.9280 | 0.9061 | 0.7948 | 0.137 |
+| `native` | 0.8766 | 0.9197 | 0.8393 | 0.7826 | **0.044** |
+| `monkeyocr-v2` | 未评测 | — | — | — | — |
+| `dots-ocr` | 未评测 | — | — | — | — |
+| `paddleocr` / `paddlex-structure` | 未评测 | — | — | — | — |
+| `tesseract` | 未评测 | — | — | — | — |
+
+### 3.2 外部参照
+
+| 引擎 | Overall ↑ | NID ↑ | TEDS ↑ | MHS ↑ | Speed s/篇 ↓ |
+|---|---:|---:|---:|---:|---:|
+| opendataloader-hybrid | 0.9066 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
+| docling | 0.8817 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
+| pdf-inspector | 0.8754 | 0.9150 | 0.8141 | 0.7875 | 0.032 |
+| marker | 0.8671 | 0.8898 | 0.8076 | 0.8190 | 53.932 |
+| mineru | 0.8353 | 0.8574 | 0.8730 | 0.7588 | 5.962 |
+
+---
+
+## 四、OmniDocBench 对比（1651 页图像，v1.6 全量）
+
+指标方向：Edit 类越低越好，CDM / TEDS 越高越好。
+
+### 4.1 uparser 各模式
+
+| 模式 | Text Edit ↓ | Formula Edit ↓ | Formula CDM ↑ | Table TEDS ↑ | TEDS-S ↑ | Reading Order Edit ↓ |
+|---|---:|---:|---:|---:|---:|---:|
+| `navidc-ocr` | **0.0593** | **0.0636** | **0.9631** | **0.9578** | **0.9641** | **0.1356** |
+| `pipeline` | 0.0706 | 0.1652 | 0.9183 | 0.7868 | 0.8610 | 0.1530 |
+| `mineru-vlm` | 0.0837 | 0.1042 | 0.9477 | 0.8797 | 0.9192 | 0.1448 |
+| `monkeyocr-v2` | 未评测 | — | — | — | — | — |
+| `dots-ocr` | 未评测 | — | — | — | — | — |
+| `paddleocr` / `paddlex-structure` | 未评测 | — | — | — | — | — |
+| `native` | 不适用 | — | — | — | — | — |
+
+> `native` 为零模型、纯文本层引擎，本榜单输入为页面图像（无文本层），故不适用。
+
+### 4.2 外部参照
+
+| 引擎 | Text Edit ↓ | Formula CDM ↑ | Table TEDS ↑ | TEDS-S ↑ | Reading Order Edit ↓ |
+|---|---:|---:|---:|---:|---:|
+| NaviDC-OCR（官方发布值） | 0.027 | 0.9636 | 0.9705 | 0.9852 | 0.122 |
+| MinerU2.5-Pro（官方发布值） | 0.036 | 0.9745 | 0.9342 | 0.9592 | 0.120 |
+| mineru-vlm-2605（官方权重，本地同 harness 复跑） | 0.0377 | 未测 | 0.9200 | 0.9486 | 0.1296 |
+| MinerU-Pipeline（官方发布值） | 0.055 | 0.8307 | 0.8188 | 0.8868 | 0.153 |
+
+> 官方发布值取自各模型卡 / 论文，其运行环境与本地 harness 配置未必完全一致，
+> 与上表 uparser 行并列仅作量级参照。
+
+---
+
+## 五、覆盖状态
+
+| 模式 | opendataloader-bench | OmniDocBench | 阻塞项 |
+|---|---|---|---|
+| `native` | ✅ | 不适用 | — |
+| `mineru-vlm` | ✅ | ✅ | — |
+| `navidc-ocr` | ✅ | ✅ | — |
+| `pipeline` | ✅ | ✅ | — |
+| `auto` | ✅ | 未评测 | — |
+| `monkeyocr-v2` | ❌ | ❌ | 端点未部署 |
+| `dots-ocr` | ❌ | ❌ | 无可用端点 |
+| `paddleocr` | ❌ | ❌ | 无可用服务 |
+| `paddlex-structure` | ❌ | ❌ | 无可用服务 |
+| `tesseract` | ❌ | ❌ | 未评测 |
+| `generic-vlm` | ❌ | ❌ | 依赖具体模型，不设固定基线 |
+
+---
+
+## 六、复现
+
+```bash
+# opendataloader-bench
+cd opensource/opendataloader-bench
+uv run src/pdf_parser.py --engine <engine>
+uv run src/evaluator.py
+
+# OmniDocBench（CDM 需要可用 TeX，否则该项恒为 0）
+cd benchmark
+ls OmniDocBenchData/images/* | xargs -P 8 -I{} ./gen_<engine>.sh {}
+cd OmniDocBench
+TL=/path/to/texlive
+PATH="$TL/bin/x86_64-linux:$PATH" CDM_TEXLIVE_ROOT="$TL" \
+  CDM_PDFLATEX="$TL/bin/x86_64-linux/pdflatex" \
+  .venv/bin/python run_eval.py --config configs/<config>.yaml
+```
+
+所有 uparser 行均由 **release 构建**的 CLI 子进程产出（`--no-cache --no-assets`）。
+
