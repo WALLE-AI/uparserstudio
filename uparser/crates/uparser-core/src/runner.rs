@@ -114,6 +114,8 @@ pub struct ExecutionOptions {
     pub pipeline_config: adapters::PipelineConfig,
     /// `navidc-ocr`-only layout-mode override.
     pub navidc_config: adapters::NavidcConfig,
+    /// `monkeyocr-v2`-only repeat-retry override.
+    pub monkeyocr_config: adapters::MonkeyOcrConfig,
     pub no_cache: bool,
     pub no_postprocess: bool,
     pub pages: Option<Vec<u32>>,
@@ -147,6 +149,7 @@ impl Default for ExecutionOptions {
             max_concurrency: 16,
             pipeline_config: adapters::PipelineConfig::default(),
             navidc_config: adapters::NavidcConfig::default(),
+            monkeyocr_config: adapters::MonkeyOcrConfig::default(),
             no_cache: false,
             no_postprocess: false,
             pages: None,
@@ -459,6 +462,7 @@ pub async fn execute_with_hooks(
         model: options.model.clone(),
         pipeline: Some(options.pipeline_config.clone()),
         navidc: Some(options.navidc_config.clone()),
+        monkeyocr: Some(options.monkeyocr_config.clone()),
     };
     let adapter = registry
         .build(&protocol, &overrides)
@@ -583,6 +587,9 @@ fn execution_fingerprint(options: &ExecutionOptions, plan: &RunPlan) -> String {
         // Layout mode changes the stage-1 prompt and therefore the whole
         // result, so it must key the cache (plan §5).
         "navidc": options.navidc_config,
+        // Same reasoning: the repeat-retry setting changes what the
+        // model is asked and therefore the result.
+        "monkeyocr": options.monkeyocr_config,
         "no_postprocess": options.no_postprocess,
         // A markdown-only run carries no Page/Block IR, so its entry must
         // never be served to a `--format json` request for the same file.

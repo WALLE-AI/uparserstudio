@@ -3,10 +3,15 @@
 //! confirmed against the fully vendored `opensource/MonkeyOCRv2` source
 //! (`parsing/core_runner.py`), no version-mismatch caveat.
 //!
-//! Exists to prove Gate G3: a third protocol reuses `otsl.rs` (table
-//! HTML conversion) and `formula_repair.rs` (LaTeX cleanup) **verbatim**
-//! — this file only imports their existing public functions, adding
-//! nothing new to either module.
+//! Originally added to prove Gate G3 by reusing `otsl.rs` and
+//! `formula_repair.rs` verbatim. That claim is **no longer true and
+//! should not be restored**: both shared modules are MinerU-derived and
+//! disagree with this protocol's reference implementation in ways that
+//! change output, so table/formula handling now goes through
+//! `monkeyocr_post` instead (that module's doc lists each disagreement).
+//! Gate G3's actual finding stands — the shared modules were reusable
+//! across three protocols — it just isn't what fidelity to *this*
+//! protocol requires.
 //!
 //! Document dewarming preprocessing (an independent local-torch model in
 //! the real pipeline, unrelated to the parsing VLM) is deliberately
@@ -23,7 +28,6 @@ use crate::imaging;
 use crate::ingest::RenderedPage;
 use crate::monkeyocr_post;
 use crate::output_parse;
-use crate::robustness;
 use crate::transport::ChatCompletionRequest;
 use crate::types::{
     Block, BlockSource, CoordFrame, CoordinateSystem, Geometry, MergeHint, PageError,
@@ -32,7 +36,29 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
+/// `BackendConfig.max_pixels` / `MOCR2_MAX_PIXELS`, applied by
+/// `load_image` as an upper bound on **every** request's image, and
+/// additionally as `get_layout`'s `min_pixels` lower bound.
 const TARGET_PIXELS: u32 = 1_003_520;
+
+/// `get_layout`'s `max_tokens`.
+const LAYOUT_MAX_TOKENS: u32 = 4096;
+
+/// `_parse_page` / `_recognize_one_block`'s `max_tokens` for the
+/// per-block recognition call. Was 10000 here, which is not a budget the
+/// reference implementation ever grants.
+const RECOGNIZE_MAX_TOKENS: u32 = 5000;
+
+/// `batch_inference_with_repeat_retry` / `_recognize_one_block`'s retry
+/// sampling: `temperature = min(0.2 * (retries + 1), 0.8)` with a fixed
+/// `top_p`.
+/// `f64` rather than `f32` so the serialized value is bit-for-bit what
+/// upstream's Python float arithmetic puts on the wire (`0.2`, `0.4`,
+/// `0.6000000000000001`) instead of an `f32`-widening artifact like
+/// `0.20000000298023224`.
+const RETRY_TEMPERATURE_STEP: f64 = 0.2;
+const RETRY_TEMPERATURE_CAP: f64 = 0.8;
+const RETRY_TOP_P: f64 = 0.95;
 
 const LAYOUT_PROMPT: &str =
     "Please output the categories and coordinates of the document elements in reading order.";
@@ -57,6 +83,13 @@ pub struct MonkeyOcrV2Adapter {
     pub model: String,
     pub timeout: Duration,
     pub max_retries: u32,
+    /// `PipelineConfig.retry_repeat` — re-issue a recognition request at
+    /// an escalating temperature when the response looks like a repeat
+    /// loop. **Off by default**, matching upstream, where it is an opt-in
+    /// flag rather than standing behavior.
+    pub retry_repeat: bool,
+    /// `PipelineConfig.retry_repeat_max_retries` / `MOCR2_REC_MAX_RETRIES`.
+    pub retry_repeat_max_retries: u32,
 }
 
 impl Default for MonkeyOcrV2Adapter {
@@ -66,6 +99,8 @@ impl Default for MonkeyOcrV2Adapter {
             model: "monkeyocrv2".to_string(),
             timeout: Duration::from_secs(120),
             max_retries: 2,
+            retry_repeat: false,
+            retry_repeat_max_retries: 3,
         }
     }
 }
@@ -166,7 +201,11 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
         let page_rgb = imaging::to_rgb(&page_img);
 
         // Stage 1: layout + reading order, one call over the whole page.
-        let layout_img = imaging::resize_by_pixel_bounds(&page_rgb, TARGET_PIXELS, TARGET_PIXELS);
+        // `get_layout` passes `min_pixels=1003520` and inherits
+        // `max_pixels=1003520` from the env, so the page is normalized to
+        // ~1.0 Mpx in either direction.
+        let layout_img =
+            imaging::prepare_model_image(&page_rgb, Some(TARGET_PIXELS), Some(TARGET_PIXELS));
         let layout_data_url = imaging::to_base64_data_url(&layout_img).map_err(|e| PageError {
             page_num: page.page_num,
             message: format!("failed to encode layout image: {e}"),
@@ -176,7 +215,7 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             self.stage1_endpoint(),
             LAYOUT_PROMPT,
             &layout_data_url,
-            4096,
+            LAYOUT_MAX_TOKENS,
         );
         let layout_resp =
             crate::shape_executor::chat_stage(page, ctx, layout_req, "layout").await?;
@@ -232,69 +271,85 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
                     Ok(img) => img,
                     Err(e) => return (index, Err(e)),
                 };
-                let resized =
-                    imaging::resize_by_pixel_bounds(&crop_img, TARGET_PIXELS, TARGET_PIXELS);
+                // Upstream's recognition calls pass **no** `min_pixels`,
+                // so only the `max_pixels` upper bound applies: a small
+                // crop is sent at its native size. This adapter used to
+                // pass `min == max`, Lanczos-upscaling a one-line text
+                // crop ~10x before inference — a materially different
+                // model input than the reference implementation's.
+                let resized = imaging::prepare_model_image(&crop_img, None, Some(TARGET_PIXELS));
                 let data_url = match imaging::to_base64_data_url(&resized) {
                     Ok(u) => u,
                     Err(e) => return (index, Err(e)),
                 };
 
-                let req = self.request(self.stage2_endpoint(index), prompt, &data_url, 10000);
-                let _permit = ctx.acquire_permit().await;
-                let content = match ctx.dispatch(req).await {
+                let req = self.request(
+                    self.stage2_endpoint(index),
+                    prompt,
+                    &data_url,
+                    RECOGNIZE_MAX_TOKENS,
+                );
+                let permit = ctx.acquire_permit().await;
+                let mut content = match ctx.dispatch(req).await {
                     Ok(resp) => match extract_chat_content(&resp) {
                         Ok(content) => content.to_string(),
                         Err(e) => return (index, Err(e)),
                     },
                     Err(e) => return (index, Err(e.to_string())),
                 };
+                drop(permit);
 
-                // Robustness: wiring `robustness.rs` (T-1.7, designed
-                // but never used by any adapter since P1) in for this
-                // protocol too — same shape as mineru-vlm's: only for
-                // plain free-text content (not table/formula, which need
-                // structural fidelity), and only *after* a real
-                // successful dispatch, so a connectivity failure is
-                // never masked as "degenerate empty content" (it already
-                // returned above via the `Err` arms).
-                let is_plain_text = !matches!(p.label.as_str(), "Table" | "Formula");
-                let content = if is_plain_text && robustness::is_degenerate(&content) {
-                    ctx.warn(format!(
-                        "monkeyocr-v2 page {}: stage-2 content for block {index} ({}) looks degenerate (repetitive loop) — retrying with escalating temperature",
-                        page.page_num, p.label
-                    ));
-                    let policy = robustness::RetryPolicy::default();
-                    let first_content = content.clone();
-                    let attempt_no = std::sync::atomic::AtomicU32::new(0);
-                    robustness::retry_with_temperature(&policy, 0.0, |temp| {
-                        let n = attempt_no.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let seed = if n == 0 {
-                            Some(first_content.clone())
-                        } else {
-                            None
-                        };
-                        let mut req = self.request(self.stage2_endpoint(index), prompt, &data_url, 10000);
+                // `_recognize_one_block`'s repeat-retry loop. Upstream
+                // gates this behind `retry_repeat` (default off) and
+                // applies it to **every** `need_infer` label, tables and
+                // formulas included — the detector looks at the output
+                // string, and a looping table is as broken as a looping
+                // paragraph. This replaces an earlier, locally-invented
+                // variant that used `robustness::is_degenerate` and
+                // exempted Table/Formula; `robustness.rs` itself is
+                // untouched and still used by mineru-vlm.
+                if self.retry_repeat {
+                    let mut retries = 0;
+                    while monkeyocr_post::should_retry_repeat_output(&content)
+                        && retries < self.retry_repeat_max_retries
+                    {
+                        let temperature = (RETRY_TEMPERATURE_STEP * (retries as f64 + 1.0))
+                            .min(RETRY_TEMPERATURE_CAP);
+                        ctx.warn(format!(
+                            "monkeyocr-v2 page {}: block {index} ({}) output looks like a repeat loop — retrying at temperature {temperature} (attempt {})",
+                            page.page_num,
+                            p.label,
+                            retries + 1
+                        ));
+                        let mut req = self.request(
+                            self.stage2_endpoint(index),
+                            prompt,
+                            &data_url,
+                            RECOGNIZE_MAX_TOKENS,
+                        );
                         if let Value::Object(m) = &mut req.sampling {
-                            m.insert("temperature".to_string(), serde_json::json!(temp));
+                            m.insert("temperature".to_string(), serde_json::json!(temperature));
+                            m.insert("top_p".to_string(), serde_json::json!(RETRY_TOP_P));
                         }
-                        let fallback = first_content.clone();
-                        async move {
-                            if let Some(seed) = seed {
-                                return seed;
-                            }
-                            let _permit = ctx.acquire_permit().await;
-                            match ctx.dispatch(req).await {
-                                Ok(resp) => extract_chat_content(&resp)
-                                    .map(|c| c.to_string())
-                                    .unwrap_or(fallback),
-                                Err(_) => fallback,
-                            }
+                        let permit = ctx.acquire_permit().await;
+                        let outcome = ctx.dispatch(req).await;
+                        drop(permit);
+                        // Upstream lets a transport failure here
+                        // propagate and fail the page; scoped to this
+                        // block instead, consistent with how this
+                        // adapter already isolates a failed first
+                        // attempt. Retry *exhaustion* keeps the last
+                        // response, which is upstream's behavior.
+                        match outcome {
+                            Ok(resp) => match extract_chat_content(&resp) {
+                                Ok(c) => content = c.to_string(),
+                                Err(e) => return (index, Err(e)),
+                            },
+                            Err(e) => return (index, Err(e.to_string())),
                         }
-                    })
-                    .await
-                } else {
-                    content
-                };
+                        retries += 1;
+                    }
+                }
 
                 (index, Ok(Some(content)))
             }
@@ -306,29 +361,40 @@ impl ProtocolAdapter for MonkeyOcrV2Adapter {
             let outcome = content_by_index.remove(&index).unwrap_or(Ok(None));
             let (text, html, latex, error) = match outcome {
                 Ok(None) => (None, None, None, None),
-                Ok(Some(content)) => match p.label.as_str() {
+                // `_format_block_fields` opens with
+                // `content = (raw or "").strip()`, so every branch below
+                // sees trimmed input.
+                Ok(Some(content)) => match (p.label.as_str(), content.trim()) {
                     // Upstream's own `otsl_to_html`, not the shared
                     // `otsl::to_html` — they disagree on `xcel` (see
-                    // `monkeyocr_post`'s module doc).
-                    "Table" => (
-                        None,
-                        Some(monkeyocr_post::otsl_to_html(&content)),
-                        None,
-                        None,
-                    ),
+                    // `monkeyocr_post`'s module doc). The converted HTML
+                    // then goes through `_replace_table_image_markers`,
+                    // which resolves any `[img][…][/img]` marker against
+                    // the *unresized* table crop — the same image
+                    // upstream keeps on the task.
+                    ("Table", content) => {
+                        let html = monkeyocr_post::otsl_to_html(content);
+                        let html = match imaging::crop(&page_rgb, p.bbox_px) {
+                            Some(table_crop) => {
+                                monkeyocr_post::replace_table_image_markers(&html, &table_crop)
+                            }
+                            None => html,
+                        };
+                        (None, Some(html), None, None)
+                    }
                     // Upstream's `process_formula` + `$$…$$` wrap, with the
                     // equation label moved outside the math.
-                    "Formula" => (
+                    ("Formula", content) => (
                         None,
                         None,
-                        Some(monkeyocr_post::format_formula(&content)),
+                        Some(monkeyocr_post::format_formula(content)),
                         None,
                     ),
                     // `result2md` strips U+FFFD from the finished Markdown;
                     // doing it per block keeps `--format json` consistent
                     // with `--format markdown`.
-                    _ => (
-                        Some(monkeyocr_post::strip_replacement_chars(&content)),
+                    (_, content) => (
+                        Some(monkeyocr_post::strip_replacement_chars(content)),
                         None,
                         None,
                         None,
@@ -476,37 +542,138 @@ mod tests {
         assert_eq!((decoded.width(), decoded.height()), (80, 200));
     }
 
+    /// The single most consequential alignment fix: upstream's
+    /// recognition calls pass no `min_pixels`, so a small crop reaches
+    /// the model at its native size. This adapter used to send it
+    /// upscaled to ~1.0 Mpx.
     #[tokio::test]
-    async fn degenerate_stage2_content_retries_with_escalating_temperature() {
+    async fn a_small_block_crop_is_sent_at_its_native_size_not_upscaled() {
         let adapter = MonkeyOcrV2Adapter::default();
         let mock = Arc::new(MockDispatch::new());
 
+        // 400x30 in page space => 12,000 px, far under 1,003,520.
+        let layout = r#"[{'bbox': [0, 0, 1000, 30], 'label': 'Text'}]"#;
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        mock.seed(&adapter.stage2_endpoint(0), chat_response("one line"));
+
+        let ctx = ParseCtx::with_mock(Arc::clone(&mock), Arc::new(Semaphore::new(1)));
+        let page = fake_page(400, 1000);
+        adapter
+            .parse_page(&page, &ctx)
+            .await
+            .expect("parse_page succeeds");
+
+        let recorded = mock.recorded_requests(&adapter.stage2_endpoint(0));
+        assert_eq!(recorded.len(), 1);
+        let url = recorded[0]["messages"][0]["content"][0]["image_url"]["url"]
+            .as_str()
+            .expect("image_url is a string");
+        let b64 = url
+            .strip_prefix("data:image/png;base64,")
+            .expect("PNG data URL");
+        let bytes = base64_decode(b64);
+        let sent = image::load_from_memory(&bytes).expect("valid PNG");
+        assert_eq!(
+            (sent.width(), sent.height()),
+            (400, 30),
+            "the crop must reach the model unscaled"
+        );
+
+        // `_parse_page`'s recognition budget is 5000, not 10000.
+        assert_eq!(recorded[0]["sampling"]["max_tokens"], 5000);
+        assert_eq!(recorded[0]["sampling"]["temperature"], 0);
+    }
+
+    /// Upstream `PipelineConfig.retry_repeat` defaults to `False`, so a
+    /// repeat-looking response is accepted as-is unless the caller opts
+    /// in. Only one response is seeded, so any extra dispatch would fail
+    /// the mock lookup and surface as a block error.
+    #[tokio::test]
+    async fn repeat_retry_is_off_by_default() {
+        let adapter = MonkeyOcrV2Adapter::default();
+        assert!(!adapter.retry_repeat);
+        let mock = Arc::new(MockDispatch::new());
+
+        let looping = "the cat sat ".repeat(10);
         let layout = r#"[{'bbox': [0, 0, 200, 100], 'label': 'Text'}]"#;
+        mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
+        mock.seed(&adapter.stage2_endpoint(0), chat_response(&looping));
+
+        let ctx = ParseCtx::with_mock(Arc::clone(&mock), Arc::new(Semaphore::new(1)));
+        let blocks = adapter
+            .parse_page(&fake_page(400, 1000), &ctx)
+            .await
+            .expect("parse_page succeeds");
+        assert_eq!(blocks[0].text.as_deref(), Some(looping.trim()));
+        assert!(blocks[0].error.is_none());
+        assert_eq!(mock.recorded_requests(&adapter.stage2_endpoint(0)).len(), 1);
+    }
+
+    /// With the upstream flag on, a repeat loop is re-requested at
+    /// `min(0.2 * (n + 1), 0.8)` with `top_p = 0.95` — and unlike this
+    /// adapter's earlier locally-invented variant, it applies to tables
+    /// and formulas too, matching upstream's label-agnostic loop.
+    #[tokio::test]
+    async fn repeat_retry_when_enabled_escalates_temperature_and_covers_tables() {
+        let adapter = MonkeyOcrV2Adapter {
+            retry_repeat: true,
+            ..MonkeyOcrV2Adapter::default()
+        };
+        let mock = Arc::new(MockDispatch::new());
+
+        let layout = r#"[{'bbox': [0, 0, 200, 100], 'label': 'Text'}, {'bbox': [0, 200, 200, 400], 'label': 'Table'}]"#;
         mock.seed(&adapter.stage1_endpoint(), chat_response(layout));
         mock.seed(
             &adapter.stage2_endpoint(0),
-            chat_response("loop loop loop loop loop loop loop loop loop loop "),
+            chat_response(&"the cat sat ".repeat(10)),
         );
         mock.seed(
             &adapter.stage2_endpoint(0),
             chat_response("a well formed sentence"),
         );
+        // A looping *table* must be retried as well.
+        mock.seed(
+            &adapter.stage2_endpoint(1),
+            chat_response(&"<fcel>x".repeat(20)),
+        );
+        mock.seed(
+            &adapter.stage2_endpoint(1),
+            chat_response("<fcel>a<fcel>b<nl>"),
+        );
 
-        let ctx = ParseCtx::with_mock(mock, Arc::new(Semaphore::new(4)));
-        let page = fake_page(400, 1000);
-
+        let ctx = ParseCtx::with_mock(Arc::clone(&mock), Arc::new(Semaphore::new(4)));
         let blocks = adapter
-            .parse_page(&page, &ctx)
+            .parse_page(&fake_page(400, 1000), &ctx)
             .await
             .expect("parse_page succeeds");
-        assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].text.as_deref(), Some("a well formed sentence"));
+        assert_eq!(
+            blocks[1].html.as_deref(),
+            Some("<table><tr><td>a</td><td>b</td></tr></table>")
+        );
+
+        let text_requests = mock.recorded_requests(&adapter.stage2_endpoint(0));
+        assert_eq!(text_requests.len(), 2, "one retry");
+        assert_eq!(text_requests[1]["sampling"]["temperature"], 0.2);
+        assert_eq!(text_requests[1]["sampling"]["top_p"], 0.95);
+        assert_eq!(
+            mock.recorded_requests(&adapter.stage2_endpoint(1)).len(),
+            2,
+            "a looping table is retried too"
+        );
 
         let warnings = ctx.warnings_snapshot();
         assert!(
-            warnings.iter().any(|w| w.contains("degenerate")),
+            warnings.iter().any(|w| w.contains("repeat loop")),
             "{warnings:?}"
         );
+    }
+
+    fn base64_decode(s: &str) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(s)
+            .expect("valid base64")
     }
 
     #[tokio::test]

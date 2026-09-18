@@ -139,10 +139,20 @@ pub fn map_dots_ocr_category(raw: &str) -> (String, Option<String>) {
 }
 
 /// MonkeyOCRv2's native category vocabulary (Title Case, per
-/// `ALL_PROMPT` keys + `Picture` in `core_runner.py`; `Footnote` is
-/// present in source but commented out/disabled, so excluded here).
+/// `ALL_PROMPT` keys + `Picture` in `core_runner.py`).
+///
+/// `"Footnote"` is **commented out** of upstream's `ALL_PROMPT`
+/// (`core_runner.py:37`), which makes `need_infer = False` for it — the
+/// layout model still emits the label, but no recognition request is
+/// sent and the block contributes no text. It is listed here anyway
+/// because the live checkpoint does produce it: leaving it out mapped
+/// every footnote to `"unknown"` and logged a spurious
+/// "unrecognized category" warning on a large fraction of real pages.
+/// Skipping recognition is handled separately by `stage2_prompt`
+/// returning `None`, matching upstream.
 pub const MONKEYOCR_V2_CATEGORIES: &[&str] = &[
     "Caption",
+    "Footnote",
     "List-item",
     "Page-footer",
     "Page-header",
@@ -160,6 +170,7 @@ pub const MONKEYOCR_V2_CATEGORIES: &[&str] = &[
 pub fn map_monkeyocrv2_category(raw: &str) -> (String, Option<String>) {
     let normalized = match normalize_key(raw).as_str() {
         "caption" => "caption",
+        "footnote" => "footnote",
         "listitem" => "list",
         "pagefooter" => "footer",
         "pageheader" => "header",
@@ -357,9 +368,22 @@ mod tests {
 
     #[test]
     fn monkeyocrv2_unrecognized_category_falls_back_to_unknown_with_warning() {
-        let (normalized, warning) = map_monkeyocrv2_category("Footnote");
+        let (normalized, warning) = map_monkeyocrv2_category("totally_made_up_label");
         assert_eq!(normalized, "unknown");
         assert!(warning.is_some());
+    }
+
+    /// `"Footnote"` is commented out of upstream's `ALL_PROMPT`, so it
+    /// never gets a recognition request — but the layout model still
+    /// emits the label, and a real 1651-page run produced it on a large
+    /// fraction of pages. Mapping it to `"unknown"` (as this did before)
+    /// both lost the category in `--format json` and logged a spurious
+    /// "unrecognized category" warning per occurrence.
+    #[test]
+    fn monkeyocrv2_footnote_is_a_known_category_even_though_it_skips_recognition() {
+        let (normalized, warning) = map_monkeyocrv2_category("Footnote");
+        assert_eq!(normalized, "footnote");
+        assert!(warning.is_none(), "{warning:?}");
     }
 
     #[test]

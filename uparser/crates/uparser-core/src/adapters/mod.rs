@@ -362,6 +362,19 @@ pub struct NavidcConfig {
     pub layout_mode: Option<NavidcLayoutMode>,
 }
 
+/// `monkeyocr-v2`-only overrides; ignored by every other adapter.
+///
+/// Mirrors upstream `core_runner.py::PipelineConfig`'s two repeat-retry
+/// knobs. Both default to upstream's own defaults (off, 3), so the
+/// out-of-the-box behavior matches the reference implementation and the
+/// retry is available when a flaky checkpoint makes it worth the extra
+/// requests.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct MonkeyOcrConfig {
+    pub retry_repeat: Option<bool>,
+    pub retry_repeat_max_retries: Option<u32>,
+}
+
 /// Per-stage endpoint overrides for the `pipeline` protocol. Pipeline V2
 /// keeps every model stage in the service process; backend/path fields remain
 /// only for CLI/config compatibility and local model selection is rejected.
@@ -399,6 +412,9 @@ pub struct AdapterOverrides {
     /// `navidc-ocr`-only layout-mode override; ignored by every other
     /// adapter.
     pub navidc: Option<NavidcConfig>,
+    /// `monkeyocr-v2`-only repeat-retry override; ignored by every other
+    /// adapter.
+    pub monkeyocr: Option<MonkeyOcrConfig>,
 }
 
 type AdapterFactory = Box<dyn Fn(&AdapterOverrides) -> Arc<dyn ProtocolAdapter> + Send + Sync>;
@@ -489,6 +505,14 @@ impl Registry {
             }
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
+            }
+            if let Some(config) = &overrides.monkeyocr {
+                if let Some(retry_repeat) = config.retry_repeat {
+                    adapter.retry_repeat = retry_repeat;
+                }
+                if let Some(max_retries) = config.retry_repeat_max_retries {
+                    adapter.retry_repeat_max_retries = max_retries;
+                }
             }
             Arc::new(adapter)
         });

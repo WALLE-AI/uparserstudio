@@ -162,6 +162,17 @@ pub enum Command {
         /// polygon mask rather than a bounding rect. Keyed into the cache.
         #[arg(long, value_enum)]
         layout_mode: Option<crate::adapters::NavidcLayoutMode>,
+        /// `monkeyocr-v2` only: re-issue a per-block recognition request
+        /// at an escalating temperature when the response looks like a
+        /// repeat loop (upstream `core_runner.py`'s `--retry-repeat`,
+        /// which is off by default there too). Keyed into the cache.
+        #[arg(long)]
+        monkeyocr_retry_repeat: bool,
+        /// `monkeyocr-v2` only: how many repeat-retry attempts to make
+        /// (upstream default 3). No effect without
+        /// `--monkeyocr-retry-repeat`.
+        #[arg(long, value_name = "N")]
+        monkeyocr_retry_repeat_max_retries: Option<u32>,
         /// Bypass the content-hash cache (T-9.1) entirely — forces a
         /// real re-parse even if an identical `(bytes, protocol,
         /// endpoint, model)` fingerprint was cached from a prior run.
@@ -333,6 +344,8 @@ pub fn run(cli: Cli) -> i32 {
             table_model_path,
             pipeline_language,
             layout_mode,
+            monkeyocr_retry_repeat,
+            monkeyocr_retry_repeat_max_retries,
             no_cache,
             stream,
             no_postprocess,
@@ -447,6 +460,10 @@ pub fn run(cli: Cli) -> i32 {
                 language: pipeline_language,
             };
             let navidc_config = crate::adapters::NavidcConfig { layout_mode };
+            let monkeyocr_config = crate::adapters::MonkeyOcrConfig {
+                retry_repeat: monkeyocr_retry_repeat.then_some(true),
+                retry_repeat_max_retries: monkeyocr_retry_repeat_max_retries,
+            };
             run_parse(
                 path,
                 format,
@@ -459,6 +476,7 @@ pub fn run(cli: Cli) -> i32 {
                 max_concurrency,
                 pipeline_config,
                 navidc_config,
+                monkeyocr_config,
                 no_cache,
                 stream,
                 no_postprocess,
@@ -542,6 +560,7 @@ fn run_parse(
     max_concurrency: usize,
     pipeline_config: PipelineConfig,
     navidc_config: crate::adapters::NavidcConfig,
+    monkeyocr_config: crate::adapters::MonkeyOcrConfig,
     no_cache: bool,
     stream: bool,
     no_postprocess: bool,
@@ -710,6 +729,7 @@ fn run_parse(
         max_concurrency,
         pipeline_config,
         navidc_config,
+        monkeyocr_config,
         no_cache,
         no_postprocess,
         pages: wanted_pages,

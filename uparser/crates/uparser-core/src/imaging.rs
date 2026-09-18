@@ -124,6 +124,9 @@ pub fn to_base64_data_url(img: &RgbImage) -> Result<String, String> {
 /// Passing `min_pixels == max_pixels` targets a fixed total pixel count
 /// while preserving aspect ratio exactly. Unlike dots.ocr's `smart_resize`,
 /// there's no factor-grid snapping — just a plain LANCZOS resize.
+///
+/// The new edge lengths **truncate** rather than round, matching upstream
+/// `core_runner.py::load_image`'s `int(img.size[0] * scale)`.
 pub fn resize_by_pixel_bounds(img: &RgbImage, min_pixels: u32, max_pixels: u32) -> RgbImage {
     let (w, h) = img.dimensions();
     let area = (w as f64) * (h as f64);
@@ -139,9 +142,58 @@ pub fn resize_by_pixel_bounds(img: &RgbImage, min_pixels: u32, max_pixels: u32) 
         return img.clone();
     };
 
-    let new_w = ((w as f64) * scale).round().max(1.0) as u32;
-    let new_h = ((h as f64) * scale).round().max(1.0) as u32;
+    let new_w = ((w as f64) * scale).trunc().max(1.0) as u32;
+    let new_h = ((h as f64) * scale).trunc().max(1.0) as u32;
     image::imageops::resize(img, new_w, new_h, FilterType::Lanczos3)
+}
+
+/// MonkeyOCRv2 sends **every** image — page and per-block crop alike —
+/// through `core_runner.py::load_image`, whose resize sequence is not
+/// symmetric: `min_pixels` only ever *upscales* a too-small image and
+/// `max_pixels` only ever *downscales* a too-large one, in that order. The
+/// two bounds are supplied independently per call site, and passing `None`
+/// genuinely means "no bound in this direction":
+///
+/// - layout (`get_layout`): `min_pixels=1003520`, and `max_pixels=1003520`
+///   from `MOCR2_MAX_PIXELS` (set by `configure_runtime` from
+///   `BackendConfig.max_pixels`) — so the page lands on ~1.0 Mpx either way.
+/// - recognition (`_parse_page`, `_recognize_one_block`): `min_pixels` is
+///   **not passed** — only the `max_pixels` env bound applies, so a small
+///   crop is sent at its **native size and never upscaled**.
+///
+/// Collapsing both stages onto `min == max` (what this adapter did before)
+/// silently Lanczos-upscales a one-line text crop by ~10x before inference,
+/// which is a materially different model input than upstream's.
+///
+/// The final guard is also `load_image`'s: an image whose long/short edge
+/// ratio exceeds 200 is replaced by PIL's `Image.new('RGB', (32, 32))` — a
+/// **black** 32x32 placeholder, not white.
+pub fn prepare_model_image(
+    img: &RgbImage,
+    min_pixels: Option<u32>,
+    max_pixels: Option<u32>,
+) -> RgbImage {
+    let mut out = img.clone();
+
+    if let Some(min_pixels) = min_pixels {
+        let (w, h) = out.dimensions();
+        if (w as f64) * (h as f64) < min_pixels as f64 {
+            out = resize_by_pixel_bounds(&out, min_pixels, u32::MAX);
+        }
+    }
+    if let Some(max_pixels) = max_pixels {
+        let (w, h) = out.dimensions();
+        if (w as f64) * (h as f64) > max_pixels as f64 {
+            out = resize_by_pixel_bounds(&out, 0, max_pixels);
+        }
+    }
+
+    let (w, h) = out.dimensions();
+    let (long, short) = if w >= h { (w, h) } else { (h, w) };
+    if short > 0 && (long as f64) / (short as f64) > 200.0 {
+        return RgbImage::from_pixel(32, 32, Rgb([0, 0, 0]));
+    }
+    out
 }
 
 /// Crop to the bounding rect of `points_px`, then white-fill every pixel
@@ -427,6 +479,54 @@ mod tests {
         let (w, h) = out.dimensions();
         let area = (w as f64) * (h as f64);
         assert!((area - 1_003_520.0).abs() / 1_003_520.0 < 0.01);
+    }
+
+    /// The regression net for the alignment fix: upstream's recognition
+    /// stage passes no `min_pixels`, so a small crop must reach the model
+    /// **untouched**. Before this, a 400x30 line crop was upscaled to
+    /// ~1.0 Mpx.
+    #[test]
+    fn prepare_model_image_never_upscales_when_min_pixels_is_none() {
+        let img = solid(400, 30);
+        let out = prepare_model_image(&img, None, Some(1_003_520));
+        assert_eq!(out.dimensions(), (400, 30));
+    }
+
+    #[test]
+    fn prepare_model_image_still_downscales_over_max_pixels() {
+        let img = solid(3000, 1500); // 4.5 Mpx
+        let out = prepare_model_image(&img, None, Some(1_003_520));
+        let (w, h) = out.dimensions();
+        assert!((w as u64) * (h as u64) <= 1_003_520);
+        assert!((w as f64 / h as f64 - 2.0).abs() < 0.05);
+    }
+
+    /// Layout stage: both bounds set, so a small page is upscaled and a
+    /// large one downscaled — the behavior this adapter already had.
+    #[test]
+    fn prepare_model_image_upscales_when_min_pixels_is_set() {
+        let img = solid(100, 50);
+        let out = prepare_model_image(&img, Some(1_003_520), Some(1_003_520));
+        let (w, h) = out.dimensions();
+        assert!((w as u64) * (h as u64) >= 900_000);
+    }
+
+    /// `load_image`'s last guard: ratio > 200 is treated as unusable and
+    /// replaced by a black 32x32 image.
+    #[test]
+    fn prepare_model_image_replaces_extreme_aspect_ratio_with_a_black_32x32() {
+        let img = solid(4000, 10); // ratio 400
+        let out = prepare_model_image(&img, None, Some(1_003_520));
+        assert_eq!(out.dimensions(), (32, 32));
+        assert_eq!(out.get_pixel(0, 0), &Rgb([0, 0, 0]));
+    }
+
+    #[test]
+    fn prepare_model_image_keeps_a_ratio_exactly_at_the_limit() {
+        // 200:1 is not "> 200", so it survives.
+        let img = solid(2000, 10);
+        let out = prepare_model_image(&img, None, Some(1_003_520));
+        assert_eq!(out.dimensions(), (2000, 10));
     }
 
     #[test]

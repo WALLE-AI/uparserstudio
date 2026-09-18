@@ -6,7 +6,7 @@
 //!
 //! CLI and API are thin shells over the shared runner.
 
-use crate::adapters::{NavidcConfig, PipelineConfig};
+use crate::adapters::{MonkeyOcrConfig, NavidcConfig, PipelineConfig};
 #[cfg(test)]
 use crate::types::RoutedBy;
 use crate::types::{DocumentProfile, ParseResult};
@@ -23,6 +23,8 @@ pub struct ParseOptions {
     pub pipeline_config: PipelineConfig,
     /// `navidc-ocr`-only layout-mode override.
     pub navidc_config: NavidcConfig,
+    /// `monkeyocr-v2`-only repeat-retry override.
+    pub monkeyocr_config: MonkeyOcrConfig,
     pub no_cache: bool,
     /// Skip `postprocess::merge_paragraphs_by_geometry` and return each
     /// adapter's raw per-block output unmerged. Exists mainly so a
@@ -71,6 +73,7 @@ impl Default for ParseOptions {
             max_concurrency: 16,
             pipeline_config: PipelineConfig::default(),
             navidc_config: NavidcConfig::default(),
+            monkeyocr_config: MonkeyOcrConfig::default(),
             no_cache: false,
             no_postprocess: false,
             pages: None,
@@ -202,6 +205,7 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
         max_concurrency: options.max_concurrency,
         pipeline_config: options.pipeline_config.clone(),
         navidc_config: options.navidc_config.clone(),
+        monkeyocr_config: options.monkeyocr_config.clone(),
         no_cache: options.no_cache,
         no_postprocess: options.no_postprocess,
         pages: options.pages.clone(),
