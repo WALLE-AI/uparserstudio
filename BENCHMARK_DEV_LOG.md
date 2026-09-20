@@ -201,3 +201,126 @@ python3 gen_qwen_omnidoc.py --name subset_baseline    --prompt-variant baseline 
 python3 gen_qwen_omnidoc.py --name subset_variant_bc  --prompt-variant variant_bc  --dataset OmniDocBenchData/omnidoc_subset_prompt_experiment.json --base-url http://127.0.0.1:8087/v1
 python3 summarize_omnidoc_by_backend.py subset_baseline subset_variant_bc
 ```
+
+---
+
+## 4. 两榜（opendataloader-bench + OmniDocBench）：monkeyocr-v2 与上游实现对齐的全过程
+
+对应 `UPARSER_LEADERBOARD.md` 里 monkeyocr-v2 两行的更新，以及 `MONKEYOCR_V2_ALIGNMENT_PLAN.md`。
+
+### 4.1 起因：差距在适配器，不在模型
+
+本地 `127.0.0.1:8011` 跑的是官方 `MonkeyOCRv2-B-Parsing` 权重，而该模型在官方 README 的
+OmniDocBench v1.6 端到端榜上以 **83.3 排第一**。我们同 harness 下却是：
+opendataloader-bench Overall 0.8754（垫底、8.639 s/篇）、OmniDocBench Text Edit 0.1408。
+同一份权重、同一个榜单，差距只能来自适配器。
+
+于是逐行比对 `opensource/MonkeyOCRv2/parsing/core_runner.py`，确认 8 处偏差（完整清单见
+`MONKEYOCR_V2_ALIGNMENT_PLAN.md` §2）。其中两处是主因。
+
+### 4.2 主因一：识别阶段把裁剪图放大了约 10 倍，直接诱发模型复读
+
+上游 `batch_inference` 对识别调用**不传** `min_pixels`，只继承 `MOCR2_MAX_PIXELS=1003520`
+作为上界 —— `load_image` 的 `min_pixels` 只上采样、`max_pixels` 只下采样，所以一个
+400×30 的文本行裁剪是**原样**送进模型的。我们当时两个阶段都用 `min == max == 1003520`，
+把这个 12000 像素的小图 Lanczos 放大到约 100 万像素再送。
+
+这不是"精度略有差异"，而是直接把模型打进复读循环。一个真实样本
+（`yanbaopptmerge_yanbaoPPT_90`，GT 只有一个 title + 一张图）：
+
+| | 输出长度 | 内容 |
+|---|---|---|
+| 对齐前 | 45099 字符 | `## 爆竹声中——岁除` 之后是 `The text content from the image is:` 连续重复数百次 |
+| 对齐后 | 48 字符 | `## 爆竹声中一岁除` + 几个拼音/拆字块，与 GT 一致 |
+
+这类复读输出还有一个次生后果：把评测器本身拖垮。OmniDocBench 的 `quick_match` 对该样本
+统计到 `gt=1 pred=1676`，单页匹配耗时 1735 秒；用旧预测跑 290 页子集时评测器在 40 分钟
+超时上限内**跑不完**，一个汇总数字都没产出。所以"对齐前 vs 对齐后"的子集 A/B 并不是我
+主动放弃的，而是旧输出烂到评测器无法收敛——这本身就是结论的一部分。
+
+### 4.3 主因二：OTSL 分词把单元格里的任意标签当成了控制符
+
+上游的分词正则是 `<(fcel|ecel|lcel|ucel|xcel|nl)>`，白名单只有六个控制标签，源码注释写得很
+直白："Other markup (e.g. `<br>` or a nested `<table>`) is cell content and must remain
+untouched."。我们的移植用的是 `<([a-z]+)>` —— 任意小写标签都被吞成控制符。于是单元格里
+一个 `<br>` 就会让该行之后的每个单元格整体左移一列，整张表的网格结构报废。
+
+连带确认并修正的还有：`<otsl>…</otsl>` 包裹未剥离、`html2otsl` 的私有转义（U+E100）未解码、
+`fcel` 内容被 `.trim()`（上游明确不做）、单元格转义用的是会把 `&amp;` 二次转义成
+`&amp;amp;` 的共享 `otsl::escape_html`（上游是"保留内嵌 HTML 标签、只转义纯文本块，且 `&`
+带实体负向 lookahead"）。
+
+### 4.4 golden 值一律由执行上游 Python 得到
+
+沿用本仓库既有纪律：`otsl_to_html` / `detect_repeat_token` / `process_formula` 的期望值全部
+由 `python3 -c 'import core_runner'` 真跑上游函数抓取，而不是读代码推断。这次因此逮到两个
+**靠推理一定会写错**的上游 quirk，两个都被刻意复现而非"修正"：
+
+1. 分词大小写不敏感，但 `tag == 'fcel'` 的分支判断是大小写敏感的 —— 所以 `<FCEL>up<NL>`
+   匹配得上正则、却落到最后的 `else`，列号前进但不产出任何单元格，结果是
+   `<table><tr></tr></table>`。
+2. 单元格内容按 `(<[A-Za-z][^>]*>)` 切片，要求 `<` 后紧跟**字母**，于是**闭合**标签
+   `</b>` 不匹配、被当作纯文本转义。真实输出里 `<b>bold</b>` 渲染成
+   `<b>bold&lt;/b&gt;`。
+
+### 4.5 重复重试：换成上游算法，并按上游默认**关闭**
+
+上游 `detect_repeat_token` 是后缀重复法（`base_max_repeats=4`、`window_size=500`、
+`scaling_factor=3.0`），允许的重复次数随重复单元长度递减：单字符要 17 次才算退化，
+12 字符短语 5 次就算。再补一次"去掉末尾 50 字符"的二次判定。我们原先用的是自研的
+`robustness::is_degenerate`（滑窗周期法），两者在真实输出上判断并不一致。
+
+另外上游 `PipelineConfig.retry_repeat` 默认是 **False**，我们却默认开启。按用户选择的
+"完全对齐"口径，现在默认关闭，并新增 `--monkeyocr-retry-repeat` /
+`--monkeyocr-retry-repeat-max-retries` 显式开启；开启时对**所有** `need_infer` 标签生效
+（含 Table/Formula，上游如此），温度 `min(0.2*(n+1), 0.8)`、`top_p=0.95`。
+`robustness.rs` 本身未改动，mineru-vlm 仍在用。
+
+> 温度常量特意用 `f64` 而非 `f32`：上游是 Python float，第三次重试的值是
+> `0.6000000000000001`；用 `f32` 会在序列化时变成 `0.20000000298023224` 这种放大误差。
+
+### 4.6 评测过程中踩到的两个坑（与适配器无关，但会让数字不可信）
+
+1. **本机 wiremock 单测被代理拦截**。`cargo test --workspace` 一开始有 13 个 transport/
+   semantic 用例失败，错误是 nginx 的 404 页面 —— 请求本地 wiremock 端口时走了公司代理。
+   加 `NO_PROXY=127.0.0.1,localhost` 后 510 个用例全绿。与本次改动无关，是环境问题。
+2. **OmniDocBench 评测器自身的 `RecursionError`**。`_build_formula_partitioned_pred_candidates`
+   的 `backtrack` 是无界递归，公式候选够多的页面会超过 CPython 默认 1000 帧上限，整次评测
+   在写出任何指标前就崩掉。新增 `benchmark/OmniDocBench/run_eval_deep.py`：只抬高
+   `sys.setrecursionlimit` 与 `threading.stack_size`（后者必须在匹配线程池创建前设置，否则
+   更深的递归不是抛异常而是段错误），不触碰匹配/打分/配置。未触发上限的样本两个入口结果
+   逐字节一致，所以用它评测的预测集与用 `run_eval.py` 评测的仍可比。
+3. **CDM 曾静默返回 0**。第一次全量评测把 TeX 根目录猜成 `/home/dataset1/gaojing/texlive`，
+   实际是 `.../texlive/2026`，`pdflatex` 不存在，CDM 对每个样本恒返回 0（榜单说明里早有
+   这条注记）。用正确路径重跑后才拿到真实 CDM 值。
+
+### 4.7 子集不作数，全量才作数
+
+本文件 §3.3 已经记录过一次教训：290 页子集曾给出与全量 1651 页**相反**的结论。所以这次
+子集只当"方向闸门"，最终写进榜单的全部是全量 1651 页（OmniDocBench）和全量 200 篇
+（opendataloader-bench）的数字，且两个榜单的"对齐前"一侧都是同一 harness 重新评测的，
+不是引用旧文档。
+
+### 4.8 复现
+
+```bash
+export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+
+# OmniDocBench v1.6 全量 1651 页（uparser CLI 逐页出 markdown）
+cd benchmark
+ls OmniDocBenchData/images/* | xargs -P 8 -I{} ./gen_monkey_aligned_full.sh {}
+cd OmniDocBench
+TL=/home/dataset1/gaojing/texlive/2026
+PATH="$TL/bin/x86_64-linux:$PATH" CDM_TEXLIVE_ROOT="$TL" \
+  CDM_PDFLATEX="$TL/bin/x86_64-linux/pdflatex" \
+  .venv/bin/python run_eval_deep.py \
+  --config configs/omnidoc_uparser-monkeyocr-v2-aligned-full-20260918.yaml
+
+# opendataloader-bench 全量 200 篇
+cd opensource/opendataloader-bench
+uv run src/pdf_parser.py --engine uparser-monkeyocr-v2
+uv run src/evaluator.py
+```
+
+> 注意 `ls OmniDocBenchData/images/*` 不要写成 `*.png`：该数据集 1651 页里 981 页是 `.jpg`，
+> 只匹配 `.png` 会静默只跑 670 页。

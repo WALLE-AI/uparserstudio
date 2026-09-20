@@ -1,6 +1,7 @@
 # 对齐 `monkeyocr-v2` 适配器与上游 MonkeyOCRv2 参考实现
 
-> 状态：待审阅（尚未实施）
+> 状态：**已实施并完成两榜全量重测**（2026-09-18/19）。结果见文末 §7；
+> 过程与归因见 `BENCHMARK_DEV_LOG.md` §4；榜单数字见 `UPARSER_LEADERBOARD.md`。
 > 范围：`uparser/crates/uparser-core/src/adapters/monkeyocr_v2.rs`、
 > `uparser/crates/uparser-core/src/monkeyocr_post.rs`，对齐基准为
 > `opensource/MonkeyOCRv2/parsing/core_runner.py`
@@ -149,3 +150,55 @@ PNG data URI、布局 `max_tokens=4096`、模型输出顺序即阅读顺序（�
   CLI 开关保留，`BENCHMARK_DEV_LOG.md` 里记清这一权衡。
 - `otsl_to_html` 重写只影响 `monkeyocr-v2`（专属模块），共享 `otsl.rs` 不动，
   其他协议的快照／契约测试不应有任何变化 —— 若有变化即为实现出错的信号。
+
+---
+
+## 7. 实施结果（2026-09-18/19）
+
+### 7.1 代码
+
+全部 8 项偏差已按第 3 节实施。新增/改动：
+
+| 文件 | 内容 |
+|---|---|
+| `imaging.rs` | 新增 `prepare_model_image(img, min_pixels, max_pixels)`，忠实移植 `load_image` 的"min 只上采样 → max 只下采样 → 长宽比 >200 换 32×32 黑图"序列；`resize_by_pixel_bounds` 的边长改为截断（对齐 `int()`） |
+| `monkeyocr_post.rs` | `otsl_to_html` 按上游重写（控制标签白名单、`<otsl>` 递归、私有转义、不 trim、保留内嵌 HTML 的转义）；新增 `detect_repeat_token` / `should_retry_repeat_output` / `replace_table_image_markers` |
+| `adapters/monkeyocr_v2.rs` | 两阶段分别用正确的像素边界；识别 `max_tokens` 5000；输出先 trim；表格过 `[img]` 标记替换；重试改用上游算法且**默认关闭** |
+| `adapters/mod.rs`、`cli.rs`、`runner.rs`、`api.rs` | 新增 `MonkeyOcrConfig` 与 `--monkeyocr-retry-repeat` / `--monkeyocr-retry-repeat-max-retries`，沿用 `NavidcConfig` 既有路径，并计入缓存键 |
+
+测试：全 workspace 绿（`uparser-core` lib 510、doc-engine 888、CLI/contract 全通过），
+`cargo fmt --check` 干净。新增用例集中在三处：`prepare_model_image` 的"小图不被放大"回归网、
+`monkeyocr_post` 的上游 golden（含两个刻意复现的 quirk）、适配器层的"裁剪图按原尺寸送出 +
+`max_tokens=5000` + 默认不重试 + 开启后按上游温度序列重试（含表格）"。
+
+### 7.2 opendataloader-bench（200 篇，同 harness 重跑两侧）
+
+| | Overall ↑ | NID ↑ | TEDS ↑ | MHS ↑ | s/篇 ↓ |
+|---|---:|---:|---:|---:|---:|
+| 对齐前 | 0.8754 | 0.8917 | 0.9085 | 0.8200 | 8.639 |
+| **对齐后** | **0.8827** | **0.8932** | **0.9522** | **0.8326** | **3.011** |
+
+TEDS +0.0437 直接对应 §2 的第 4/5 条（OTSL 分词与转义）；速度 2.9 倍主要来自不再把小裁剪图
+放大约 10 倍（token 数骤降），以及不再触发复读循环。
+
+### 7.3 OmniDocBench v1.6（全量 1651 页，uparser CLI 逐页）
+
+| 指标 | 对齐前 | 对齐后 | 变化 |
+|---|---:|---:|---|
+| Text Edit ↓ | 0.1408 | **0.0834** | −41% |
+| Formula Edit ↓ | 0.2747 | **0.1990** | −28% |
+| Formula CDM ↑ | 0.8050 | **0.8981** | +0.093 |
+| Table TEDS ↑ | 0.8336 | **0.8373** | +0.004 |
+| Table TEDS-S ↑ | 0.8715 | **0.8745** | +0.003 |
+| Reading Order Edit ↓ | 0.1922 | **0.1549** | −19% |
+
+两侧均取 `result/*_metric_result.json` 的 `all` 字段（与榜单历史口径一致）。
+
+### 7.4 仍然存在的缺口
+
+- **文档摆正预处理**仍未实现（§2.2），上游默认是开启的。对拍摄/倾斜页面，我们仍比上游少一步。
+- **表内 `[img]` 标记**走的是上游 `use_base64=True` 分支（内联 data URI），不是写文件分支 ——
+  因为 `Block` 只有一个 `asset_bytes`/`asset_path`，一张表里多张内嵌图无法用现有 IR 表达。
+- **`Title`/`Section-header` 的多行前缀**：上游对每一行都加 `# `/`## `，我们用
+  `MergeHint::TitleLevel` 交给渲染器，单行标题等价，多行标题不等价。
+- **`MOCR2_TABLE_HTML=1` 分支**未实现（上游默认 `0`，即 OTSL→HTML）。
