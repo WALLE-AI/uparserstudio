@@ -464,6 +464,102 @@ pub fn replace_table_image_markers(content: &str, table_image: &image::RgbImage)
     out
 }
 
+/// `core_runner.py::result2md` + the `content` half of
+/// `_format_block_fields` — this protocol's **own document assembly**.
+///
+/// Why this exists rather than going through the shared canonical
+/// renderer: `ascend.rs`'s own `ParatextPolicy` doc already states the
+/// principle — "each adapter should reproduce its own upstream's document
+/// assembly". For this protocol the shared renderer's decisions are all
+/// individually reasonable and all wrong *here*, and the cost was
+/// measured on the full 1651-page OmniDocBench set with identical model
+/// output on both sides (see `MONKEYOCR_V2_ALIGNMENT_PLAN.md` §8):
+///
+/// | | shared renderer | this function |
+/// |---|---|---|
+/// | Text Edit ↓ | 0.0834 | **0.0498** |
+/// | Table Edit ↓ | 0.3967 | **0.1040** |
+/// | Formula Edit ↓ | 0.1990 | **0.1592** |
+/// | Reading Order Edit ↓ | 0.1549 | **0.1328** |
+///
+/// The three divergences that account for it: the shared renderer
+/// escapes Markdown metacharacters (upstream emits raw text), degrades a
+/// `<table>` to a pipe table when it has no spans (upstream emits the
+/// HTML verbatim — this is nearly all of the Table Edit gap), and injects
+/// a `- ` marker for `list`-category blocks (upstream's `List-item` falls
+/// through `_format_block_fields` untouched, so the marker is content the
+/// model never wrote).
+///
+/// Upstream flattens **every page's** records into one list before
+/// joining, so a multi-page document is one `\n\n`-joined stream with no
+/// page separator (`_finalize_job`).
+pub fn result2md(result: &crate::types::ParseResult) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for page in &result.pages {
+        for block in &page.blocks {
+            // `keep_header_footer` defaults to `False`, and upstream keys
+            // the drop on its own native label, not a normalized one.
+            if matches!(
+                block.category_raw.as_str(),
+                "Page-header" | "Page-footer"
+            ) {
+                continue;
+            }
+            let content = block_content(block);
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                lines.push(trimmed.to_string());
+            }
+        }
+    }
+
+    let mut md = lines.join("\n\n").trim().to_string();
+    if !lines.is_empty() {
+        md.push('\n');
+    }
+    // "Remove invalid characters", applied to the finished document.
+    strip_replacement_chars(&md)
+}
+
+/// One block's `content` field per `_format_block_fields`. The adapter
+/// has already produced upstream's exact payload for the three
+/// structured labels (`otsl_to_html` output in `html`, `process_formula`
+/// + `$$` wrap in `latex`), so this only has to select and prefix.
+fn block_content(block: &crate::types::Block) -> String {
+    match block.category_raw.as_str() {
+        "Table" => block.html.clone().unwrap_or_default(),
+        "Formula" => block.latex.clone().unwrap_or_default(),
+        // Upstream always writes the crop and references it. With
+        // `--no-assets` there is no path to reference, so the block
+        // contributes nothing rather than an empty `![image]()`.
+        "Picture" => match &block.asset_path {
+            Some(path) => format!("![image]({path})"),
+            None => String::new(),
+        },
+        label => {
+            let text = block.text.as_deref().unwrap_or_default().trim();
+            if text.is_empty() {
+                return String::new();
+            }
+            // `"# " + content.replace("\n", "\n# ")` — every line of a
+            // multi-line heading gets the prefix, not just the first.
+            match label {
+                "Title" => format!("# {}", text.replace('\n', "\n# ")),
+                "Section-header" => format!("## {}", text.replace('\n', "\n## ")),
+                _ => text.to_string(),
+            }
+        }
+    }
+}
+
+/// Protocols that assemble their own document (and therefore must not be
+/// run through this project's shared paragraph-merge / punctuation
+/// normalization either, since their reference implementation does
+/// neither).
+pub fn owns_document_assembly(protocol: &str) -> bool {
+    protocol == "monkeyocr-v2"
+}
+
 /// `core_runner.py::detect_repeat_token` — the repeat-loop detector.
 ///
 /// Upstream's own algorithm, kept parameter-for-parameter: for every
@@ -595,6 +691,112 @@ mod tests {
     #[test]
     fn empty_otsl_is_an_empty_table() {
         assert_eq!(otsl_to_html("   "), "<table></table>");
+    }
+
+    /// Every case from **upstream's own test suite**
+    /// (`opensource/MonkeyOCRv2/parsing/tests/test_otsl_to_html.py`),
+    /// with the expected values re-captured by running upstream's
+    /// `otsl_to_html` on each input. Upstream's suite passes in this
+    /// environment (39 tests), so it is a trusted oracle — a stronger
+    /// check than hand-picked goldens, since it encodes the cases the
+    /// authors themselves consider load-bearing (notably the "#24
+    /// row-split-across-newlines" regression and the span-token matrix
+    /// emitted by their own `train/html2otsl.py`).
+    ///
+    /// The `None` input case is not portable (`&str` cannot be null) and
+    /// the `_format_block_fields` case is covered at the adapter level.
+    #[test]
+    fn otsl_to_html_matches_every_case_in_upstreams_own_test_suite() {
+        for (input, expected) in [
+            // test_basic_2x2_table
+            (
+                "<fcel>A<fcel>B<nl><fcel>C<fcel>D<nl>",
+                "<table><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>",
+            ),
+            // test_row_split_across_newlines_issue_24 — the cell keeps its
+            // newline as `<br>` instead of truncating the rest of the row.
+            (
+                "<fcel>line1\nline2<fcel>B<nl>",
+                "<table><tr><td>line1<br>line2</td><td>B</td></tr></table>",
+            ),
+            // test_crlf_in_cell_becomes_br
+            (
+                "<fcel>line1\r\nline2<nl>",
+                "<table><tr><td>line1<br>line2</td></tr></table>",
+            ),
+            // test_colspan_from_lcel_tokens
+            (
+                "<fcel>Head<lcel><lcel><nl><fcel>A<fcel>B<fcel>C<nl>",
+                "<table><tr><td colspan=\"3\">Head</td></tr><tr><td>A</td><td>B</td><td>C</td></tr></table>",
+            ),
+            // test_rowspan_from_ucel_tokens
+            (
+                "<fcel>Side<fcel>A<nl><ucel><fcel>B<nl>",
+                "<table><tr><td rowspan=\"2\">Side</td><td>A</td></tr><tr><td>B</td></tr></table>",
+            ),
+            // test_rowspan_and_colspan_with_xcel — the one case where a
+            // single cell carries both spans and `xcel` holds the corner.
+            (
+                "<fcel>Big<lcel><fcel>A<nl><ucel><xcel><fcel>B<nl>",
+                "<table><tr><td rowspan=\"2\" colspan=\"2\">Big</td><td>A</td></tr><tr><td>B</td></tr></table>",
+            ),
+            // test_empty_cell_token
+            (
+                "<fcel>A<ecel><fcel>B<nl>",
+                "<table><tr><td>A</td><td></td><td>B</td></tr></table>",
+            ),
+            // test_html_special_characters_are_escaped — `<"'>` is not a
+            // well-formed tag, so it stays text and is escaped.
+            (
+                "<fcel>A&B<\"'><nl>",
+                "<table><tr><td>A&amp;B&lt;&quot;&#x27;&gt;</td></tr></table>",
+            ),
+            // test_malformed_otsl_does_not_raise_and_returns_table — all
+            // eight inputs, with upstream's actual output for each.
+            ("<nl>", "<table><tr></tr></table>"),
+            ("<fcel>A", "<table><tr><td>A</td></tr></table>"),
+            // An unknown tag is *not* a control token, so the text before
+            // the first real token is dropped rather than shifting cells.
+            ("<zzzz>nope<fcel>ok<nl>", "<table><tr><td>ok</td></tr></table>"),
+            ("notags just text", "<table><tr></tr></table>"),
+            (
+                "<fcel>A<lcel><ucel><xcel><nl>",
+                "<table><tr><td colspan=\"2\">A</td><td></td></tr></table>",
+            ),
+            ("<fcel>", "<table><tr><td></td></tr></table>"),
+            ("<<<>>>", "<table><tr></tr></table>"),
+            (
+                "<fcel>A<nl><nl><fcel>B<nl>",
+                "<table><tr><td>A</td></tr><tr></tr><tr><td>B</td></tr></table>",
+            ),
+        ] {
+            assert_eq!(otsl_to_html(input), expected, "input: {input:?}");
+        }
+    }
+
+    /// `tests/test_repeat_detection.py` pins `detect_repeat_token` against
+    /// a reference backward-scan implementation, including a 200-case
+    /// randomized sweep over `window_size`/`cut_from_end`. These are its
+    /// explicit parametrized cases, with upstream's verdict for each.
+    #[test]
+    fn detect_repeat_token_matches_upstreams_own_test_suite() {
+        for (input, expected) in [
+            (String::new(), false),
+            ("abc".to_string(), false),
+            ("A".repeat(20), true),
+            ("AB".repeat(20), true),
+            ("prefix-".to_string() + &"xyz".repeat(30), true),
+            // 19 repeats then a different character: the suffix is `B`,
+            // which repeats once, so nothing is detected.
+            ("A".repeat(19) + "B", false),
+        ] {
+            assert_eq!(
+                detect_repeat_token(&input, 4, 500, 0, 3.0),
+                expected,
+                "input: {:?}",
+                &input[..input.len().min(30)]
+            );
+        }
     }
 
     /// Golden values captured by **running upstream's own
@@ -758,6 +960,131 @@ mod tests {
     fn formula_is_wrapped_and_label_moved_outside_the_math() {
         assert_eq!(format_formula(r"x+y \eqno(1-2)"), "$$\nx+y\n$$\n1-2");
         assert_eq!(format_formula("a=b"), "$$\na=b\n$$\n");
+    }
+
+    fn block(category_raw: &str, text: Option<&str>) -> crate::types::Block {
+        crate::types::Block {
+            geom: crate::types::Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+            geom_frame: crate::types::CoordFrame::Page,
+            bbox_px: Some([0, 0, 10, 10]),
+            category_raw: category_raw.to_string(),
+            category: Some("text".to_string()),
+            reading_order: None,
+            text: text.map(str::to_string),
+            html: None,
+            latex: None,
+            spans: vec![],
+            merge_hint: None,
+            confidence: None,
+            source: crate::types::BlockSource::LayoutThenRecognize,
+            error: None,
+            asset_bytes: None,
+            asset_path: None,
+            asset_caption: None,
+        }
+    }
+
+    fn result_of(blocks: Vec<crate::types::Block>) -> crate::types::ParseResult {
+        crate::types::ParseResult {
+            source_path: "doc.pdf".into(),
+            source_sha256: "abc".into(),
+            protocol: "monkeyocr-v2".into(),
+            routed_by: crate::types::RoutedBy::Explicit,
+            document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
+            model_endpoint: None,
+            model_name: None,
+            pages: vec![crate::types::Page {
+                page_num: 1,
+                width_px: 100,
+                height_px: 100,
+                blocks,
+            }],
+            page_errors: vec![],
+            capability_notes: vec![],
+            warnings: vec![],
+            timing: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Upstream's own
+    /// `tests/test_output_artifacts.py::test_result2md_keeps_image_relative_paths_and_drops_headers`,
+    /// asserted verbatim: a `Page-header` is dropped, a `Picture` keeps
+    /// its relative reference, blocks join with a blank line, and the
+    /// document ends in a single newline.
+    #[test]
+    fn result2md_matches_upstreams_own_assembly_test() {
+        let mut picture = block("Picture", None);
+        picture.asset_path = Some("../images/doc_sub0.jpg".to_string());
+        let result = result_of(vec![
+            block("Page-header", Some("secret header")),
+            picture,
+            block("Text", Some("body")),
+        ]);
+        let md = result2md(&result);
+        assert_eq!(md, "![image](../images/doc_sub0.jpg)\n\nbody\n");
+        assert!(!md.contains("secret header"));
+    }
+
+    /// `_format_block_fields` prefixes **every** line of a heading, and
+    /// `Page-footer` is dropped alongside `Page-header`.
+    #[test]
+    fn result2md_prefixes_every_heading_line_and_drops_page_furniture() {
+        let result = result_of(vec![
+            block("Title", Some("Line one\nLine two")),
+            block("Section-header", Some("Sub one\nSub two")),
+            block("Page-footer", Some("99")),
+        ]);
+        assert_eq!(
+            result2md(&result),
+            "# Line one\n# Line two\n\n## Sub one\n## Sub two\n"
+        );
+    }
+
+    /// The three divergences this assembly exists to avoid: no Markdown
+    /// escaping, no injected list marker, and a table stays HTML instead
+    /// of being degraded to a pipe table.
+    #[test]
+    fn result2md_emits_raw_text_html_tables_and_no_list_markers() {
+        let mut table = block("Table", None);
+        table.html = Some("<table><tr><td>a</td><td>b</td></tr></table>".to_string());
+        let mut formula = block("Formula", None);
+        formula.latex = Some("$$\nx+y\n$$\n".to_string());
+        let result = result_of(vec![
+            // Markdown metacharacters a model legitimately wrote.
+            block("Text", Some("# not a heading [1] * 2")),
+            block("List-item", Some("first item")),
+            table,
+            formula,
+        ]);
+        let md = result2md(&result);
+        assert!(!md.contains('\\'), "no escaping: {md}");
+        assert!(
+            !md.contains("- first item"),
+            "upstream never adds a list marker: {md}"
+        );
+        assert!(md.contains("<table><tr><td>a</td>"), "HTML table kept: {md}");
+        assert_eq!(
+            md,
+            "# not a heading [1] * 2\n\nfirst item\n\n<table><tr><td>a</td><td>b</td></tr></table>\n\n$$\nx+y\n$$\n"
+        );
+    }
+
+    #[test]
+    fn result2md_of_an_empty_page_is_empty_not_a_stray_newline() {
+        assert_eq!(result2md(&result_of(vec![])), "");
+        // A block whose recognition failed carries no text and must not
+        // contribute a blank paragraph.
+        assert_eq!(result2md(&result_of(vec![block("Text", None)])), "");
+    }
+
+    #[test]
+    fn only_monkeyocr_v2_owns_its_document_assembly() {
+        assert!(owns_document_assembly("monkeyocr-v2"));
+        for other in ["mineru-vlm", "navidc-ocr", "dots-ocr", "pipeline", "native"] {
+            assert!(!owns_document_assembly(other), "{other}");
+        }
     }
 
     #[test]

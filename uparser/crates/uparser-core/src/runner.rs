@@ -492,6 +492,7 @@ pub async fn execute_with_hooks(
     let permits = Arc::new(Semaphore::new(options.max_concurrency.max(1)));
     let on_window = hooks.on_window.clone();
     let on_progress = hooks.on_progress.clone();
+    let window_protocol = protocol.clone();
     let assets_dir = (!options.no_assets).then(|| {
         options
             .assets_dir
@@ -508,7 +509,8 @@ pub async fn execute_with_hooks(
                 let Some(on_window) = &on_window else {
                     return;
                 };
-                let mut pages = postprocess_pages(pages.to_vec(), options.no_postprocess);
+                let mut pages =
+                    postprocess_pages(pages.to_vec(), options.no_postprocess, &window_protocol);
                 if let Some(directory) = &assets_dir
                     && let Err(error) = assets::write_page_assets(&mut pages, directory)
                 {
@@ -529,7 +531,7 @@ pub async fn execute_with_hooks(
                 ExecutionError::Ingest(message)
             }
         })?;
-    let pages = postprocess_pages(pages, options.no_postprocess);
+    let pages = postprocess_pages(pages, options.no_postprocess, &protocol);
     let mut result = ParseResult {
         source_path: source_path.clone(),
         source_sha256: source.digest().to_owned(),
@@ -619,8 +621,15 @@ fn execution_fingerprint(options: &ExecutionOptions, plan: &RunPlan) -> String {
 fn postprocess_pages(
     pages: Vec<crate::types::Page>,
     no_postprocess: bool,
+    protocol: &str,
 ) -> Vec<crate::types::Page> {
-    if no_postprocess {
+    // A protocol that assembles its own document also does its own
+    // content post-processing, and its reference implementation does
+    // neither paragraph merging nor CJK punctuation unification — running
+    // ours on top would make the IR disagree with the Markdown this
+    // protocol emits, and (measured on OmniDocBench) is a net accuracy
+    // loss. See `monkeyocr_post::owns_document_assembly`.
+    if no_postprocess || crate::monkeyocr_post::owns_document_assembly(protocol) {
         pages
     } else {
         pages
@@ -673,7 +682,8 @@ async fn execute_native(
             }
             let mut result =
                 crate::structured::to_parse_result(&document, &source_path, source.bytes());
-            result.pages = postprocess_pages(result.pages, options.no_postprocess);
+            result.pages =
+                postprocess_pages(result.pages, options.no_postprocess, &result.protocol);
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
             write_result_assets(&mut result, &source_path, options)?;
             Ok(ParseOutcome {
@@ -728,7 +738,8 @@ async fn execute_native(
             // O3.3: the same paragraph-merge + CJK punctuation normalization
             // every other mode has had since P1. Only reachable when the IR is
             // actually built — a `markdown_only` run returned above.
-            result.pages = postprocess_pages(result.pages, options.no_postprocess);
+            result.pages =
+                postprocess_pages(result.pages, options.no_postprocess, &result.protocol);
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
             #[cfg(feature = "pdfium")]
             materialize_native_image_assets(

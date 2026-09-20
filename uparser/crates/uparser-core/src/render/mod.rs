@@ -58,6 +58,19 @@ pub fn render_markdown(input: &RenderInput<'_>, source: MarkdownSource) -> Strin
     {
         return markdown.to_owned();
     }
+    // A protocol whose reference implementation assembles the finished
+    // document itself renders through that, not through the canonical
+    // writer. This is the exception `ascend.rs`'s `ParatextPolicy` doc
+    // already anticipates ("each adapter should reproduce its own
+    // upstream's document assembly"); for monkeyocr-v2 the divergence
+    // was measured as a large accuracy loss on the full OmniDocBench set
+    // rather than a stylistic preference — see
+    // `monkeyocr_post::result2md`'s own doc for the numbers.
+    if crate::monkeyocr_post::owns_document_assembly(&input.result.protocol) {
+        return crate::monkeyocr_post::result2md(input.result)
+            .trim_end()
+            .to_owned();
+    }
     // The canonical renderer terminates its output with a newline; the CLI
     // adds one of its own when writing the line. Trim so the emitted file
     // does not gain a trailing blank line just because of which renderer
