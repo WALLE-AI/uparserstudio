@@ -45,11 +45,27 @@ Model protocols are not interchangeable merely because several use OpenAI-compat
 - `mineru-vlm`: hard-resized page, layout then per-region recognition, MinerU custom tokens, OTSL tables.
 - `dots-ocr`: smart-resized page, strict JSON with protocol-specific recovery.
 - `generic-vlm`: full-page Markdown, parsed back into blocks so the IR carries real headings/lists/tables. Use only with a prompt/model that actually follows this contract.
-- `monkeyocr-v2`: pixel-bounded layout then recognition with Python-literal decoding.
+- `monkeyocr-v2`: pixel-bounded layout then recognition with Python-literal decoding, aligned
+  line-by-line with upstream `core_runner.py`. Two consequences worth knowing. **It owns its own
+  document assembly**: `--format markdown` renders through a port of upstream's `result2md` instead
+  of the shared canonical renderer (tables stay HTML verbatim, `list` blocks get no `- ` marker,
+  Markdown metacharacters are not escaped), and the shared paragraph merge and CJK punctuation
+  normalization are skipped for it, so `--no-postprocess` is a no-op. **Repeat-loop retry is off by
+  default**, matching upstream's own `retry_repeat=False`; enable with `--monkeyocr-retry-repeat`
+  (and optionally `--monkeyocr-retry-repeat-max-retries <N>`, upstream default 3). Both are part of
+  the cache key. The recognition-stage crop is sent at its natural size — do not reintroduce a
+  minimum-pixel upscale, which upstream does not apply and which drives the model into repeat loops.
 - `navidc-ocr`: hard-resized layout image, line-oriented `<box:...><label:...><direction>` grammar (own parser, shares no syntax with mineru-vlm or monkeyocr-v2), rect or polygon geometry, per-category recognition prompt. `--layout-mode detection|segmentation` picks the stage-1 prompt (segmentation returns multi-point polygons, cropped with a polygon mask rather than a bounding rect); it is part of the cache key. `--protocol auto` never selects it. `image`/`list`/`equation_block` skip recognition entirely (kept as boxes with no text — no upstream `MagicModel` child-containment ported yet).
   **Deployment**: stock vLLM cannot load this checkpoint at any version (verified against `main`). It declares `Qwen2_5_VLForConditionalGeneration` but ships a Qwen3 text tower — decoupled `head_dim=128`, no qkv bias, and 28 layers of q/k_norm that `config.json` never declares via `qk_norm`; vLLM's Qwen2 backbone hardcodes all three the other way, and it ignores the bundled `modeling_naviocr.py` (it does not honor `trust_remote_code` for model implementations). Upstream ships the fix as an out-of-tree plugin: `pip install -e opensource/NaviDC-OCR/NaviOCR-vllm` (pins `vllm==0.11.0`), which re-registers the architecture against `Qwen3ForCausalLM`. A transformers sidecar works too and was verified byte-identical. Keep `--max-model-len >= 8192`: stage-2 requests a 4096-token budget and vLLM rejects `max_tokens >= max_model_len`. See `UPARSER_GUIDE.md` §5.3.
 - `paddleocr`: PaddleOCR service boxes, not chat completions.
 - `paddlex-structure`: service-side fused layout parsing from `/layout-parsing`; its authoritative Markdown is parsed back into blocks, same as `generic-vlm`.
+
+Measured quality differs a lot between them, and differs by corpus — do not pick on architecture
+alone. As of 2026-09-21 on this repo's own runs: on scanned/image pages (OmniDocBench, 1651 pages)
+`navidc-ocr` leads formulas and tables while `monkeyocr-v2` leads body text and reading order; on
+born-digital single-page PDFs (opendataloader-bench, 200 docs) `mineru-vlm` leads overall and is
+also the fastest of the model routes. Current numbers and the exact measurement conditions live in
+`UPARSER_LEADERBOARD.md`; treat any figure quoted here as indicative only.
 
 Example:
 

@@ -324,3 +324,74 @@ uv run src/evaluator.py
 
 > 注意 `ls OmniDocBenchData/images/*` 不要写成 `*.png`：该数据集 1651 页里 981 页是 `.jpg`，
 > 只匹配 `.png` 会静默只跑 670 页。
+
+---
+
+## 5. OmniDocBench：monkeyocr-v2 第二轮——"是不是后处理的问题"的定量回答
+
+对应 `MONKEYOCR_V2_ALIGNMENT_PLAN.md` §8。
+
+### 5.1 先收回一个错误结论
+
+§4 和榜单初稿都写了"官方 README 的 OmniDocBench v1.6 端到端榜上 MonkeyOCRv2-B-Parsing
+以 83.3 排第一"。**这是错的**。重新核对 README：83.3 属于 §6 的 **MDPBench**（多语言文档
+解析），不是 OmniDocBench；README 里唯一的 OmniDocBench 1.6 数字在 §2，是**独立的公式识别
+子模型**在**真值公式裁剪图**上的成绩（CDM 90.8 / ExpRate 61.1）。**官方从未公布
+MonkeyOCRv2 的 OmniDocBench 端到端解析成绩**，所以"与官方精度对齐"在这个榜单上没有靶子，
+可比的参照只有本仓库榜单里的其他引擎。§4 的因果结论（差距来自适配器）不受影响。
+
+### 5.2 先排除 `monkeyocr_post.rs`
+
+上游仓库自带 `parsing/tests/`，本地 pytest 直接跑通（39 passed）。把 `test_otsl_to_html.py`
+的 16 个用例与 `test_repeat_detection.py` 的 6 个参数化用例逐条搬进 Rust 测试，**一次通过，
+实现零改动**——包括作者自己标注的 "#24 行内换行被截断" 回归，和 `train/html2otsl.py`
+产出的跨行跨列矩阵（`<fcel>Big<lcel><fcel>A<nl><ucel><xcel><fcel>B<nl>` →
+`rowspan="2" colspan="2"`）。协议层与内容后处理层不是剩余差距的来源。
+
+### 5.3 A/B：同一份模型输出，只换组装方式
+
+跑 `--format json --no-postprocess` 拿 1651 页原始 block，用忠实移植 `result2md` 的脚本
+（`benchmark/result2md_upstream.py`）重新组装。两侧模型输出同源，唯一变量是组装：
+
+| 指标 | 共享渲染器 | 上游 `result2md` |
+|---|---:|---:|
+| Text Edit ↓ | 0.0834 | **0.0498** |
+| Table Edit ↓ | 0.3967 | **0.1040** |
+| Formula Edit ↓ | 0.1990 | **0.1592** |
+| Reading Order Edit ↓ | 0.1549 | **0.1328** |
+
+成因三条：表格被降级成管道表（Table Edit 那 −0.29 几乎全在这里）、注入 `- ` 列表标记
+（189/1651 页）、Markdown 元字符转义（509/1651 页）。
+
+### 5.4 一个被自己实验否掉的猜测
+
+先验上很像主因的一条：`content_normalize` 把 CJK 文本里的半角标点统一成全角，而真值里
+**27.3% 的中文文本块本来就含半角标点**（9332 个字符会被改写，861/1651 页输出因此不同）。
+跑第三个变体（上游组装 + 我们的标点归一化）全量确认：Text Edit **0.0498 → 0.0504**，
+只有 +0.0007。**统计上的"改写机会"不等于评测代价**。因为做了这个实验，才没有据此去动
+共享模块（那会影响所有协议并需要重测整张榜）。
+
+### 5.5 Rust 实现与脚本重建的一致性校验
+
+实现后没有直接信全量数字，而是先在样本上把真实 CLI 输出与 Python 重建逐字节比对：
+差异全部落在模型自己的 LaTeX/文本空格习惯上（`\varrho=+1` vs `\varrho = +1`、
+`R module` vs `R-module`），相似度 0.97–0.9996，**结构完全一致**——即两次跑的模型
+非确定性，而不是组装分歧。之后全量重测（真实 CLI）得到 Text Edit 0.0499，与重建的
+0.0498 吻合。
+
+### 5.6 复现
+
+```bash
+cd benchmark
+# 1) 原始 block（供重建用）
+ls OmniDocBenchData/images/* | xargs -P 8 -I{} ./gen_monkey_json.sh {}
+# 2) 忠实重建 & 变体
+python3 result2md_upstream.py omnidoc_pred_json/monkey-aligned omnidoc_pred/monkey-upstream-assembly-20260920
+python3 variant_normalize.py  omnidoc_pred_json/monkey-aligned omnidoc_pred/monkey-upstream-plus-normalize-20260920
+# 3) 真实 CLI 全量（榜单数字来源）
+ls OmniDocBenchData/images/* | xargs -P 8 -I{} ./gen_monkey_assembly.sh {}
+# 4) 评测（三者同一 config 模板，只改 data_path）
+cd OmniDocBench && TL=/home/dataset1/gaojing/texlive/2026 \
+  PATH="$TL/bin/x86_64-linux:$PATH" CDM_TEXLIVE_ROOT="$TL" CDM_PDFLATEX="$TL/bin/x86_64-linux/pdflatex" \
+  .venv/bin/python run_eval_deep.py --config configs/omnidoc_uparser-monkeyocr-v2-assembly-20260920.yaml
+```

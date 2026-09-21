@@ -81,6 +81,15 @@ losses to the user instead of silently presenting degraded text as complete.
 `bbox_px` is `null` for protocols that answer with a finished document rather than geometry
 (`generic-vlm`, `paddlex-structure`); don't build geometry logic on those.
 
+`--format markdown` goes through the shared canonical renderer, which emits a table as a GFM pipe
+table unless it has merged cells (row/column spans keep it as HTML). If table structure matters,
+read `--format json` and take each table block's `html` — that is the protocol's own output,
+undegraded. The one exception is `monkeyocr-v2`, which assembles its own document (a port of
+upstream `core_runner.py`'s `result2md`): its Markdown keeps tables as HTML verbatim, does not
+prefix `list` blocks with `- `, and does not escape Markdown metacharacters. For that protocol the
+shared paragraph-merge and CJK punctuation normalization are also skipped, so `--no-postprocess`
+changes nothing.
+
 `--format document-json` (structured native sources only, not PDF, not model routes) is the lossless
 canonical view: typed table grids with row/column spans, list structure, notes, assets. It is **not** a
 superset of `--format json` — that one has the geometry, provenance, and routing metadata.
@@ -100,6 +109,10 @@ Merged table cells are only recoverable from `document-json`.
 - `--raster-dpi` (default 200) only affects visual-page protocols.
 - Model protocols cache on `(bytes, protocol, endpoint, model, options)`; native bypasses the cache.
 - Structured-native only: `--no-notes`, `--headers-footers`, `--max-input-mib`.
+- Protocol-specific, ignored elsewhere and part of the cache key: `--layout-mode detection|segmentation`
+  (`navidc-ocr`), `--monkeyocr-retry-repeat` + `--monkeyocr-retry-repeat-max-retries <N>`
+  (`monkeyocr-v2`; off by default, matching upstream — turn it on only for a page whose output
+  visibly loops).
 
 Full flag list: `references/cli.md`. Protocol catalog and service contracts: `references/protocols.md`.
 Routing/artifact internals: `references/v2-architecture.md`.

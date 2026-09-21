@@ -499,10 +499,7 @@ pub fn result2md(result: &crate::types::ParseResult) -> String {
         for block in &page.blocks {
             // `keep_header_footer` defaults to `False`, and upstream keys
             // the drop on its own native label, not a normalized one.
-            if matches!(
-                block.category_raw.as_str(),
-                "Page-header" | "Page-footer"
-            ) {
+            if matches!(block.category_raw.as_str(), "Page-header" | "Page-footer") {
                 continue;
             }
             let content = block_content(block);
@@ -757,7 +754,10 @@ mod tests {
             ("<fcel>A", "<table><tr><td>A</td></tr></table>"),
             // An unknown tag is *not* a control token, so the text before
             // the first real token is dropped rather than shifting cells.
-            ("<zzzz>nope<fcel>ok<nl>", "<table><tr><td>ok</td></tr></table>"),
+            (
+                "<zzzz>nope<fcel>ok<nl>",
+                "<table><tr><td>ok</td></tr></table>",
+            ),
             ("notags just text", "<table><tr></tr></table>"),
             (
                 "<fcel>A<lcel><ucel><xcel><nl>",
@@ -1064,7 +1064,10 @@ mod tests {
             !md.contains("- first item"),
             "upstream never adds a list marker: {md}"
         );
-        assert!(md.contains("<table><tr><td>a</td>"), "HTML table kept: {md}");
+        assert!(
+            md.contains("<table><tr><td>a</td>"),
+            "HTML table kept: {md}"
+        );
         assert_eq!(
             md,
             "# not a heading [1] * 2\n\nfirst item\n\n<table><tr><td>a</td><td>b</td></tr></table>\n\n$$\nx+y\n$$\n"

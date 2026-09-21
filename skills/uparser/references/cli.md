@@ -131,6 +131,12 @@ Options:
           
           [possible values: detection, segmentation]
 
+      --monkeyocr-retry-repeat
+          `monkeyocr-v2` only: re-issue a per-block recognition request at an escalating temperature when the response looks like a repeat loop (upstream `core_runner.py`'s `--retry-repeat`, which is off by default there too). Keyed into the cache
+
+      --monkeyocr-retry-repeat-max-retries <N>
+          `monkeyocr-v2` only: how many repeat-retry attempts to make (upstream default 3). No effect without `--monkeyocr-retry-repeat`
+
       --no-cache
           Bypass the content-hash cache (T-9.1) entirely — forces a real re-parse even if an identical `(bytes, protocol, endpoint, model)` fingerprint was cached from a prior run
 

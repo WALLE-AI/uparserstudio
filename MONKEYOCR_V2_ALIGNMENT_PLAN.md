@@ -18,10 +18,17 @@
 | OmniDocBench Table TEDS ↑ | 0.8336 | 0.8797 |
 | OmniDocBench Formula Edit ↓ | 0.2747 | 0.1042 |
 
-而官方 README 的 OmniDocBench v1.6 端到端榜上 **MonkeyOCRv2-B-Parsing 以 83.3 位列第一**
-（超过 dots.mocr 80.5、chandra-ocr-2 79.7、MinerU-2.5-Pro 71.0）。本地 `127.0.0.1:8011`
-跑的正是 `MonkeyOCRv2-B-Parsing` 官方权重（已确认在线）—— 也就是说这个差距
+本地 `127.0.0.1:8011` 跑的正是 `MonkeyOCRv2-B-Parsing` 官方权重（已确认在线），所以这个差距
 **来自适配器，不来自模型**。
+
+> **更正（2026-09-21）**：本文档初稿写的是"官方 README 的 OmniDocBench v1.6 端到端榜上
+> MonkeyOCRv2-B-Parsing 以 83.3 位列第一"。**这是错的**，重新核对 README 后确认：
+> 83.3 那张表是 **MDPBench**（§6，多语言文档解析），不是 OmniDocBench；README 里唯一的
+> OmniDocBench 1.6 数字在 §2，属于**独立的公式识别子模型**（UniMERNet-T + MonkeyOCRv2-S
+> backbone，在**真值公式裁剪图**上 CDM 90.8 / ExpRate 61.1），与端到端解析无关。
+> **官方从未公布 MonkeyOCRv2 的 OmniDocBench 端到端解析成绩**，因此本文档里不存在
+> "对齐到某个官方 OmniDocBench 数字"这回事；可比的参照只有本仓库自己榜单上的其他引擎。
+> 结论本身不受影响（差距确实来自适配器），但"官方第一"这个说法必须收回。
 
 逐行比对 `core_runner.py` 后确认了 8 处真实偏差（第 2 节，每条都能指到上游具体行为），
 其中第 1 条（识别裁剪图被我们放大到 100 万像素）和第 4 条（OTSL 单元格内任意 `<tag>`
@@ -202,3 +209,95 @@ TEDS +0.0437 直接对应 §2 的第 4/5 条（OTSL 分词与转义）；速度 
 - **`Title`/`Section-header` 的多行前缀**：上游对每一行都加 `# `/`## `，我们用
   `MergeHint::TitleLevel` 交给渲染器，单行标题等价，多行标题不等价。
 - **`MOCR2_TABLE_HTML=1` 分支**未实现（上游默认 `0`，即 OTSL→HTML）。
+
+---
+
+## 8. 第二轮：文档组装对齐（2026-09-20/21）
+
+§7 交付后仍有疑问：既然协议层已经对齐，为什么精度还是不够好？本轮回答的就是
+"**是不是我们后处理的问题**"。答案是：**是，而且几乎全部是**——但问题不在
+`monkeyocr_post.rs`，而在它之后的共享渲染路径。
+
+### 8.1 先证明 `monkeyocr_post.rs` 本身已经忠实
+
+上游仓库自带测试套件（`parsing/tests/`），本地 `pytest` 可直接跑通（39 passed）。把
+`test_otsl_to_html.py` 的全部 16 个用例、`test_repeat_detection.py` 的 6 个参数化用例
+逐条搬到我们的 Rust 测试里，**一次通过，无需改动实现**。这比自选 golden 更有说服力：
+这些是上游作者自己认为关键的用例（含他们标注的 "#24 行内换行被截断" 回归、
+`train/html2otsl.py` 产出的完整跨行跨列矩阵）。
+
+结论：协议层与内容后处理层（OTSL、公式、重复检测、bbox、容错解析）已经对齐，
+**不是剩余差距的来源**。
+
+### 8.2 用同一份模型输出做 A/B，把"组装"单独摘出来
+
+跑一遍 `--format json --no-postprocess` 拿到 1651 页的原始 block，再用一个
+忠实移植 `result2md` 的脚本（`benchmark/result2md_upstream.py`）重新组装成 Markdown。
+两侧模型输出同源，**唯一差别就是文档组装**：
+
+| 指标 | 我们的共享渲染器 | 上游 `result2md` | 差 |
+|---|---:|---:|---|
+| Text Edit ↓ | 0.0834 | **0.0498** | −0.0336 |
+| Table Edit ↓ | 0.3967 | **0.1040** | −0.2927 |
+| Formula Edit ↓ | 0.1990 | **0.1592** | −0.0398 |
+| Formula CDM ↑ | 0.8981 | **0.9377** | +0.0396 |
+| Table TEDS ↑ | 0.8373 | **0.8448** | +0.0075 |
+| Reading Order Edit ↓ | 0.1549 | **0.1328** | −0.0221 |
+
+六项全部变好。三个具体成因：
+
+1. **表格被降级成 Markdown 管道表**。共享渲染器对"无跨行跨列"的表格会转成
+   `| a | b |`；上游是把 `<table>` HTML **原样**输出。这几乎就是 Table Edit 那 −0.29 的全部。
+2. **注入了 `- ` 列表标记**。上游 `_format_block_fields` 对 `List-item` **不做任何处理**，
+   标记是模型没写过的内容。1651 页里 189 页受影响。
+3. **Markdown 元字符被转义**。上游输出裸文本。509 页受影响。
+
+### 8.3 一个被证伪的猜测（记录下来，避免以后重复怀疑）
+
+我一度怀疑 `content_normalize` 的 CJK 标点统一（半角 `;` → 全角 `；`）是大头：真值里
+**27.3% 的中文文本块本来就含半角标点**（9332 个字符会被我们改写）。于是做了第三个变体
+（上游组装 + 我们的标点归一化）跑全量：Text Edit **0.0498 → 0.0504**，只差 +0.0007，
+**基本没有影响**。统计上的"改写机会"不等于"评测代价"。这个猜测被自己的实验否掉了，
+没有据此去动共享模块。
+
+### 8.4 实现
+
+- 新增 `monkeyocr_post::result2md(&ParseResult) -> String`：忠实移植 `result2md` +
+  `_format_block_fields` 的 content 分支（丢弃 `Page-header`/`Page-footer`、
+  `Title`/`Section-header` **逐行**加 `# `/`## `、表格用 HTML 原文、公式用 `$$` 包裹、
+  图片 `![image](path)`、`\n\n` 连接、整篇去 U+FFFD）。多页文档按上游 `_finalize_job`
+  的做法把所有页的 block 摊平成一条流，**不插页分隔**。
+- `render::render_markdown` 增加一个分支：协议自带组装时走它。依据是 `ascend.rs`
+  里 `ParatextPolicy` 文档自己写下的原则——"each adapter should reproduce its own
+  upstream's document assembly"，本轮只是把这条原则从"页眉页脚"扩展到整个组装。
+- `runner::postprocess_pages` 对这类协议跳过段落合并与标点归一化（上游两样都不做），
+  因此 `--format json` 的 IR 与 `--format markdown` 保持一致。
+- 影响面被刻意限制在 `owns_document_assembly("monkeyocr-v2")` 一个判断上，
+  共享渲染器与其他协议**零改动**。
+
+### 8.5 结果
+
+OmniDocBench v1.6 全量 1651 页（真实 CLI 产出，非脚本重建）：
+
+| 指标 | 对齐前（9-17） | 协议对齐后（9-18） | **+ 组装对齐（9-20）** |
+|---|---:|---:|---:|
+| Text Edit ↓ | 0.1408 | 0.0834 | **0.0499** |
+| Formula Edit ↓ | 0.2747 | 0.1990 | **0.1589** |
+| Formula CDM ↑ | 0.8050 | 0.8981 | **0.9398** |
+| Table TEDS ↑ | 0.8336 | 0.8373 | **0.8470** |
+| TEDS-S ↑ | 0.8715 | 0.8745 | **0.8851** |
+| Reading Order Edit ↓ | 0.1922 | 0.1549 | **0.1331** |
+
+在本仓库自己的榜单上，`monkeyocr-v2` 的 **Text Edit 与 Reading Order 现在都是第一**
+（分别优于 navidc-ocr 的 0.0593 / 0.1356）；表格类指标仍落后 navidc-ocr。
+
+opendataloader-bench 全量 200 篇同步重测：**0.8827 → 0.8824**（nid +0.001、teds +0.001、
+mhs −0.003、2.497 s/篇），在噪声范围内 —— 该 harness 的评测器本来就能正确消费管道表，
+所以组装对齐在那边不涨也不跌，**没有回归**。
+
+### 8.6 由此暴露的、超出本协议范围的问题（未处理）
+
+共享渲染器把 HTML 表格降级成管道表这件事，对**任何以 HTML 表格为原生输出的协议**
+都会在 OmniDocBench 口径上造成同类损失（mineru-vlm / navidc-ocr / pipeline 都是）。
+本轮只给 monkeyocr-v2 开了口子，**没有**去动共享渲染器——那会移动其余所有行的数字，
+需要单独立项并重测整张榜。这是一个已知的、有量级证据的待办，不是遗漏。
