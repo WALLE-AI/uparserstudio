@@ -3,10 +3,12 @@
   (Windows mirror of uparser-parse.sh). Give it a file; it returns Markdown on
   stdout and the binary's own semantic exit code.
 
-  It never selects `mock`, picks
-  `native` (offline) when no VLM endpoint is resolvable and `auto` (with the
-  endpoint/model injected) when one is, and defaults --format to markdown.
-  Endpoint is resolved from --endpoint / $env:UPARSER_ENDPOINT / config[mineru-vlm].
+  It never selects `mock`, picks `native` (offline) when no VLM endpoint is
+  configured anywhere and `auto` when one is, and defaults --format to markdown.
+  It no longer injects --endpoint/--model: the binary resolves those itself
+  (per key, keyed on the post-routing protocol, with [defaults] layering and
+  api_key support this wrapper's reader cannot express). The config is consulted
+  here only to answer "does any endpoint exist at all?".
   Anything you pass through (incl. an explicit --mode/--protocol/--endpoint/--format)
   is forwarded unchanged and always wins.
 
@@ -35,24 +37,30 @@ $a = @($Args)
 $hasMode = ($a -contains '--mode') -or [bool]($a | Where-Object { $_ -like '--mode=*' })
 $hasProto = ($a -contains '--protocol') -or [bool]($a | Where-Object { $_ -like '--protocol=*' })
 $hasEp = ($a -contains '--endpoint') -or [bool]($a | Where-Object { $_ -like '--endpoint=*' })
-$hasModel = ($a -contains '--model') -or [bool]($a | Where-Object { $_ -like '--model=*' })
 $hasFormat = ($a -contains '--format') -or [bool]($a | Where-Object { $_ -like '--format=*' })
+
+# Any VLM section, plus [defaults] — this previously looked only at
+# [mineru-vlm], so a machine configured for e.g. dots-ocr alone silently
+# fell through to native.
+function Test-EndpointConfigured {
+  if ($env:UPARSER_ENDPOINT) { return $true }
+  foreach ($sec in @('defaults', 'mineru-vlm', 'monkeyocr-v2', 'navidc-ocr', 'dots-ocr', 'generic-vlm')) {
+    if (Read-Ini $sec 'endpoint') { return $true }
+  }
+  return $false
+}
 
 $inject = @()
 if (-not $hasFormat) { $inject += @('--format', 'markdown') }
 
 if (-not $hasMode -and -not $hasProto) {
-  $ep = if ($env:UPARSER_ENDPOINT) { $env:UPARSER_ENDPOINT } else { Read-Ini 'mineru-vlm' 'endpoint' }
-  $md = if ($env:UPARSER_MODEL) { $env:UPARSER_MODEL } else { Read-Ini 'mineru-vlm' 'model' }
-  if ($hasEp -or $ep) {
+  if ($hasEp -or (Test-EndpointConfigured)) {
     $inject += @('--protocol', 'auto')
-    if (-not $hasEp -and $ep) { $inject += @('--endpoint', $ep) }
-    if (-not $hasModel -and $md) { $inject += @('--model', $md) }
-    [Console]::Error.WriteLine("uparser-parse: no --protocol given; using 'auto' with endpoint $(if($ep){$ep}else{'<from cli>'})")
+    [Console]::Error.WriteLine("uparser-parse: no --protocol given; using 'auto' (endpoint resolved by the binary)")
   }
   else {
     $inject += @('--protocol', 'native')
-    [Console]::Error.WriteLine("uparser-parse: no --protocol and no endpoint; using 'native' (offline; bounded page OCR may apply)")
+    [Console]::Error.WriteLine("uparser-parse: no --protocol and no endpoint configured; using 'native' (offline; bounded page OCR may apply)")
   }
 }
 

@@ -55,10 +55,11 @@ pub struct PaddleXStructureAdapter {
 
 impl Default for PaddleXStructureAdapter {
     fn default() -> Self {
+        let spec = crate::protocol_spec::spec_of("paddlex-structure");
         Self {
-            endpoint: "http://localhost:8080/layout-parsing".to_owned(),
-            timeout: Duration::from_secs(120),
-            max_retries: 2,
+            endpoint: spec.endpoint_default(),
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 }

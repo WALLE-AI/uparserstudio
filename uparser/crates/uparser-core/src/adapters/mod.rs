@@ -406,6 +406,11 @@ pub struct PipelineConfig {
 pub struct AdapterOverrides {
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    /// Per-request timeout / retry budget. `None` keeps the protocol's own
+    /// default from `protocol_spec.rs`. Credentials are deliberately *not*
+    /// here — they belong to the transport, not to any adapter.
+    pub timeout: Option<std::time::Duration>,
+    pub max_retries: Option<u32>,
     /// `pipeline`-only stage-backend overrides; ignored by every other
     /// adapter.
     pub pipeline: Option<PipelineConfig>,
@@ -457,6 +462,35 @@ impl Registry {
 
     /// Registry pre-populated with every built-in adapter's factory.
     pub fn with_builtins() -> Self {
+        /// Apply the timeout/retry overrides every HTTP-backed adapter
+        /// shares. Written once here rather than repeated in each closure,
+        /// so a newly registered adapter can't quietly miss one — the same
+        /// "duplicated orchestration where only one copy gets the fix"
+        /// pattern that produced this project's scheduler deadlock.
+        macro_rules! apply_common {
+            ($adapter:expr, $overrides:expr) => {
+                if let Some(timeout) = $overrides.timeout {
+                    $adapter.timeout = timeout;
+                }
+                if let Some(max_retries) = $overrides.max_retries {
+                    $adapter.max_retries = max_retries;
+                }
+            };
+        }
+
+        /// These protocols' service contracts have no model field at all,
+        /// so a configured `model` cannot be honoured. Say so instead of
+        /// dropping it silently — the setting would otherwise look like it
+        /// worked.
+        fn warn_model_ignored(protocol: &str, overrides: &AdapterOverrides) {
+            if let Some(model) = &overrides.model {
+                eprintln!(
+                    "warning: protocol {protocol:?} has no model parameter; ignoring the \
+                     configured model {model:?}"
+                );
+            }
+        }
+
         let mut registry = Self::new();
 
         registry.register("mock", |_overrides| Arc::new(mock::MockAdapter::default()));
@@ -473,6 +507,7 @@ impl Registry {
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
             }
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -484,6 +519,7 @@ impl Registry {
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
             }
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -495,6 +531,7 @@ impl Registry {
             if let Some(model) = &overrides.model {
                 adapter.model = model.clone();
             }
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -514,6 +551,7 @@ impl Registry {
                     adapter.retry_repeat_max_retries = max_retries;
                 }
             }
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -530,6 +568,7 @@ impl Registry {
             {
                 adapter.layout_mode = mode;
             }
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -541,6 +580,8 @@ impl Registry {
             if let Some(endpoint) = &overrides.endpoint {
                 adapter.endpoint = endpoint.clone();
             }
+            warn_model_ignored("paddleocr", overrides);
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -549,6 +590,8 @@ impl Registry {
             if let Some(endpoint) = &overrides.endpoint {
                 adapter.endpoint = endpoint.clone();
             }
+            warn_model_ignored("paddlex-structure", overrides);
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 
@@ -560,6 +603,8 @@ impl Registry {
             if let Some(cfg) = &overrides.pipeline {
                 adapter.apply_config(cfg);
             }
+            warn_model_ignored("pipeline", overrides);
+            apply_common!(adapter, overrides);
             Arc::new(adapter)
         });
 

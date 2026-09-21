@@ -56,7 +56,7 @@ Options:
           Protocol name (`native`, `tesseract`, `mineru-vlm`, `dots-ocr`, `generic-vlm`, `monkeyocr-v2`, `navidc-ocr`, `pipeline`, `paddleocr`, `paddlex-structure`, `mock`), or `auto` (the default) to run the Profiler+Router first and pick one automatically (per ARCHITECTURE.md §13.5). Defaulting to `auto` rather than `mock` keeps an Agent that omits `--protocol` from silently getting placeholder output — `mock` is now explicit-only
 
       --endpoint <ENDPOINT>
-          Override the adapter's default endpoint (ignored by adapters with no endpoint, e.g. `mock`/`native`)
+          Override the adapter's default endpoint (ignored by adapters with no endpoint, e.g. `mock`/`native`). Usually unnecessary: set it once in `~/.config/uparser/config.toml` instead — see "Configuration file" below
 
       --model <MODEL>
           Override the adapter's default model name (same scope as `--endpoint`)
@@ -252,3 +252,27 @@ Usage: uparser cache clear
 Options:
   -h, --help  Print help
 ```
+
+## Configuration file
+
+Endpoints, models, credentials, timeouts and `pipeline`'s per-stage endpoints are all configurable in `~/.config/uparser/config.toml` (override the path with `$UPARSER_CONFIG`), so they need not be repeated on every invocation. Resolution runs per key: CLI flag -> `UPARSER_ENDPOINT`/`UPARSER_MODEL`/`UPARSER_API_KEY` -> `[<effective-protocol>]` -> `[defaults]` -> the protocol's built-in default. Sections match the protocol chosen *after* `--mode auto` routes.
+
+```toml
+[defaults]
+timeout_secs = 120
+api_key_env  = "MY_TOKEN"        # read the secret from this env var
+
+[mineru-vlm]
+endpoint = "http://127.0.0.1:19122/v1/chat/completions"
+model    = "MinerU2.5-Pro-2605-1.2B"
+
+[pipeline]
+endpoint = "http://127.0.0.1:9001"   # stage URLs derive from this base
+
+[pipeline.stages]                    # override individually if stages are split across hosts
+layout = "http://gpu-a:9101/v2/pipeline/layout:batch"
+```
+
+`api_key` is sent as `Authorization: Bearer <key>`; `[<protocol>.headers]` adds arbitrary headers. `paddleocr`/`paddlex-structure`/`pipeline` have no model parameter and report a configured `model` as ignored. `native`/`tesseract`/`mock` need no configuration at all.
+
+Full template with every protocol and key: `references/config.example.toml`.

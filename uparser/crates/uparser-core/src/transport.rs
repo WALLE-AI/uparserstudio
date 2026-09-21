@@ -115,10 +115,43 @@ pub fn image_data_url(png_bytes: &[u8]) -> String {
     format!("data:image/png;base64,{encoded}")
 }
 
+/// Credentials and extra headers applied to every request this transport
+/// makes. Resolved once from config (`agent_config`) and handed to the
+/// single production `Transport` construction site, so no adapter has to
+/// know about authentication at all.
+///
+/// `bearer` is a secret: it is never logged, never included in an error
+/// message, and never part of a cache key. `Debug` is implemented by hand
+/// to keep it out of any accidental `{:?}`.
+#[derive(Clone, Default)]
+pub struct Auth {
+    pub bearer: Option<String>,
+    pub headers: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Auth")
+            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
+            .field(
+                "headers",
+                &self.headers.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+impl Auth {
+    fn is_empty(&self) -> bool {
+        self.bearer.is_none() && self.headers.is_empty()
+    }
+}
+
 pub struct Transport {
     client: reqwest::Client,
     /// Document-level concurrency budget, shared with the scheduler.
     semaphore: Arc<Semaphore>,
+    auth: Auth,
 }
 
 impl Transport {
@@ -130,7 +163,35 @@ impl Transport {
         Self {
             client: reqwest::Client::new(),
             semaphore: Arc::new(Semaphore::new(max_concurrency)),
+            auth: Auth::default(),
         }
+    }
+
+    /// The constructor the production path uses. `new`/`with_concurrency`
+    /// keep their existing signature and unauthenticated behaviour so the
+    /// dozen-odd test construction sites need no change.
+    pub fn with_concurrency_and_auth(max_concurrency: usize, auth: Auth) -> Self {
+        Self {
+            auth,
+            ..Self::with_concurrency(max_concurrency)
+        }
+    }
+
+    /// The one place credentials are attached. Both the JSON and the binary
+    /// request builders route through it, so there is no path that can
+    /// silently skip authentication.
+    fn authenticate(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.auth.is_empty() {
+            return builder;
+        }
+        let mut builder = builder;
+        if let Some(token) = &self.auth.bearer {
+            builder = builder.bearer_auth(token);
+        }
+        for (name, value) in &self.auth.headers {
+            builder = builder.header(name, value);
+        }
+        builder
     }
 
     pub fn semaphore(&self) -> Arc<Semaphore> {
@@ -211,13 +272,10 @@ impl Transport {
         loop {
             attempt += 1;
             let result = self
-                .client
-                .post(endpoint)
-                .timeout(timeout)
-                .header(
+                .authenticate(self.client.post(endpoint).timeout(timeout).header(
                     reqwest::header::CONTENT_TYPE,
                     "application/vnd.uparser.tensor",
-                )
+                ))
                 .body(body.clone())
                 .send()
                 .await;
@@ -292,9 +350,7 @@ impl Transport {
         loop {
             attempt += 1;
             let result = self
-                .client
-                .post(endpoint)
-                .timeout(timeout)
+                .authenticate(self.client.post(endpoint).timeout(timeout))
                 .json(&body)
                 .send()
                 .await;

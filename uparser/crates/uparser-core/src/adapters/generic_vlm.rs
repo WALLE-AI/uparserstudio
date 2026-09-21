@@ -24,11 +24,12 @@ pub struct GenericVlmAdapter {
 
 impl Default for GenericVlmAdapter {
     fn default() -> Self {
+        let spec = crate::protocol_spec::spec_of("generic-vlm");
         Self {
-            endpoint: "http://localhost:8000/v1/chat/completions".into(),
-            model: "model".into(),
-            timeout: Duration::from_secs(120),
-            max_retries: 2,
+            endpoint: spec.endpoint_default(),
+            model: spec.model_default(),
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 }

@@ -460,13 +460,13 @@ pub struct PipelineV2Adapter {
 
 impl Default for PipelineV2Adapter {
     fn default() -> Self {
-        let endpoint_base = "http://localhost:9001".to_owned();
-        Self::from_endpoint_base(endpoint_base)
+        Self::from_endpoint_base(crate::protocol_spec::spec_of("pipeline").endpoint_default())
     }
 }
 
 impl PipelineV2Adapter {
     pub fn from_endpoint_base(endpoint_base: String) -> Self {
+        let spec = crate::protocol_spec::spec_of("pipeline");
         let base = endpoint_base.trim_end_matches('/').to_owned();
         Self {
             endpoint_base: base.clone(),
@@ -484,8 +484,8 @@ impl PipelineV2Adapter {
             table_endpoint: format!("{base}/v2/pipeline/table:batch"),
             bare_table_endpoint_base: None,
             language: "ch".to_owned(),
-            timeout: Duration::from_secs(180),
-            max_retries: 2,
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 

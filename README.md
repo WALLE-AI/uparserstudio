@@ -218,11 +218,21 @@ cp -r skills/uparser <项目>/.claude/skills/uparser
 
 首次调用时,skill 的 `ensure_uparser.sh` 会按 `PATH → 版本化缓存 → 从 GitHub Release 下载版本固定的预编译包(直连→ghfast.top 镜像兜底,校验 sha256 + 冒烟)→ 源码构建兜底` 解析出 `uparser` 并缓存到 `~/.cache/uparser/versions/<version>/<platform>/`。启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
 
-**端点配置化**(免每次带 `--endpoint`):把端点写进 `~/.config/uparser/config.toml`(模板见 `skills/uparser/references/config.example.toml`),用包装器调用——`scripts/uparser-run.sh`(Linux/WSL)或 `scripts/uparser-run.ps1`(Windows)——它会先确保二进制就位,再按 `--protocol` 自动注入 `--endpoint`/`--model`:
+**端点配置化**(免每次带 `--endpoint`):把配置写进 `~/.config/uparser/config.toml`(可用 `$UPARSER_CONFIG` 改路径;完整模板见 `skills/uparser/references/config.example.toml`),**二进制自己读**——CLI、库 API、Node/Python 绑定走同一条链:
+
+```toml
+[mineru-vlm]
+endpoint = "http://127.0.0.1:19122/v1/chat/completions"
+model    = "MinerU2.5-Pro-2605-1.2B"
+```
 
 ```bash
-skills/uparser/scripts/uparser-run.sh parse --protocol mineru-vlm --format markdown doc.pdf
+uparser parse doc.pdf --protocol mineru-vlm --format markdown   # 无需任何端点 flag
 ```
+
+解析顺序**逐键生效**:命令行 flag → `UPARSER_ENDPOINT`/`UPARSER_MODEL`/`UPARSER_API_KEY` → `[<协议>]` 段 → `[defaults]` 段 → 协议内置默认值。段名匹配的是 `--protocol auto` **路由之后**的实际协议。同一条链还负责 `api_key`(以 `Authorization: Bearer` 发送;或用 `api_key_env` 指定环境变量名,避免密钥落盘)、自定义请求头、`timeout_secs`/`max_retries`,以及 `pipeline` 的九个分阶段端点(`[pipeline.stages]`,仅此一处可配)。
+
+`scripts/uparser-run.sh` / `.ps1` 仍可用于「确保二进制就位后再执行」,但已**不再注入** `--endpoint`/`--model`——二进制的解析更完整(按路由后协议查表、支持 `[defaults]` 与鉴权),包装器那份 INI 读取反而在没写 `--protocol` 时会去查并不存在的 `[auto]` 段。
 
 **平台**:`ensure_uparser.sh`(Linux/WSL,glibc ≥ 2.35)与 `ensure_uparser.ps1`(Windows x86_64)各自独立固定版本号,分别指向仍有对应 Release 资产的最新版本——两者不一定相同版本(见各脚本内注释)。其他平台(arm64 / 旧 glibc / 无匹配资产)下载器自动回退到源码构建;Windows 另可用 `scripts/build-windows.ps1`(需 rustup + MSVC)。覆盖变量:`UPARSER_VERSION` / `UPARSER_REPO` / `UPARSER_HOME`。
 

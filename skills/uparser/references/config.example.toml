@@ -1,31 +1,139 @@
-# uparser endpoint config — copy to ~/.config/uparser/config.toml
+# uparser configuration — copy to ~/.config/uparser/config.toml
 # (Windows: same path under your home, i.e. %USERPROFILE%\.config\uparser\config.toml)
+# Override the path with $UPARSER_CONFIG.
 #
-# Read directly by the `uparser` binary (parse/doctor) as the lowest-precedence
-# fallback for --endpoint/--model: explicit flag > $UPARSER_ENDPOINT /
-# $UPARSER_MODEL env > this file's [<protocol>] section. The section is matched
-# against the *effective* protocol, so `--mode auto` that routes to
-# mineru-vlm reads [mineru-vlm]. Override the path with $UPARSER_CONFIG.
-# (The scripts/uparser-run.* wrappers read the same file; now redundant.)
+# Read directly by the `uparser` binary — by `parse` and `doctor`, and by the
+# Node/Python bindings, which share the same resolution chain.
+#
+# Resolution order, applied PER KEY (not per section):
+#
+#   1. the explicit CLI flag            --endpoint / --model / --<stage>-endpoint
+#   2. environment                      UPARSER_ENDPOINT / UPARSER_MODEL / UPARSER_API_KEY
+#   3. this file's [<protocol>] section
+#   4. this file's [defaults] section
+#   5. the protocol's built-in default  (declared in protocol_spec.rs)
+#
+# Sections are matched against the *effective* protocol, i.e. after
+# `--mode auto` has routed to a concrete adapter — so a routed mineru-vlm
+# reads [mineru-vlm], never [auto].
+#
+# Everything is optional. An absent file is not an error.
+# Values must be valid TOML: quote your strings. (A file that fails to parse
+# falls back to a legacy flat reader that tolerated unquoted values, and warns
+# on stderr — don't rely on it in new configs.)
+
+
+# ---------------------------------------------------------------------------
+# [defaults] — inherited by every protocol that doesn't override the key
+# ---------------------------------------------------------------------------
+# [defaults]
+# endpoint     = "http://127.0.0.1:8000/v1/chat/completions"
+# model        = "your-model"
+# timeout_secs = 120     # per request; default varies per protocol (60-180)
+# max_retries  = 2       # retries after the first attempt
+#
+# Authentication. Sent as `Authorization: Bearer <key>` on every request.
+# Needed for hosted/gateway endpoints; local vLLM usually needs neither.
+# api_key     = "sk-..."          # literal
+# api_key_env = "MY_TOKEN_VAR"    # OR read it from this env var (preferred —
+#                                 # keeps the secret out of the file)
+#
+# Extra headers, sent on every request.
+# [defaults.headers]
+# X-Tenant = "acme"
+
+
+# ---------------------------------------------------------------------------
+# VLM protocols — OpenAI-compatible chat-completions endpoints (vLLM/LMDeploy)
+# ---------------------------------------------------------------------------
 
 [mineru-vlm]
 endpoint = "http://127.0.0.1:19122/v1/chat/completions"
 model    = "MinerU2.5-Pro-2605-1.2B"
+# api_key_env = "MINERU_TOKEN"
+# timeout_secs = 60          # this protocol's built-in default
+# [mineru-vlm.headers]
+# X-Tenant = "acme"
 
 # [dots-ocr]
 # endpoint = "http://127.0.0.1:8000/v1/chat/completions"
 # model    = "dots-ocr"
 
 # [monkeyocr-v2]
-# endpoint = "http://127.0.0.1:8000/v1/chat/completions"
-# model    = "MonkeyOCR-v2"
+# endpoint = "http://127.0.0.1:8888/v1/chat/completions"
+# model    = "MonkeyOCRv2-B-Parsing"
+# Upstream's own default is retry_repeat = false; enable only if you see
+# looping/repeated output on dense pages.
+# retry_repeat             = false
+# retry_repeat_max_retries = 3
 
 # [navidc-ocr]
-# NOTE: stock vLLM cannot load this checkpoint (its config says
-# qwen2_5_vl but the text tower is Qwen3-shaped). Install the upstream
-# plugin first: pip install -e opensource/NaviDC-OCR/NaviOCR-vllm
-# (pins vllm==0.11.0). Keep --max-model-len >= 8192.
-# endpoint = "http://127.0.0.1:8010/v1/chat/completions"
-# model    = "StarDoc-AI/NaviDC-OCR"
+# NOTE: stock vLLM cannot load this checkpoint (its config says qwen2_5_vl
+# but the text tower is Qwen3-shaped). Install the upstream plugin first:
+#   pip install -e opensource/NaviDC-OCR/NaviOCR-vllm   (pins vllm==0.11.0)
+# Keep --max-model-len >= 8192.
+# endpoint    = "http://127.0.0.1:8010/v1/chat/completions"
+# model       = "StarDoc-AI/NaviDC-OCR"
+# layout_mode = "detection"       # detection | segmentation
 
-# native needs no endpoint/model — nothing to configure here.
+# [generic-vlm]
+# Any chat-completions VLM told to emit Markdown. Use for a model uparser
+# has no dedicated adapter for.
+# endpoint = "http://127.0.0.1:8000/v1/chat/completions"
+# model    = "qwen2.5-vl-7b"
+
+
+# ---------------------------------------------------------------------------
+# OCR / structure services — their own REST contracts, not chat-completions.
+# These have no model parameter; a configured `model` is reported as ignored.
+# ---------------------------------------------------------------------------
+
+# [paddleocr]
+# endpoint = "http://127.0.0.1:8868/predict/ocr_system"
+
+# [paddlex-structure]
+# PP-StructureV3's /layout-parsing service.
+# endpoint = "http://127.0.0.1:8080/layout-parsing"
+
+
+# ---------------------------------------------------------------------------
+# [pipeline] — the multi-stage protocol
+# ---------------------------------------------------------------------------
+# `endpoint` is a BASE url; all stage URLs are derived from it as
+# <base>/v2/pipeline/{layout,mfd,ocr,mfr,table}:batch. Setting it alone is
+# enough for a single-host deployment.
+#
+# [pipeline]
+# endpoint     = "http://127.0.0.1:9001"
+# language     = "ch"
+# timeout_secs = 180
+#
+# Override individual stages only when they live on different hosts (e.g. one
+# GPU box per stage). Anything left unset keeps its derived value.
+# [pipeline.stages]
+# layout            = "http://gpu-a:9101/v2/pipeline/layout:batch"
+# formula_detection = "http://gpu-a:9102/v2/pipeline/mfd:batch"
+# ocr               = "http://gpu-b:9103/v2/pipeline/ocr:batch"
+# formula           = "http://gpu-b:9104/v2/pipeline/mfr:batch"
+# table             = "http://gpu-c:9105/v2/pipeline/table:batch"
+#
+# "Bare" tensor endpoints: Rust owns preprocessing/decoding and the service
+# serves raw model tensors. bare_formula requires formula_tokenizer, and
+# bare_ocr_base requires ocr_dictionary — each pair must be set together.
+# bare_layout       = "http://gpu-a:9201/layout"
+# bare_ocr_base     = "http://gpu-b:9202"
+# bare_formula      = "http://gpu-b:9203/formula"
+# bare_table_base   = "http://gpu-c:9204"
+#
+# [pipeline.paths]
+# ocr_dictionary    = "/models/ppocr_keys_v1.txt"
+# formula_tokenizer = "/models/mfr/tokenizer.json"
+
+
+# ---------------------------------------------------------------------------
+# Protocols with nothing to configure
+# ---------------------------------------------------------------------------
+# native     — zero-model, pure-Rust PDF text layer. No endpoint, no model.
+# tesseract  — local OCR subprocess. Language comes from $UPARSER_OCR_LANG
+#              (default "eng"), not from this file.
+# mock       — explicit-only placeholder output. Never select it for real work.

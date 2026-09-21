@@ -12,7 +12,6 @@
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Args)
 $ErrorActionPreference = 'Stop'
-$cfg = if ($env:UPARSER_CONFIG) { $env:UPARSER_CONFIG } else { Join-Path $HOME '.config/uparser/config.toml' }
 
 $proto = 'mineru-vlm'; $epCli = ''
 for ($i = 0; $i -lt $Args.Count; $i++) {
@@ -24,17 +23,6 @@ for ($i = 0; $i -lt $Args.Count; $i++) {
   }
 }
 
-function Read-Ini([string]$section, [string]$key) {
-  if (-not (Test-Path $cfg)) { return $null }
-  $cur = ''
-  foreach ($line in Get-Content -LiteralPath $cfg) {
-    if ($line -match '^\s*\[(.+?)\]\s*$') { $cur = $Matches[1].Trim(); continue }
-    if ($cur -eq $section -and $line -match ('^\s*' + [regex]::Escape($key) + '\s*=\s*(.+?)\s*$')) {
-      return $Matches[1].Trim().Trim('"').Trim("'")
-    }
-  }
-  return $null
-}
 function J($v) { if ($null -eq $v -or $v -eq '') { 'null' } else { '"' + $v + '"' } }
 
 $bin = (& (Join-Path $PSScriptRoot 'ensure_uparser.ps1') | Select-Object -Last 1)
@@ -48,13 +36,18 @@ $names = @()
 try { $names = (& $bin protocols | ConvertFrom-Json | ForEach-Object { $_.name }) } catch { $names = @() }
 $namesJson = ($names | ForEach-Object { '"' + $_ + '"' }) -join ','
 
-$ep = if ($epCli) { $epCli } elseif ($env:UPARSER_ENDPOINT) { $env:UPARSER_ENDPOINT } else { Read-Ini $proto 'endpoint' }
+# `doctor` resolves the endpoint itself (flag > $env:UPARSER_ENDPOINT >
+# config[<protocol>] > config[defaults] > built-in default) and echoes the
+# resolved value back, so read it from doctor's output rather than
+# re-implementing the lookup here — this wrapper's copy could only ever see
+# one flat section and knew nothing about [defaults] or api_key.
+$ep = $null
 $reachable = 'null'
-if ($ep) {
-  try {
-    $d = (& $bin doctor $proto --endpoint $ep | ConvertFrom-Json)
-    $reachable = if ($d.reachable) { 'true' } else { 'false' }
-  } catch { $reachable = 'false' }
-}
+try {
+  $d = if ($epCli) { (& $bin doctor $proto --endpoint $epCli | ConvertFrom-Json) }
+       else { (& $bin doctor $proto | ConvertFrom-Json) }
+  $ep = $d.endpoint
+  if ($null -ne $d.reachable) { $reachable = if ($d.reachable) { 'true' } else { 'false' } }
+} catch { $reachable = 'false' }
 
 Write-Output ('{"binary":' + (J $bin) + ',"ok":true,"protocols":[' + $namesJson + '],"endpoint":' + (J $ep) + ',"endpoint_reachable":' + $reachable + '}')

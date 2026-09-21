@@ -198,14 +198,49 @@ pub async fn parse(path: &str, options: &ParseOptions) -> Result<ParseResult, Ap
     )
     .await
     .map_err(map_prepare_error)?;
+    // Library callers get the same env + config.toml resolution the CLI
+    // does. Before this, `api.rs` passed `options.endpoint` straight
+    // through, so a Node/Python binding with no explicit endpoint silently
+    // fell back to the adapter's `localhost` default instead of reading the
+    // user's configured one. Explicit `ParseOptions` values still win.
+    let resolved = crate::agent_config::resolve(
+        &prepared.plan.route.protocol,
+        crate::agent_config::CliOverrides {
+            endpoint: options.endpoint.clone(),
+            model: options.model.clone(),
+        },
+    );
     let execution = crate::runner::ExecutionOptions {
-        endpoint: options.endpoint.clone(),
-        model: options.model.clone(),
+        endpoint: resolved.endpoint.clone(),
+        model: resolved.model.clone(),
+        auth: crate::transport::Auth {
+            bearer: resolved.api_key.clone(),
+            headers: resolved.headers.clone(),
+        },
+        timeout: resolved.timeout,
+        max_retries: resolved.max_retries,
         window_size: options.window_size,
         max_concurrency: options.max_concurrency,
-        pipeline_config: options.pipeline_config.clone(),
-        navidc_config: options.navidc_config.clone(),
-        monkeyocr_config: options.monkeyocr_config.clone(),
+        pipeline_config: crate::agent_config::merge_pipeline_config(
+            options.pipeline_config.clone(),
+            resolved.pipeline.clone(),
+        ),
+        navidc_config: crate::adapters::NavidcConfig {
+            layout_mode: options
+                .navidc_config
+                .layout_mode
+                .or(resolved.navidc.layout_mode),
+        },
+        monkeyocr_config: crate::adapters::MonkeyOcrConfig {
+            retry_repeat: options
+                .monkeyocr_config
+                .retry_repeat
+                .or(resolved.monkeyocr.retry_repeat),
+            retry_repeat_max_retries: options
+                .monkeyocr_config
+                .retry_repeat_max_retries
+                .or(resolved.monkeyocr.retry_repeat_max_retries),
+        },
         no_cache: options.no_cache,
         no_postprocess: options.no_postprocess,
         pages: options.pages.clone(),

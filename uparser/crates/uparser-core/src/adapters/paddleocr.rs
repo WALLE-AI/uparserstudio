@@ -75,10 +75,11 @@ pub struct PaddleOcrAdapter {
 
 impl Default for PaddleOcrAdapter {
     fn default() -> Self {
+        let spec = crate::protocol_spec::spec_of("paddleocr");
         Self {
-            endpoint: "http://localhost:8868/predict/ocr_system".to_string(),
-            timeout: Duration::from_secs(60),
-            max_retries: 2,
+            endpoint: spec.endpoint_default(),
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 }

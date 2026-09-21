@@ -41,7 +41,8 @@ Then pick one line — do not over-plan a document you already understand:
   rejected:[.plan.route.candidates[]|select(.feasible|not)|{protocol,rejection}]}'
 
 # Validate a remote protocol BEFORE parsing. "Feasible" in plan != endpoint running.
-"$UP" doctor mineru-vlm --endpoint http://127.0.0.1:19122/v1/chat/completions
+# No --endpoint needed once config.toml is set; it echoes the endpoint it resolved.
+"$UP" doctor mineru-vlm | jq '{endpoint, reachable}'
 
 # Machine consumption: text + geometry + category per block.
 "$UP" parse f.pdf --mode native --format json --no-assets \
@@ -133,7 +134,9 @@ Never select `--protocol mock`; it is explicit-only placeholder output.
 
 ## Binary, endpoints, config
 
-`scripts/find_uparser.sh [--build]` locates or builds it; `scripts/uparser-check.sh` reports readiness;
+`scripts/find_uparser.sh [--build]` locates or builds it, resolving `$UPARSER_BIN` → `PATH` → a cargo
+workspace above either the script or your current directory (the cwd root matters when the skill is
+installed outside the checkout); `scripts/uparser-check.sh` reports readiness;
 `scripts/uparser-parse.sh <file>` is a one-shot wrapper that picks native vs. VLM from the resolvable
 endpoint. `.ps1` equivalents exist for Windows.
 
@@ -141,6 +144,23 @@ Build from `uparser/`: `cargo build --release --features native,pdfium`. PDFium 
 rasterization, every vision protocol, native PDF asset crops, and local OCR — pure native text
 extraction is not.
 
-Endpoint/model resolution order: explicit flag → `UPARSER_ENDPOINT` / `UPARSER_MODEL` →
-`~/.config/uparser/config.toml` (or `UPARSER_CONFIG`) under the effective protocol's section. See
-`references/config.example.toml`. `UPARSER_OCR_LANG` overrides OCR language selection.
+Endpoint/model resolution, applied **per key**: explicit flag → `UPARSER_ENDPOINT` / `UPARSER_MODEL`
+→ `~/.config/uparser/config.toml` (or `UPARSER_CONFIG`) under the effective protocol's section → that
+file's `[defaults]` section → the protocol's built-in default. The same chain resolves `api_key`
+(sent as `Authorization: Bearer`; `UPARSER_API_KEY`, or `api_key_env` to name a variable instead of
+inlining the secret), extra headers, `timeout_secs`, `max_retries`, and `pipeline`'s per-stage
+endpoints under `[pipeline.stages]` — the last of which have no env-var equivalent and are
+configurable only here. The library API and the Node/Python bindings run the identical chain.
+
+Prefer configuring once over passing flags repeatedly:
+
+```toml
+# ~/.config/uparser/config.toml
+[mineru-vlm]
+endpoint = "http://127.0.0.1:19122/v1/chat/completions"
+model    = "MinerU2.5-Pro-2605-1.2B"
+```
+
+Then `"$UP" parse f.pdf --protocol mineru-vlm` needs no endpoint flag at all. Full template with
+every protocol and key: `references/config.example.toml`. `UPARSER_OCR_LANG` overrides OCR language
+selection.

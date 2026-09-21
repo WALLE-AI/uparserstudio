@@ -60,11 +60,12 @@ pub struct DotsOcrAdapter {
 
 impl Default for DotsOcrAdapter {
     fn default() -> Self {
+        let spec = crate::protocol_spec::spec_of("dots-ocr");
         Self {
-            endpoint_base: "http://localhost:8000/v1/chat/completions".to_string(),
-            model: "model".to_string(),
-            timeout: Duration::from_secs(120),
-            max_retries: 2,
+            endpoint_base: spec.endpoint_default(),
+            model: spec.model_default(),
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 }

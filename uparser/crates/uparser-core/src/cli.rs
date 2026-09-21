@@ -685,9 +685,29 @@ fn run_parse(
             effective_protocol, prepared.plan.route.reason
         );
     }
-    // Resolve endpoint/model after routing so auto uses the selected protocol's config.
-    let (endpoint, model) =
-        crate::agent_config::resolve_endpoint_model(&effective_protocol, endpoint, model);
+    // Resolve everything configurable after routing, so `auto` reads the
+    // *selected* protocol's config section rather than the literal "auto".
+    let resolved = crate::agent_config::resolve(
+        &effective_protocol,
+        crate::agent_config::CliOverrides { endpoint, model },
+    );
+    let (endpoint, model) = (resolved.endpoint.clone(), resolved.model.clone());
+    // An explicit `--*-endpoint` flag wins over the config file's
+    // `[pipeline.stages]` entry for that same stage; unset flags fall
+    // through to whatever the file supplies.
+    let pipeline_config =
+        crate::agent_config::merge_pipeline_config(pipeline_config, resolved.pipeline.clone());
+    let navidc_config = crate::adapters::NavidcConfig {
+        layout_mode: navidc_config.layout_mode.or(resolved.navidc.layout_mode),
+    };
+    let monkeyocr_config = crate::adapters::MonkeyOcrConfig {
+        retry_repeat: monkeyocr_config
+            .retry_repeat
+            .or(resolved.monkeyocr.retry_repeat),
+        retry_repeat_max_retries: monkeyocr_config
+            .retry_repeat_max_retries
+            .or(resolved.monkeyocr.retry_repeat_max_retries),
+    };
 
     // `document-json` used to be rejected here for every protocol but
     // `native`, and for every format but a structured source, because the
@@ -725,6 +745,12 @@ fn run_parse(
     let execution = crate::runner::ExecutionOptions {
         endpoint,
         model,
+        auth: crate::transport::Auth {
+            bearer: resolved.api_key.clone(),
+            headers: resolved.headers.clone(),
+        },
+        timeout: resolved.timeout,
+        max_retries: resolved.max_retries,
         window_size,
         max_concurrency,
         pipeline_config,
@@ -1152,13 +1178,34 @@ fn default_endpoint_for(protocol: &str) -> Option<String> {
 /// `uparser doctor` (T-9.3): reachability probe for HTTP-backed protocols.
 /// Diagnostic only — a failed probe never changes `parse`'s behavior.
 fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
-    // Same endpoint resolution as `parse` (flag → env → config[protocol]) so a
-    // pre-flight `doctor` probes the very endpoint a later `parse` would use.
-    let (mut endpoint, _) = crate::agent_config::resolve_endpoint_model(&protocol, endpoint, None);
+    // Same resolution as `parse` (flag → env → config[protocol] →
+    // config[defaults]) so a pre-flight `doctor` probes the very endpoint a
+    // later `parse` would use, and reports the same credential decision.
+    let resolved = crate::agent_config::resolve(
+        &protocol,
+        crate::agent_config::CliOverrides {
+            endpoint,
+            model: None,
+        },
+    );
+    // Whether a key resolved, never the key itself. Without this an
+    // unauthenticated 401 is indistinguishable from a mis-keyed config, and
+    // `doctor` is the designated place to tell them apart.
+    let api_key_status = if resolved.api_key.is_some() {
+        "set"
+    } else {
+        "unset"
+    };
+    let mut endpoint = resolved.endpoint;
     if protocol == "pipeline" {
+        // `pipeline`'s configured endpoint is a *base* URL; the probe target
+        // is its `/health` path. The base default comes from the protocol
+        // spec, not a literal repeated here — that duplication is exactly
+        // what let this drift from `pipeline_v2.rs` before.
         let base = endpoint
             .take()
-            .unwrap_or_else(|| "http://localhost:9001".to_owned());
+            .or_else(|| default_endpoint_for("pipeline"))
+            .expect("pipeline declares a default endpoint in its ProtocolSpec");
         endpoint = Some(format!("{}/health", base.trim_end_matches('/')));
     }
 
@@ -1180,6 +1227,9 @@ fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
             "protocol": protocol,
             "reachable": reachable,
             "note": note,
+            // These protocols make no network request, so a configured
+            // credential would not be used even if one resolved.
+            "api_key": "not_applicable",
         });
         println!(
             "{}",
@@ -1235,6 +1285,7 @@ fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
         "endpoint": target,
         "reachable": reachable,
         "detail": detail,
+        "api_key": api_key_status,
     });
     println!(
         "{}",

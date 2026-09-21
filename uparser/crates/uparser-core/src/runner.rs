@@ -109,6 +109,14 @@ pub struct PreparedRun {
 pub struct ExecutionOptions {
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    /// Credentials applied to every request. Resolved from config by the
+    /// caller (`cli.rs` / `api.rs`), not by any adapter — adapters know
+    /// nothing about authentication.
+    pub auth: transport::Auth,
+    /// Per-request timeout / retry budget, when configured. `None` leaves
+    /// the protocol's own default (from `protocol_spec.rs`) in place.
+    pub timeout: Option<std::time::Duration>,
+    pub max_retries: Option<u32>,
     pub window_size: usize,
     pub max_concurrency: usize,
     pub pipeline_config: adapters::PipelineConfig,
@@ -145,6 +153,9 @@ impl Default for ExecutionOptions {
         Self {
             endpoint: None,
             model: None,
+            auth: transport::Auth::default(),
+            timeout: None,
+            max_retries: None,
             window_size: 64,
             max_concurrency: 16,
             pipeline_config: adapters::PipelineConfig::default(),
@@ -460,6 +471,8 @@ pub async fn execute_with_hooks(
     let overrides = adapters::AdapterOverrides {
         endpoint: options.endpoint.clone(),
         model: options.model.clone(),
+        timeout: options.timeout,
+        max_retries: options.max_retries,
         pipeline: Some(options.pipeline_config.clone()),
         navidc: Some(options.navidc_config.clone()),
         monkeyocr: Some(options.monkeyocr_config.clone()),
@@ -488,7 +501,12 @@ pub async fn execute_with_hooks(
     let scheduler =
         scheduler::Scheduler::new(options.window_size.max(options.max_concurrency).max(1))
             .with_cancellation(options.cancellation.clone());
-    let transport = Arc::new(transport::Transport::new());
+    // The single production `Transport` construction site — every other
+    // `Transport::new()` in this workspace is a test.
+    let transport = Arc::new(transport::Transport::with_concurrency_and_auth(
+        tokio::sync::Semaphore::MAX_PERMITS,
+        options.auth.clone(),
+    ));
     let permits = Arc::new(Semaphore::new(options.max_concurrency.max(1)));
     let on_window = hooks.on_window.clone();
     let on_progress = hooks.on_progress.clone();

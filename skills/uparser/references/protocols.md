@@ -164,6 +164,13 @@ Endpoint/model resolution order is:
 1. `--endpoint` / `--model`
 2. `UPARSER_ENDPOINT` / `UPARSER_MODEL`
 3. `~/.config/uparser/config.toml` or `UPARSER_CONFIG`, under `[<effective-protocol>]`
-4. adapter default where one exists
+4. that same file's `[defaults]` section
+5. adapter default where one exists
+
+The order is applied **per key**, not per section: a `[<protocol>]` section that sets only `endpoint` still inherits `model`/`timeout_secs`/`api_key` from `[defaults]`.
+
+The same chain also resolves `api_key` (sent as `Authorization: Bearer`; `UPARSER_API_KEY`, or `api_key_env` to name a variable rather than inline the secret), arbitrary request headers, `timeout_secs`, `max_retries`, and — for `pipeline` — the per-stage endpoints under `[pipeline.stages]` / `[pipeline.paths]`, which have no environment-variable equivalent. See `references/config.example.toml`.
+
+The library API (`parse`/`classify`, and therefore the Node and Python bindings) runs the identical chain, so a configured endpoint applies to every surface, not just the CLI.
 
 Auto resolves configuration after routing, using the effective protocol section. Keep stdout/stderr separate and use the structured result/error rather than scraping diagnostic prose.

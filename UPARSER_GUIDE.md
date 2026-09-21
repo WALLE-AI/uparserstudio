@@ -564,7 +564,7 @@ skills/uparser/
 │   └── config.example.toml      端点配置模板(→ ~/.config/uparser/config.toml)
 └── scripts/
     ├── ensure_uparser.sh/.ps1   确保二进制就位:PATH→缓存→下载 Release→源码构建
-    ├── uparser-run.sh/.ps1      配置化包装器:自动下载 + 注入 --endpoint/--model
+    ├── uparser-run.sh/.ps1      包装器:确保二进制就位后直接 exec(端点由二进制自己读配置)
     ├── find_uparser.sh          定位/构建 uparser 二进制并打印路径
     └── build-windows.ps1        Windows 源码构建(需 rustup + MSVC)
 ```
@@ -618,7 +618,7 @@ cp -r skills/uparser <项目>/.claude/skills/uparser
 
 1. 用 `scripts/ensure_uparser.sh`(或直接经 `uparser-run.sh`)确保二进制就位——首次会自动下载/构建并缓存;
 2. 按 §5 的选型表选 `--protocol`(不确定就先 `uparser classify` 或用 `--protocol auto`);
-3. 若已配置 `~/.config/uparser/config.toml`,用 `scripts/uparser-run.sh parse ...` 让端点/模型自动注入;否则直接 `uparser parse ... --endpoint <url>`;
+3. 端点/模型/密钥由二进制自己按 `flag → 环境变量 → [<协议>] → [defaults] → 内置默认` 解析,配好 `~/.config/uparser/config.toml` 后 `uparser parse ...` 无需带 `--endpoint`;未配置时才显式传 `--endpoint <url>`;
 4. 以子进程运行,**stdout 取结果、stderr 取日志、按 exit code 分支**;
 5. 需要更深的协议/端点细节时读 `references/protocols.md`。
 

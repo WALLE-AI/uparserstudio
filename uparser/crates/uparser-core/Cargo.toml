@@ -56,6 +56,12 @@ calamine = "0.26"
 csv = "1"
 tempfile = "3"
 pulldown-cmark = { version = "0.13.4", default-features = false }
+# Config-file parsing (`~/.config/uparser/config.toml`). A deliberate
+# exception to this crate's no-new-dep posture: the `pipeline` protocol's
+# per-stage endpoints need nested tables (`[pipeline.stages]`), which the
+# hand-written INI reader `agent_config.rs` used before cannot express.
+# `parse` only — we never serialize TOML back out.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [[example]]
 name = "bare_formula_smoke"

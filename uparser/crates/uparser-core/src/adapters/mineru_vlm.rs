@@ -53,11 +53,12 @@ pub struct MineruVlmAdapter {
 
 impl Default for MineruVlmAdapter {
     fn default() -> Self {
+        let spec = crate::protocol_spec::spec_of("mineru-vlm");
         Self {
-            endpoint_base: "http://localhost:8000/v1/chat/completions".to_string(),
-            model: "mineru-vlm".to_string(),
-            timeout: Duration::from_secs(60),
-            max_retries: 2,
+            endpoint_base: spec.endpoint_default(),
+            model: spec.model_default(),
+            timeout: spec.timeout_default(),
+            max_retries: spec.default_max_retries,
         }
     }
 }
@@ -160,14 +161,8 @@ const DROP_LAYOUT_CATEGORIES: &[&str] = &["inline_formula"];
 /// pass at the top of `prepare_for_extract`); without them a table's text is
 /// emitted once inside the table HTML and once again as a loose paragraph.
 const CONTAINED_BLOCK_RULES: &[(&[&str], &[&str])] = &[
-    (
-        &["text", "equation", "equation_block"],
-        &["table"],
-    ),
-    (
-        &["image_caption"],
-        &["image", "chart", "image_block"],
-    ),
+    (&["text", "equation", "equation_block"], &["table"]),
+    (&["image_caption"], &["image", "chart", "image_block"]),
 ];
 
 const CONTAINED_BLOCK_THRESHOLD: f32 = 0.9;
@@ -217,15 +212,17 @@ fn drop_contained_blocks(pending: Vec<PendingBlock>) -> Vec<PendingBlock> {
         .iter()
         .enumerate()
         .map(|(index, block)| {
-            CONTAINED_BLOCK_RULES.iter().any(|(candidates, containers)| {
-                candidates.contains(&block.category_raw.as_str())
-                    && pending.iter().enumerate().any(|(other_index, container)| {
-                        other_index != index
-                            && containers.contains(&container.category_raw.as_str())
-                            && overlap_over_first_area(block.bbox_px, container.bbox_px)
-                                >= CONTAINED_BLOCK_THRESHOLD
-                    })
-            })
+            CONTAINED_BLOCK_RULES
+                .iter()
+                .any(|(candidates, containers)| {
+                    candidates.contains(&block.category_raw.as_str())
+                        && pending.iter().enumerate().any(|(other_index, container)| {
+                            other_index != index
+                                && containers.contains(&container.category_raw.as_str())
+                                && overlap_over_first_area(block.bbox_px, container.bbox_px)
+                                    >= CONTAINED_BLOCK_THRESHOLD
+                        })
+                })
         })
         .collect();
 

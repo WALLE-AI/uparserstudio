@@ -1810,3 +1810,330 @@ fn explicit_endpoint_flag_overrides_env_and_config() {
         "http://flag.example/v1/chat/completions"
     );
 }
+
+// --- config layering: [defaults], api_key/auth, pipeline stages -----------
+
+/// `[defaults]` supplies a protocol that has no section of its own.
+#[test]
+fn doctor_resolves_endpoint_from_the_defaults_section() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[defaults]\nendpoint = \"http://shared.example/v1/chat/completions\""
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "dots-ocr"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://shared.example/v1/chat/completions"
+    );
+}
+
+/// ...and a `[<protocol>]` section beats it. Together with the three
+/// pre-existing tests above this pins the whole chain:
+/// flag > env > [protocol] > [defaults].
+#[test]
+fn protocol_section_beats_the_defaults_section() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[defaults]\nendpoint = \"http://shared.example/v1/chat/completions\"\n\
+         [mineru-vlm]\nendpoint = \"http://specific.example/v1/chat/completions\""
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://specific.example/v1/chat/completions"
+    );
+}
+
+/// `pipeline`'s base URL used to be a literal repeated in three places,
+/// one of which (`protocol_spec`) said `None`. It now comes from the spec,
+/// and `doctor` appends `/health` to whatever is configured.
+#[test]
+fn doctor_probes_the_configured_pipeline_base_not_a_hardcoded_one() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(cfg, "[pipeline]\nendpoint = \"http://gpu-host:9001\"").unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "pipeline"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://gpu-host:9001/health"
+    );
+
+    // With nothing configured it falls back to the spec's declared base.
+    let mut bare = Command::cargo_bin("uparser").unwrap();
+    bare.args(["doctor", "pipeline"])
+        .env("UPARSER_CONFIG", "/no/such/uparser-config.toml")
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut bare),
+        "http://localhost:9001/health"
+    );
+}
+
+/// V2 — authentication, end to end through the real binary. Proves both
+/// halves: the header actually reaches the server, and the secret does not
+/// leak into stdout/stderr.
+#[tokio::test]
+async fn configured_api_key_is_sent_as_a_bearer_header_and_never_printed() {
+    use wiremock::matchers::{header, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const SECRET: &str = "sk-test-do-not-leak-3f9a";
+
+    let server = MockServer::start().await;
+    // The `header` matcher IS the assertion: if the Authorization header
+    // were missing or wrong, no mock matches, the adapter gets a 404, and
+    // the block below finds no text.
+    Mock::given(method("POST"))
+        .and(header("authorization", format!("Bearer {SECRET}").as_str()))
+        .and(header("x-tenant", "acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content":
+                "<|box_start|>0 0 500 200<|box_end|><|ref_start|>text<|ref_end|>authenticated"
+            }}]
+        })))
+        .mount(&server)
+        .await;
+
+    let png_bytes = {
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&png_bytes).unwrap();
+
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = \"{}/v1/chat/completions\"\napi_key = \"{SECRET}\"\n\n\
+         [mineru-vlm.headers]\nX-Tenant = \"acme\"",
+        server.uri()
+    )
+    .unwrap();
+
+    let cache_dir = isolated_cache_dir();
+    let output = tokio::task::spawn_blocking({
+        let path = file.path().to_str().unwrap().to_string();
+        let cfg_path = cfg.path().to_path_buf();
+        let cache_dir = cache_dir.path().to_path_buf();
+        move || {
+            Command::cargo_bin("uparser")
+                .unwrap()
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("UPARSER_CONFIG", &cfg_path)
+                .env_remove("UPARSER_ENDPOINT")
+                .env_remove("UPARSER_API_KEY")
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                // No --endpoint and no --api-key flag exists: everything
+                // here comes from the config file.
+                .args([
+                    "parse",
+                    &path,
+                    "--protocol",
+                    "mineru-vlm",
+                    "--format",
+                    "json",
+                ])
+                .assert()
+                .success()
+                .get_output()
+                .clone()
+        }
+    })
+    .await
+    .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stdout.contains("authenticated"),
+        "the authenticated request did not reach the mock; stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains(SECRET) && !stderr.contains(SECRET),
+        "the api key leaked into program output"
+    );
+}
+
+/// V4 — the nine `pipeline` stage endpoints, configured purely from the
+/// file with no `--*-endpoint` flag. Before the TOML rewrite this was
+/// impossible: the flat reader could not express `[pipeline.stages]`, so
+/// these values had no configuration path at all.
+#[tokio::test]
+async fn pipeline_stage_endpoints_are_configurable_from_the_file_alone() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    // Only this one non-default path is served. The adapter reaches it
+    // solely because [pipeline.stages].layout redirected it here — a
+    // default-derived URL would 404 and produce a page error instead.
+    Mock::given(method("POST"))
+        .and(path("/custom/layout"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "schema_version": "uparser.pipeline.v2",
+            "request_id": "test",
+            "model": {
+                "name": "test-layout", "revision": "0", "weight_sha256": null,
+                "runtime": "test"
+            },
+            // An empty region list is a legitimate "nothing detected on
+            // this page" answer, so the page succeeds and no later stage
+            // needs a mock of its own.
+            "items": [{
+                "page_id": "1", "result": {"regions": []},
+                "error": null, "warnings": []
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let png_bytes = {
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&png_bytes).unwrap();
+
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[pipeline]\nendpoint = \"{uri}\"\n\n[pipeline.stages]\n\
+         layout = \"{uri}/custom/layout\"\n\
+         ocr = \"{uri}/custom/ocr\"\n\
+         formula = \"{uri}/custom/formula\"\n\
+         table = \"{uri}/custom/table\"",
+        uri = server.uri()
+    )
+    .unwrap();
+
+    let cache_dir = isolated_cache_dir();
+    let output = tokio::task::spawn_blocking({
+        let path = file.path().to_str().unwrap().to_string();
+        let cfg_path = cfg.path().to_path_buf();
+        let cache_dir = cache_dir.path().to_path_buf();
+        move || {
+            Command::cargo_bin("uparser")
+                .unwrap()
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("UPARSER_CONFIG", &cfg_path)
+                .env_remove("UPARSER_ENDPOINT")
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args(["parse", &path, "--protocol", "pipeline", "--format", "json"])
+                .assert()
+                .get_output()
+                .clone()
+        }
+    })
+    .await
+    .unwrap();
+
+    // Assert on where the request actually went, not on what came back:
+    // the point under test is stage routing, and tying it to the full
+    // stage-response contract (which echoes a request_id a static mock
+    // can't produce) would make it fail for an unrelated reason.
+    let _ = &output;
+    let requests = server.received_requests().await.unwrap();
+    let paths: Vec<_> = requests.iter().map(|r| r.url.path().to_owned()).collect();
+    assert!(
+        paths.iter().any(|p| p == "/custom/layout"),
+        "the layout stage did not use the configured [pipeline.stages].layout \
+         endpoint; requests went to {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.contains("/v2/pipeline/layout")),
+        "the layout stage fell back to the default derived URL: {paths:?}"
+    );
+}
+
+/// A configured file that isn't valid TOML (unquoted values, which the
+/// pre-TOML reader accepted) must still be read rather than silently
+/// discarded — the single most damaging way this migration could have
+/// gone wrong for an existing user.
+#[test]
+fn a_legacy_unquoted_config_file_still_resolves() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = http://legacy.example/v1/chat/completions"
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("uparser").unwrap();
+    cmd.args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT");
+    assert_eq!(
+        doctor_endpoint_field(&mut cmd),
+        "http://legacy.example/v1/chat/completions"
+    );
+}
+
+/// `doctor` reports *whether* a credential resolved, never the credential.
+/// Without this an unauthenticated 401 is indistinguishable from a
+/// mis-keyed config, and `doctor` is the designated preflight tool.
+#[test]
+fn doctor_reports_api_key_presence_without_revealing_it() {
+    const SECRET: &str = "sk-doctor-must-not-print-a1b2";
+
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = \"http://config.example/v1/chat/completions\"\n\
+         api_key = \"{SECRET}\""
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT")
+        .env_remove("UPARSER_API_KEY")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["api_key"], "set");
+    assert!(
+        !stdout.contains(SECRET) && !String::from_utf8_lossy(&out.stderr).contains(SECRET),
+        "doctor leaked the api key"
+    );
+
+    // ...and says so plainly when none resolved.
+    let mut bare = Command::cargo_bin("uparser").unwrap();
+    bare.args(["doctor", "mineru-vlm"])
+        .env("UPARSER_CONFIG", "/no/such/uparser-config.toml")
+        .env_remove("UPARSER_ENDPOINT")
+        .env_remove("UPARSER_API_KEY");
+    let out = bare.assert().success().get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["api_key"], "unset");
+}

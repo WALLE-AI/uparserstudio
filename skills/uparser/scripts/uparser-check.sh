@@ -11,11 +11,11 @@
 #
 # Usage:
 #   uparser-check.sh [--protocol mineru-vlm] [--endpoint <url>]
-#   (endpoint also read from $UPARSER_ENDPOINT or config[<protocol>|mineru-vlm])
+#   (the endpoint is resolved by the binary itself: flag > $UPARSER_ENDPOINT >
+#    config[<protocol>] > config[defaults] > built-in default)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${UPARSER_CONFIG:-$HOME/.config/uparser/config.toml}"
 
 proto="mineru-vlm"; ep_cli=""
 while [ $# -gt 0 ]; do
@@ -28,14 +28,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-read_ini() { # $1=section $2=key
-  [ -f "$CONFIG" ] || return 0
-  awk -v s="[$1]" -v k="$2" '
-    /^[[:space:]]*\[/ { cur=$0; gsub(/^[[:space:]]+|[[:space:]]+$/,"",cur) }
-    cur==s && $0 ~ "^[[:space:]]*"k"[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/,""); gsub(/^["'"'"']|["'"'"'][[:space:]]*$/,""); print; exit
-    }' "$CONFIG"
-}
 jstr() { [ "$1" = "null" ] && printf 'null' || printf '"%s"' "$1"; }
 
 # 1) ensure the binary (PATH → cache → download → build)
@@ -51,18 +43,24 @@ protos="$("$bin" protocols 2>/dev/null || echo '[]')"
 names="$(printf '%s' "$protos" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | paste -sd, - 2>/dev/null || true)"
 [ -n "$names" ] && names="$(printf '%s' "$names" | sed 's/[^,]*/"&"/g')"
 
-# 3) resolve + probe an endpoint if one is known
-ep="$ep_cli"; [ -n "$ep" ] || ep="${UPARSER_ENDPOINT:-}"; [ -n "$ep" ] || ep="$(read_ini "$proto" endpoint)"
-reachable="null"
-if [ -n "$ep" ]; then
-  # doctor is diagnostic-only: it always exits 0 and reports status in its JSON
-  # `reachable` field, so read that field rather than the exit code.
-  dout="$("$bin" doctor "$proto" --endpoint "$ep" 2>/dev/null || true)"
-  case "$dout" in
-    *'"reachable"'*true*)  reachable="true" ;;
-    *'"reachable"'*false*) reachable="false" ;;
-  esac
+# 3) probe the endpoint. `doctor` resolves it itself (flag > $UPARSER_ENDPOINT
+#    > config[<protocol>] > config[defaults] > built-in default) and echoes the
+#    resolved value back, so we read it from doctor's own output instead of
+#    re-implementing the lookup here — this wrapper's copy could only ever see
+#    one flat section and knew nothing about [defaults] or api_key.
+reachable="null"; ep=""
+if [ -n "$ep_cli" ]; then
+  dout="$("$bin" doctor "$proto" --endpoint "$ep_cli" 2>/dev/null || true)"
+else
+  dout="$("$bin" doctor "$proto" 2>/dev/null || true)"
 fi
+ep="$(printf '%s' "$dout" | grep -o '"endpoint"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | head -1)"
+# doctor is diagnostic-only: it always exits 0 and reports status in its JSON
+# `reachable` field, so read that field rather than the exit code.
+case "$dout" in
+  *'"reachable"'*true*)  reachable="true" ;;
+  *'"reachable"'*false*) reachable="false" ;;
+esac
 
 printf '{"binary":%s,"ok":true,"protocols":[%s],"endpoint":%s,"endpoint_reachable":%s}\n' \
   "$(jstr "$bin")" "${names:-}" "$(jstr "${ep:-null}")" "$reachable"
