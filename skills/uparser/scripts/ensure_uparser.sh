@@ -17,10 +17,9 @@ set -euo pipefail
 # without a matching asset makes every Linux/WSL skill user silently fall
 # back to a from-source build, so only move it once the asset exists.
 #
-# v0.4.0-rc.2 publishes a linux-x86_64 asset, so the Linux pin moves here.
-# ensure_uparser.ps1 deliberately stays at 0.2.0 — that release is still the
-# newest one carrying a windows-x86_64 asset.
-VERSION="${UPARSER_VERSION:-0.4.0-rc.2}"
+# v0.4.0 publishes both linux-x86_64 and windows-x86_64 assets, so both
+# ensure_uparser.sh and ensure_uparser.ps1 move to it here.
+VERSION="${UPARSER_VERSION:-0.4.0}"
 REPO="${UPARSER_REPO:-WALLE-AI/uparserstudio}"
 CACHE_ROOT="${UPARSER_HOME:-$HOME/.cache/uparser}"
 CACHE="$CACHE_ROOT/versions/v$VERSION/$(uname -s)-$(uname -m)"

@@ -3551,7 +3551,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uparser-core"
-version = "0.4.0-rc.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "uparser-document-engine"
-version = "0.4.0-rc.2"
+version = "0.4.0"
 dependencies = [
  "calamine",
  "cfb",
@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "uparser-napi"
-version = "0.4.0-rc.2"
+version = "0.4.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "uparser-python"
-version = "0.4.0-rc.2"
+version = "0.4.0"
 dependencies = [
  "pyo3",
  "serde_json",
