@@ -2,9 +2,8 @@
 
 This finalizes the Architecture V2 release candidate series (`v0.4.0-rc.1`,
 `v0.4.0-rc.2`) as a general release. There is no source change from
-`v0.4.0-rc.2` — this tag exists to publish stable Windows and Linux binaries
-and to move the `uparser` skill's downloader pins onto a release that ships
-both platforms' assets.
+`v0.4.0-rc.2` — this tag exists to publish a stable Windows binary and to
+move the `uparser` skill's Windows downloader pin onto it.
 
 ## Highlights (carried over from the rc series)
 
@@ -34,7 +33,12 @@ both platforms' assets.
 
 ## Linux assets
 
-- `uparser-v0.4.0-linux-x86_64`
+None. `.github/workflows/uparser-v2.yml`, which is meant to publish a
+`linux-x86_64` binary, has been failing immediately on every push (a
+pre-existing config error, not caused by this release). `v0.3.0` remains the
+newest release with a real `linux-x86_64` asset; the skill's Linux
+downloader (`ensure_uparser.sh`) stays pinned there until that workflow is
+fixed.
 
 ## SHA256SUMS
 
