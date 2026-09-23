@@ -48,7 +48,7 @@
 # ---------------------------------------------------------------------------
 
 [mineru-vlm]
-endpoint = "http://127.0.0.1:19122/v1/chat/completions"
+endpoint = "http://10.147.45.228:60002/files/parser/v1/chat/completions"
 model    = "MinerU2.5-Pro-2605-1.2B"
 # api_key_env = "MINERU_TOKEN"
 # timeout_secs = 60          # this protocol's built-in default

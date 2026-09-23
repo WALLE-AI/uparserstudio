@@ -3,12 +3,25 @@
   (Windows mirror of uparser-parse.sh). Give it a file; it returns Markdown on
   stdout and the binary's own semantic exit code.
 
-  It never selects `mock`, picks `native` (offline) when no VLM endpoint is
-  configured anywhere and `auto` when one is, and defaults --format to markdown.
-  It no longer injects --endpoint/--model: the binary resolves those itself
-  (per key, keyed on the post-routing protocol, with [defaults] layering and
-  api_key support this wrapper's reader cannot express). The config is consulted
-  here only to answer "does any endpoint exist at all?".
+  What it decides for you:
+    * ensures a current uparser.exe exists (ensure_uparser.ps1: version check
+      against GitHub Releases, TTL-cached, degrades offline);
+    * NEVER selects the explicit-only `mock` protocol;
+    * picks the protocol when you pass neither --mode nor --protocol, and by
+      default picks for QUALITY: it probes the model endpoints you actually
+      configured and runs the best reachable one (pick_protocol.ps1);
+    * defaults --format to markdown.
+
+  Why quality-first is not just `--protocol auto`: `auto` never probes an
+  endpoint, its model candidate is hardwired to mineru-vlm, and on a
+  born-digital PDF it scores native above every model — see the long comment in
+  pick_protocol.ps1 for the verified specifics.
+
+  The cost is real and deliberate: on a born-digital PDF a VLM route trades
+  roughly 15x wall-clock for about +0.05 overall accuracy (UPARSER_LEADERBOARD.md).
+  Set UPARSER_PREFER=speed to get the old endpoint-agnostic routing back.
+  Structured sources (DOCX/XLSX/CSV/...) always stay native regardless.
+
   Anything you pass through (incl. an explicit --mode/--protocol/--endpoint/--format)
   is forwarded unchanged and always wins.
 
@@ -19,49 +32,36 @@ param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Args)
 $ErrorActionPreference = 'Stop'
 
 if (-not $Args -or $Args.Count -lt 1) { Write-Error 'usage: uparser-parse.ps1 <file> [uparser parse flags...]'; exit 1 }
-$cfg = if ($env:UPARSER_CONFIG) { $env:UPARSER_CONFIG } else { Join-Path $HOME '.config/uparser/config.toml' }
-
-function Read-Ini([string]$section, [string]$key) {
-  if (-not (Test-Path $cfg)) { return $null }
-  $cur = ''
-  foreach ($line in Get-Content -LiteralPath $cfg) {
-    if ($line -match '^\s*\[(.+?)\]\s*$') { $cur = $Matches[1].Trim(); continue }
-    if ($cur -eq $section -and $line -match ('^\s*' + [regex]::Escape($key) + '\s*=\s*(.+?)\s*$')) {
-      return $Matches[1].Trim().Trim('"').Trim("'")
-    }
-  }
-  return $null
-}
 
 $a = @($Args)
-$hasMode = ($a -contains '--mode') -or [bool]($a | Where-Object { $_ -like '--mode=*' })
-$hasProto = ($a -contains '--protocol') -or [bool]($a | Where-Object { $_ -like '--protocol=*' })
-$hasEp = ($a -contains '--endpoint') -or [bool]($a | Where-Object { $_ -like '--endpoint=*' })
-$hasFormat = ($a -contains '--format') -or [bool]($a | Where-Object { $_ -like '--format=*' })
+$hasMode   = ($a -contains '--mode')     -or [bool]($a | Where-Object { $_ -like '--mode=*' })
+$hasProto  = ($a -contains '--protocol') -or [bool]($a | Where-Object { $_ -like '--protocol=*' })
+$hasFormat = ($a -contains '--format')   -or [bool]($a | Where-Object { $_ -like '--format=*' })
 
-# Any VLM section, plus [defaults] — this previously looked only at
-# [mineru-vlm], so a machine configured for e.g. dots-ocr alone silently
-# fell through to native.
-function Test-EndpointConfigured {
-  if ($env:UPARSER_ENDPOINT) { return $true }
-  foreach ($sec in @('defaults', 'mineru-vlm', 'monkeyocr-v2', 'navidc-ocr', 'dots-ocr', 'generic-vlm')) {
-    if (Read-Ini $sec 'endpoint') { return $true }
-  }
-  return $false
+# find the input file: the first argument that is neither a flag nor a flag's value
+$file = ''; $skipNext = $false
+foreach ($x in $a) {
+  if ($skipNext) { $skipNext = $false; continue }
+  if ($x -like '--*=*') { continue }
+  if ($x -like '--*')   { $skipNext = $true; continue }
+  if (-not $file) { $file = $x }
 }
 
 $inject = @()
 if (-not $hasFormat) { $inject += @('--format', 'markdown') }
 
 if (-not $hasMode -and -not $hasProto) {
-  if ($hasEp -or (Test-EndpointConfigured)) {
-    $inject += @('--protocol', 'auto')
-    [Console]::Error.WriteLine("uparser-parse: no --protocol given; using 'auto' (endpoint resolved by the binary)")
+  # Resolve the binary once here and hand the same one to both the protocol
+  # probe and the run, instead of resolving it twice.
+  $bin = (& (Join-Path $PSScriptRoot 'ensure_uparser.ps1') | Select-Object -Last 1)
+  if (-not $bin -or -not (Test-Path $bin)) {
+    Write-Error 'uparser binary not found and could not be downloaded/built'; exit 2
   }
-  else {
-    $inject += @('--protocol', 'native')
-    [Console]::Error.WriteLine("uparser-parse: no --protocol and no endpoint configured; using 'native' (offline; bounded page OCR may apply)")
-  }
+  $env:UPARSER_BIN = $bin
+
+  $proto = (& (Join-Path $PSScriptRoot 'pick_protocol.ps1') -Bin $bin -File $file | Select-Object -Last 1)
+  if (-not $proto) { $proto = 'native' }
+  $inject += @('--protocol', $proto)
 }
 
 $run = Join-Path $PSScriptRoot 'uparser-run.ps1'

@@ -20,13 +20,17 @@
 # Usage: uparser-run.sh parse --protocol mineru-vlm doc.pdf
 set -euo pipefail
 
-# --- locate the real binary: PATH first, else ensure_uparser.sh downloads a
-#     version-pinned prebuilt from GitHub Releases (or builds from source) ---
-BIN="${UPARSER_BIN:-$(command -v uparser || true)}"
-if [ -z "$BIN" ]; then
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  BIN="$("$here/ensure_uparser.sh" | tail -1 || true)"
-fi
+# --- locate the real binary: always via ensure_uparser.sh ---
+#
+# This deliberately does NOT short-circuit to `command -v uparser` first.
+# It used to, and that made ensure_uparser.sh's whole version-checking and
+# supersede ladder dead code on the most common call path: a machine with any
+# old `uparser` on PATH would keep using it forever, silently, with the upgrade
+# logic never running. ensure_uparser.sh consults PATH itself, at the right
+# priority and with a version comparison. $UPARSER_BIN is likewise handled
+# there (and still wins unconditionally).
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$("$here/ensure_uparser.sh" | tail -1 || true)"
 [ -n "$BIN" ] && [ -x "$BIN" ] || { echo "uparser binary not found and could not be downloaded/built" >&2; exit 2; }
 
 exec "$BIN" "$@"

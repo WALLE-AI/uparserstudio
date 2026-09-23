@@ -216,7 +216,11 @@ cp -r skills/uparser ~/.claude/skills/uparser
 cp -r skills/uparser <项目>/.claude/skills/uparser
 ```
 
-首次调用时,skill 的 `ensure_uparser.sh` 会按 `PATH → 版本化缓存 → 从 GitHub Release 下载版本固定的预编译包(直连→ghfast.top 镜像兜底,校验 sha256 + 冒烟)→ 源码构建兜底` 解析出 `uparser` 并缓存到 `~/.cache/uparser/versions/<version>/<platform>/`。启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。
+首次调用时,skill 的 `ensure_uparser.sh` 会按 `$UPARSER_BIN → 本地 workspace 构建 → PATH → 版本化缓存 → 从 GitHub Release 下载 → 源码构建兜底` 解析出 `uparser`,缓存到 `~/.cache/uparser/versions/v<version>/<platform>/`(Windows 同时取 `pdfium.dll`)。
+
+版本不再写死:它会查 GitHub Releases,取**当前平台真正有 asset 的最新 release**(各平台 asset 是分别发布且可能残缺的,直接用 `/releases/latest` 会在某些平台 404 后静默退化成源码构建),结果按 6 小时 TTL 缓存到 `~/.cache/uparser-skill/`,离线时回退到上次已知值或内置 pin。三个本地候选只在**不比最新版旧**时才采用;PATH 上的旧版本会被取代(新副本进缓存,PATH 上的文件不动),但**绝不会**把你已有的更新版本降级。`UPARSER_VERSION` 可钉版本,`UPARSER_OFFLINE=1` 可完全跳过检查。
+
+启动 Claude Code 后 `/uparser` 触发,或直接说「把这个 PDF 转成 Markdown」自动匹配。`scripts/uparser-parse.sh` 默认**质量优先**:对 PDF/图片会探测你已配置的模型端点,选第一个可达的专业模型(`mineru-vlm → navidc-ocr → monkeyocr-v2 → pipeline → …`);结构化格式(DOCX/XLSX/CSV…)始终走 `native`。`UPARSER_PREFER=speed` 切回速度优先。
 
 **端点配置化**(免每次带 `--endpoint`):把配置写进 `~/.config/uparser/config.toml`(可用 `$UPARSER_CONFIG` 改路径;完整模板见 `skills/uparser/references/config.example.toml`),**二进制自己读**——CLI、库 API、Node/Python 绑定走同一条链:
 

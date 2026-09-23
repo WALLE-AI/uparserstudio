@@ -3,65 +3,54 @@
 # Give it a file; it returns Markdown on stdout and a semantic exit code.
 #
 # What it decides for you (so an agent doesn't have to):
-#   * ensures the `uparser` binary exists (downloads/builds via ensure_uparser.sh);
+#   * ensures a current `uparser` binary exists (ensure_uparser.sh: version
+#     check against GitHub Releases, TTL-cached, degrades offline);
 #   * NEVER selects the explicit-only `mock` protocol;
-#   * picks the protocol automatically when you pass neither --mode nor --protocol:
-#       - a VLM endpoint is resolvable (‑‑endpoint / $UPARSER_ENDPOINT / config)
-#         → `--protocol auto` (Profiler routes born‑digital→native, scans→VLM);
-#         the binary itself resolves the endpoint/model/credentials;
-#       - otherwise → `--protocol native` (pure‑Rust, offline, no GPU;
-#         flagged pages can use bounded OCR when PDFium+Tesseract are present).
+#   * picks the protocol when you pass neither --mode nor --protocol, and by
+#     default picks for QUALITY: it probes the model endpoints you actually
+#     configured and runs the best reachable one (pick_protocol.sh);
 #   * defaults --format to markdown (override with --format json).
 #
-# Anything you pass through (‑‑pages, ‑‑max-concurrency, ‑‑no-cache, an explicit
-# ‑‑protocol/‑‑endpoint/‑‑model, …) is forwarded unchanged and always wins.
+# Why quality-first is not just `--protocol auto`: `auto` never probes an
+# endpoint, its model candidate is hardwired to mineru-vlm, and on a
+# born-digital PDF it scores native above every model — see the long comment in
+# pick_protocol.sh for the verified specifics.
+#
+# The cost is real and deliberate: on a born-digital PDF a VLM route trades
+# roughly 15x wall-clock for about +0.05 overall accuracy (UPARSER_LEADERBOARD.md).
+# Set UPARSER_PREFER=speed to get the old endpoint-agnostic routing back.
+# Structured sources (DOCX/XLSX/CSV/...) always stay native regardless.
+#
+# Anything you pass through (--pages, --max-concurrency, --no-cache, an explicit
+# --protocol/--endpoint/--model, ...) is forwarded unchanged and always wins.
 #
 # Usage:
 #   uparser-parse.sh <file> [any uparser parse flags...]
-#   UPARSER_ENDPOINT=http://host:port/v1/chat/completions uparser-parse.sh scan.pdf
+#   UPARSER_PREFER=speed uparser-parse.sh scan.pdf
 #
 # Exit codes are the binary's own: 0 ok · 1 usage · 2 env/endpoint · 3 partial
 # (usable, check page_errors) · 4 internal.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${UPARSER_CONFIG:-$HOME/.config/uparser/config.toml}"
 
 [ "$#" -ge 1 ] || { echo "usage: uparser-parse.sh <file> [uparser parse flags...]" >&2; exit 1; }
 
-# Does a VLM endpoint exist anywhere? This is the ONLY thing this wrapper
-# still reads the config for, and only to choose auto-vs-native — it no
-# longer injects --endpoint/--model, because the binary resolves those
-# itself (per key, keyed on the post-routing protocol, with [defaults]
-# layering and api_key/header support this awk reader cannot express).
-read_ini() { # $1=section $2=key
-  [ -f "$CONFIG" ] || return 0
-  awk -v s="[$1]" -v k="$2" '
-    /^[[:space:]]*\[/ { cur=$0; gsub(/^[[:space:]]+|[[:space:]]+$/,"",cur) }
-    cur==s && $0 ~ "^[[:space:]]*"k"[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/,""); gsub(/^["'"'"']|["'"'"'][[:space:]]*$/,""); print; exit
-    }' "$CONFIG"
-}
-
-# Any VLM section, plus [defaults] — previously this only ever looked at
-# [mineru-vlm], so a machine configured for e.g. dots-ocr alone silently
-# fell through to native.
-endpoint_configured() {
-  [ -n "${UPARSER_ENDPOINT:-}" ] && return 0
-  for sec in defaults mineru-vlm monkeyocr-v2 navidc-ocr dots-ocr generic-vlm; do
-    [ -n "$(read_ini "$sec" endpoint)" ] && return 0
-  done
-  return 1
-}
-
-# scan what the caller already provided
-has_mode=0 has_protocol=0 has_ep=0 has_format=0
+# scan what the caller already provided, and find the input file (the first
+# argument that is not a flag and not a flag's value)
+has_mode=0 has_protocol=0 has_format=0
+FILE=""; skip_next=0
 for a in "$@"; do
+  if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
   case "$a" in
     --mode|--mode=*)         has_mode=1 ;;
     --protocol|--protocol=*) has_protocol=1 ;;
-    --endpoint|--endpoint=*) has_ep=1 ;;
     --format|--format=*)     has_format=1 ;;
+  esac
+  case "$a" in
+    --*=*) ;;
+    --*)   skip_next=1 ;;      # this flag takes a separate value
+    *)     [ -z "$FILE" ] && FILE="$a" ;;
   esac
 done
 
@@ -69,13 +58,14 @@ inject=()
 [ "$has_format" -eq 0 ] && inject+=(--format markdown)
 
 if [ "$has_mode" -eq 0 ] && [ "$has_protocol" -eq 0 ]; then
-  if [ "$has_ep" -eq 1 ] || endpoint_configured; then
-    inject+=(--protocol auto)
-    echo "uparser-parse: no --protocol given; using 'auto' (endpoint resolved by the binary)" >&2
-  else
-    inject+=(--protocol native)
-    echo "uparser-parse: no --protocol and no endpoint configured; using 'native' (offline; bounded page OCR may apply)" >&2
-  fi
+  # Resolve the binary once here and hand the same one to both the protocol
+  # probe and the run, instead of resolving it twice.
+  BIN="$("$HERE/ensure_uparser.sh" | tail -1 || true)"
+  [ -n "$BIN" ] && [ -x "$BIN" ] || { echo "uparser binary not found and could not be downloaded/built" >&2; exit 2; }
+  export UPARSER_BIN="$BIN"
+
+  proto="$("$HERE/pick_protocol.sh" --bin "$BIN" ${FILE:+--file "$FILE"} || echo native)"
+  inject+=(--protocol "$proto")
 fi
 
 # delegate to uparser-run.sh (binary resolution), parse first

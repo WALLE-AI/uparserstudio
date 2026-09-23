@@ -15,14 +15,23 @@ description: Parse, classify, plan, and route PDF, Office, OpenDocument, EPUB, R
 ## Start here
 
 ```bash
-UP=$(scripts/find_uparser.sh)          # or: export UPARSER_BIN=/path/to/uparser
+UP=$(scripts/ensure_uparser.sh)        # resolves AND upgrades; or: export UPARSER_BIN=/path/to/uparser
 "$UP" --version                        # need >= 0.4.0-rc.1 (has `plan`, `--mode`, `--output`)
 ```
+
+`ensure_uparser.sh` checks GitHub Releases at most once per 6 h (`UPARSER_VERSION_TTL`), caches the
+answer, and serves the last known good version offline. It picks the newest release that actually
+carries an asset for *your* platform, and it never downgrades a newer binary you already have — an
+older one on `PATH` is superseded (the new copy goes to the cache; the file on `PATH` is left alone).
+Pin with `UPARSER_VERSION=0.3.0`; skip the check with `UPARSER_OFFLINE=1`. `$UPARSER_BIN` always wins
+and is never version-checked. `scripts/find_uparser.sh` still exists but only builds from source — it
+does no version check, so prefer `ensure_uparser.sh`.
 
 Then pick one line — do not over-plan a document you already understand:
 
 | You know | Run |
 |---|---|
+| Quality matters more than latency (**the default**) | `scripts/uparser-parse.sh f.pdf` — probes your configured model endpoints, runs the best reachable one |
 | Born-digital PDF, want text/Markdown fast, offline | `"$UP" parse f.pdf --mode native --format markdown` |
 | DOCX/PPTX/XLSX/ODF/EPUB/RTF/CSV | `"$UP" parse f.docx --mode native --format markdown` |
 | …and you need lossless structure (lists, table grids, notes) | `--mode native --format document-json` |
@@ -31,6 +40,11 @@ Then pick one line — do not over-plan a document you already understand:
 | Nothing — unknown file, or cost matters | `"$UP" plan f.pdf --prefer quality` first, then execute what it chose |
 
 `--mode auto` (the default when neither `--mode` nor `--protocol` is given) runs the whole chain and picks for you. It is a ranker over observed evidence, not an oracle — when the answer must be auditable, keep `route_decision` from the result.
+
+`auto` ranks on compiled/local capability only. It **never probes an endpoint**, its model candidate
+is hardwired to `mineru-vlm` (so it can never choose `navidc-ocr`, `monkeyocr-v2` or `pipeline`), and
+on a born-digital PDF it scores `native` above every model. To actually use the best *reachable*
+model protocol, use `scripts/uparser-parse.sh`, or `doctor` plus an explicit `--protocol` — not `auto`.
 
 ## Recipes
 
@@ -134,11 +148,14 @@ Never select `--protocol mock`; it is explicit-only placeholder output.
 
 ## Binary, endpoints, config
 
-`scripts/find_uparser.sh [--build]` locates or builds it, resolving `$UPARSER_BIN` → `PATH` → a cargo
-workspace above either the script or your current directory (the cwd root matters when the skill is
-installed outside the checkout); `scripts/uparser-check.sh` reports readiness;
-`scripts/uparser-parse.sh <file>` is a one-shot wrapper that picks native vs. VLM from the resolvable
-endpoint. `.ps1` equivalents exist for Windows.
+`scripts/ensure_uparser.sh` is the entry point: `$UPARSER_BIN` → a local workspace build → `PATH` →
+version-matched cache → the newest GitHub release carrying an asset for this platform (direct, then
+the ghfast.top mirror; sha256-verified and smoke-tested, and on Windows it fetches `pdfium.dll` too)
+→ `cargo build --release`. The three local candidates are used only when they are not *older* than
+the newest published release. `scripts/find_uparser.sh [--build]` is now only the from-source rung.
+`scripts/uparser-check.sh` reports readiness (including `version`, `latest`, and the
+`quality_protocol` that would actually run); `scripts/uparser-parse.sh <file>` is the one-shot
+wrapper. `.ps1` equivalents exist for Windows and behave identically.
 
 Build from `uparser/`: `cargo build --release --features native,pdfium`. PDFium is needed for page
 rasterization, every vision protocol, native PDF asset crops, and local OCR — pure native text
@@ -160,6 +177,44 @@ Prefer configuring once over passing flags repeatedly:
 endpoint = "http://127.0.0.1:19122/v1/chat/completions"
 model    = "MinerU2.5-Pro-2605-1.2B"
 ```
+
+## Quality-first protocol selection
+
+`scripts/uparser-parse.sh` defaults to quality. For PDF/PNG/JPEG it probes the model protocols you
+actually configured, in order `mineru-vlm → navidc-ocr → monkeyocr-v2 → pipeline → dots-ocr →
+paddlex-structure → generic-vlm`, and runs the first reachable one. It never probes a protocol you
+have not configured (each costs ~2.5 s to time out) and never selects `mock`. Probe results cache for
+5 min (`UPARSER_PROBE_TTL`), so a batch pays one probe, not one per file; "nothing reachable" caches
+for only 60 s so an endpoint that comes up mid-batch is picked up.
+
+Which formats get a model is graded by what the format actually gives up:
+
+| Input | Routed to | Why |
+|---|---|---|
+| PDF, PNG, JPEG | probed model | the visual channel is the only channel |
+| PPTX, PPT, ODP | probed model *(needs LibreOffice; else `native`)* | slides are absolutely-positioned text boxes with no reading-order semantics to lose — the router itself scores a presentation +35 toward a model, −35 against native, even when structured |
+| DOCX, XLSX, CSV, ODT, RTF, EPUB | `native` | they carry exact structure a model could only re-infer from pixels: real cells with spans, real list nesting. XLSX/CSV never even rasterize, and `--format document-json` (the only lossless view with row/column spans) exists for these sources only |
+
+If nothing is reachable it falls back to `native`, **not** `auto` (`auto` assumes a model endpoint
+exists and would route to the dead one).
+
+On a born-digital PDF this trades roughly **15× wall-clock for about +0.05 overall accuracy**
+(`UPARSER_LEADERBOARD.md`: `mineru-vlm` 0.9252 @ 0.682 s/doc vs `native` 0.8766 @ 0.044 s/doc). That
+is the intended default. `UPARSER_PREFER=speed` restores endpoint-agnostic routing;
+`UPARSER_QUALITY_ORDER="navidc-ocr mineru-vlm"` overrides the order; `UPARSER_NO_PROBE=1` disables
+probing entirely.
+
+| Env | Effect |
+|---|---|
+| `UPARSER_BIN` | Use exactly this binary; wins over everything, never version-checked |
+| `UPARSER_VERSION` | Pin the release to resolve; no network lookup |
+| `UPARSER_OFFLINE=1` | Never contact the GitHub API; serve cache/pin |
+| `UPARSER_VERSION_TTL` | Seconds between release checks (default 21600) |
+| `UPARSER_PRERELEASE=1` | Consider prereleases when resolving latest |
+| `UPARSER_PREFER=speed` | Skip endpoint probing, use `auto` |
+| `UPARSER_QUALITY_ORDER` | Space-separated probe order override |
+| `UPARSER_PROBE_TTL` | Seconds to cache a successful probe (default 300) |
+| `GITHUB_TOKEN` | Lifts the anonymous 60 req/h API rate limit |
 
 Then `"$UP" parse f.pdf --protocol mineru-vlm` needs no endpoint flag at all. Full template with
 every protocol and key: `references/config.example.toml`. `UPARSER_OCR_LANG` overrides OCR language

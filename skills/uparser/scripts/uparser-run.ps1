@@ -23,12 +23,16 @@
 param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Args)
 $ErrorActionPreference = 'Stop'
 
-# --- locate the real binary: PATH first, else ensure_uparser.ps1 downloads a
-#     version-pinned prebuilt from GitHub Releases (or builds from source) ---
-$bin = $env:UPARSER_BIN
-if (-not $bin) { $bin = (Get-Command uparser.exe -ErrorAction SilentlyContinue).Source }
-if (-not $bin) { $bin = (Get-Command uparser -ErrorAction SilentlyContinue).Source }
-if (-not $bin) { $bin = (& (Join-Path $PSScriptRoot 'ensure_uparser.ps1') | Select-Object -Last 1) }
+# --- locate the real binary: always via ensure_uparser.ps1 ---
+#
+# This deliberately does NOT short-circuit to Get-Command first. It used to,
+# and that made ensure_uparser.ps1's whole version-checking and supersede
+# ladder dead code on the most common call path: a machine with any old
+# uparser.exe on PATH would keep using it forever, silently, with the upgrade
+# logic never running. ensure_uparser.ps1 consults PATH itself, at the right
+# priority and with a version comparison. $env:UPARSER_BIN is likewise handled
+# there (and still wins unconditionally).
+$bin = (& (Join-Path $PSScriptRoot 'ensure_uparser.ps1') | Select-Object -Last 1)
 if (-not $bin -or -not (Test-Path $bin)) { Write-Error 'uparser binary not found and could not be downloaded/built'; exit 2 }
 
 & $bin @Args

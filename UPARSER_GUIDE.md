@@ -578,14 +578,19 @@ cp -r skills/uparser ~/.claude/skills/uparser
 cp -r skills/uparser <项目>/.claude/skills/uparser
 ```
 
-**无需手动准备二进制**:首次调用时 `ensure_uparser.sh` 按如下顺序解析出 `uparser` 并缓存到 `~/.cache/uparser/bin/`:
+**无需手动准备二进制**:首次调用时 `ensure_uparser.sh` 按如下顺序解析出 `uparser`,并缓存到 `~/.cache/uparser/versions/v<版本>/<平台>/`:
 
-1. `uparser` 已在 PATH → 直接用;
-2. 缓存已有 → 复用;
-3. 否则从 GitHub Release 下载版本固定的预编译包(`v0.1.0`,Linux x86_64;直连优先→`ghfast.top` 镜像兜底),校验 `SHA256SUMS` + 冒烟测试;
-4. 平台不支持(非 x86_64 / glibc<2.35 / Windows 无 exe)→ 回退源码构建。
+0. `$UPARSER_BIN` 已设 → 无条件使用,不做任何版本比较(本地开发逃生口);
+1. 查出**当前平台真正有 asset 的最新 release**(GitHub Releases API,6 小时 TTL 缓存);
+2. 本地 cargo workspace 构建 → 不比最新版旧就用它;
+3. `uparser` 已在 PATH → 不比最新版旧就用它;
+4. 版本化缓存已有该版本 → 复用;
+5. 否则从 GitHub Release 下载(直连优先→`ghfast.top` 镜像兜底),校验 `SHA256SUMS` + 冒烟测试,Windows 另取 `pdfium.dll`;
+6. 平台不支持 / 下载失败 → 回退源码构建。
 
-覆盖变量:`UPARSER_VERSION`(版本)/ `UPARSER_REPO`(仓库)/ `UPARSER_HOME`(缓存根)。
+两条不变量:**绝不降级**(只在本地版本严格更旧时才取代,所以你的 `0.5.0-dev` 不会被旧的正式版覆盖),以及**离线时不乱下载**(网络不可用时解析出的版本只作下限,不触发下载)。PATH 上的旧版本被取代时,新副本进缓存,**PATH 上的文件本身不动**。
+
+覆盖变量:`UPARSER_VERSION`(钉版本)/ `UPARSER_REPO`(仓库)/ `UPARSER_HOME`(二进制缓存根)/ `UPARSER_SKILL_HOME`(版本状态目录,默认 `~/.cache/uparser-skill`,**刻意独立于** `~/.cache/uparser`,因为 `uparser cache clear` 会整个删掉后者)/ `UPARSER_OFFLINE=1`(跳过检查)/ `UPARSER_VERSION_TTL` / `UPARSER_PRERELEASE=1` / `GITHUB_TOKEN`(解除匿名 60 次/小时限流)。
 
 验证安装:
 
