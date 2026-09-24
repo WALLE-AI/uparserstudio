@@ -1884,6 +1884,141 @@ fn doctor_probes_the_configured_pipeline_base_not_a_hardcoded_one() {
     );
 }
 
+// --- `doctor all` -----------------------------------------------------------
+// The single-protocol tests above assert the resolved `endpoint` field
+// without depending on network/proxy behavior; these do the same for `all`,
+// asserting `configured`/`results[].endpoint` rather than `reachable`.
+
+#[test]
+fn doctor_all_rejects_endpoint_flag() {
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "all", "--endpoint", "http://example/x"])
+        .assert()
+        .failure()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["error"]["code"], "invalid_arguments");
+}
+
+/// With no config file and no `UPARSER_ENDPOINT`, `all` probes nothing — it
+/// must not fall back to treating every protocol's built-in default
+/// (several of which coincide at `localhost:8000`) as configured.
+#[test]
+fn doctor_all_with_nothing_configured_reports_empty() {
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "all"])
+        .env("UPARSER_CONFIG", "/no/such/uparser-config.toml")
+        .env_remove("UPARSER_ENDPOINT")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["mode"], "all");
+    assert_eq!(parsed["configured"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+}
+
+/// Only protocols with a real `[<protocol>]` entry are probed — not every
+/// HTTP-backed protocol's built-in default. `dots-ocr`/`navidc-ocr`/
+/// `generic-vlm` all default to `localhost:8000` and are deliberately left
+/// unconfigured here to prove they're excluded, not just untested.
+#[test]
+fn doctor_all_probes_only_the_protocols_configured_in_config_toml() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[mineru-vlm]\nendpoint = \"http://mineru-host:19122/v1/chat/completions\"\n\
+         [pipeline]\nendpoint = \"http://pipeline-host:9001\""
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "all"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    let configured: Vec<&str> = parsed["configured"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(configured, vec!["mineru-vlm", "pipeline"]);
+
+    let results = parsed["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    let mineru = results
+        .iter()
+        .find(|r| r["protocol"] == "mineru-vlm")
+        .unwrap();
+    assert_eq!(
+        mineru["endpoint"],
+        "http://mineru-host:19122/v1/chat/completions"
+    );
+    let pipeline = results
+        .iter()
+        .find(|r| r["protocol"] == "pipeline")
+        .unwrap();
+    assert_eq!(pipeline["endpoint"], "http://pipeline-host:9001/health");
+}
+
+/// A `[defaults]` endpoint blanket-configures every HTTP-backed protocol,
+/// mirroring the resolution chain `doctor <name>` itself already applies
+/// per-protocol.
+#[test]
+fn doctor_all_defaults_section_configures_every_http_protocol() {
+    let mut cfg = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        cfg,
+        "[defaults]\nendpoint = \"http://shared.example/v1/chat/completions\""
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["doctor", "all"])
+        .env("UPARSER_CONFIG", cfg.path())
+        .env_remove("UPARSER_ENDPOINT")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let configured: Vec<&str> = parsed["configured"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for expected in [
+        "mineru-vlm",
+        "dots-ocr",
+        "navidc-ocr",
+        "monkeyocr-v2",
+        "pipeline",
+    ] {
+        assert!(
+            configured.contains(&expected),
+            "expected {expected} in {configured:?}"
+        );
+    }
+}
+
 /// V2 — authentication, end to end through the real binary. Proves both
 /// halves: the header actually reaches the server, and the secret does not
 /// leak into stdout/stderr.

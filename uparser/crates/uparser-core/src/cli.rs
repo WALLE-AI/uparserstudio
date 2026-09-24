@@ -265,6 +265,15 @@ pub enum Command {
     /// probes the given/default endpoint's reachability; for `pipeline`,
     /// also reports local CPU/memory as a non-binding Local/Remote
     /// suggestion. Diagnostic only — never gates `parse`.
+    ///
+    /// `protocol` may be `all`, which probes every protocol config.toml (or
+    /// `UPARSER_ENDPOINT`) actually resolves an endpoint for, instead of one
+    /// protocol at a time — useful when several protocols are configured
+    /// against different real services (e.g. one container per protocol)
+    /// and you don't want to name each one, or fall back to comparing a
+    /// built-in default several protocols share (`localhost:8000`).
+    /// `--endpoint` is rejected together with `all` (exit 1): there is no
+    /// single protocol to apply it to.
     Doctor {
         protocol: String,
         #[arg(long)]
@@ -1177,12 +1186,112 @@ fn default_endpoint_for(protocol: &str) -> Option<String> {
 
 /// `uparser doctor` (T-9.3): reachability probe for HTTP-backed protocols.
 /// Diagnostic only — a failed probe never changes `parse`'s behavior.
+///
+/// `protocol == "all"` is a special value (not a new flag, so the existing
+/// single-protocol positional argument shape doesn't change): it probes
+/// every protocol that currently has a *resolvable* endpoint — an explicit
+/// `--endpoint`/`UPARSER_ENDPOINT`, or a `[<protocol>]`/`[defaults]` entry in
+/// config.toml — instead of the caller naming one, or this command silently
+/// treating every unconfigured protocol's built-in default (several of which
+/// coincide at `localhost:8000`) as if it meant something in a real,
+/// multi-service (e.g. Docker Compose) deployment.
 fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
+    if protocol == "all" {
+        return run_doctor_all(endpoint);
+    }
+    match build_doctor_report(&protocol, endpoint) {
+        Ok(report) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("doctor report is serializable")
+            );
+            EXIT_SUCCESS
+        }
+        Err(code) => code,
+    }
+}
+
+/// `uparser doctor all`: probe every protocol config.toml (or env) actually
+/// resolves an endpoint for. `--endpoint` has no single protocol to apply to
+/// here, so combining it with `all` is a usage error rather than a guess at
+/// which protocol the caller meant.
+fn run_doctor_all(endpoint: Option<String>) -> i32 {
+    if endpoint.is_some() {
+        return emit_error(
+            OutputFormat::Json,
+            EXIT_USAGE,
+            "invalid_arguments",
+            "doctor all does not accept --endpoint: it probes each protocol's own resolved \
+             endpoint, not a single shared one",
+            "all",
+            None,
+        );
+    }
+
+    // Same set `default_endpoint_for` can answer for — every HTTP-backed
+    // protocol declares one in protocol_spec.rs; `native`/`tesseract`/`mock`
+    // do not and are excluded here (their `doctor <name>` check is a local,
+    // not network, one and stays single-protocol-only).
+    let configured: Vec<&'static str> = crate::protocol_spec::PROTOCOL_SPECS
+        .iter()
+        .filter(|spec| spec.default_endpoint.is_some())
+        .map(|spec| spec.name)
+        .filter(|name| {
+            // `resolve().endpoint` is `None` unless a CLI/env/config layer
+            // actually supplied one — the protocol's own built-in default
+            // (checked separately by `build_doctor_report`) is deliberately
+            // NOT consulted here, since a protocol nobody configured is not
+            // "reachable at localhost:8000", it's just not part of this
+            // deployment.
+            crate::agent_config::resolve(name, crate::agent_config::CliOverrides::default())
+                .endpoint
+                .is_some()
+        })
+        .collect();
+
+    if configured.is_empty() {
+        eprintln!(
+            "uparser doctor all: no protocol has a resolvable endpoint (no config.toml \
+             [<protocol>]/[defaults] entry, no UPARSER_ENDPOINT); nothing to probe"
+        );
+    }
+
+    let results: Vec<serde_json::Value> = configured
+        .iter()
+        .map(|name| {
+            build_doctor_report(name, None).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "protocol": name,
+                    "reachable": false,
+                    "note": "internal: build_doctor_report rejected a name this loop itself supplied",
+                })
+            })
+        })
+        .collect();
+
+    let report = serde_json::json!({
+        "mode": "all",
+        "configured": configured,
+        "results": results,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("doctor report is serializable")
+    );
+    EXIT_SUCCESS
+}
+
+/// Build one protocol's doctor report without printing it, so the
+/// single-protocol path and `doctor all` share one probing implementation.
+/// `Err` carries the exit code for a genuinely unknown protocol name — the
+/// error JSON has already been emitted to stdout via `emit_error` by the
+/// time this returns, matching every other error path in this module.
+fn build_doctor_report(protocol: &str, endpoint: Option<String>) -> Result<serde_json::Value, i32> {
     // Same resolution as `parse` (flag → env → config[protocol] →
     // config[defaults]) so a pre-flight `doctor` probes the very endpoint a
     // later `parse` would use, and reports the same credential decision.
     let resolved = crate::agent_config::resolve(
-        &protocol,
+        protocol,
         crate::agent_config::CliOverrides {
             endpoint,
             model: None,
@@ -1223,43 +1332,38 @@ fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
         } else {
             (None, "this protocol has no network endpoint to probe")
         };
-        let report = serde_json::json!({
+        return Ok(serde_json::json!({
             "protocol": protocol,
             "reachable": reachable,
             "note": note,
             // These protocols make no network request, so a configured
             // credential would not be used even if one resolved.
             "api_key": "not_applicable",
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).expect("doctor report is serializable")
-        );
-        return EXIT_SUCCESS;
+        }));
     }
 
-    let Some(target) = endpoint.or_else(|| default_endpoint_for(&protocol)) else {
-        return emit_error(
+    let Some(target) = endpoint.or_else(|| default_endpoint_for(protocol)) else {
+        return Err(emit_error(
             OutputFormat::Json,
             EXIT_USAGE,
             "unknown_protocol",
             &format!("unknown protocol: {protocol}"),
-            &protocol,
+            protocol,
             None,
-        );
+        ));
     };
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return emit_error(
+            return Err(emit_error(
                 OutputFormat::Json,
                 EXIT_INTERNAL,
                 "runtime_init_failed",
                 &e.to_string(),
-                &protocol,
+                protocol,
                 None,
-            );
+            ));
         }
     };
 
@@ -1280,18 +1384,13 @@ fn run_doctor(protocol: String, endpoint: Option<String>) -> i32 {
         }
     });
 
-    let report = serde_json::json!({
+    Ok(serde_json::json!({
         "protocol": protocol,
         "endpoint": target,
         "reachable": reachable,
         "detail": detail,
         "api_key": api_key_status,
-    });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).expect("doctor report is serializable")
-    );
-    EXIT_SUCCESS
+    }))
 }
 
 /// `uparser protocols` (T-9.4): every built-in adapter's declared

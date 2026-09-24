@@ -58,6 +58,11 @@ model protocol, use `scripts/uparser-parse.sh`, or `doctor` plus an explicit `--
 # No --endpoint needed once config.toml is set; it echoes the endpoint it resolved.
 "$UP" doctor mineru-vlm | jq '{endpoint, reachable}'
 
+# Multiple protocols configured against different real services (e.g. one
+# container per protocol, each on its own port)? Probe all of them in one
+# call instead of guessing which are actually configured and naming each:
+"$UP" doctor all | jq '.results[] | {protocol, endpoint, reachable}'
+
 # Machine consumption: text + geometry + category per block.
 "$UP" parse f.pdf --mode native --format json --no-assets \
   | jq -r '.pages[].blocks[] | select(.text) | .text'

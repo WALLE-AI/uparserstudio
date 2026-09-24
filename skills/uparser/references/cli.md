@@ -210,6 +210,8 @@ Options:
 ```text
 Per-protocol health check (T-9.3): for HTTP-backed protocols, probes the given/default endpoint's reachability; for `pipeline`, also reports local CPU/memory as a non-binding Local/Remote suggestion. Diagnostic only — never gates `parse`
 
+`protocol` may be `all`, which probes every protocol config.toml (or `UPARSER_ENDPOINT`) actually resolves an endpoint for, instead of one protocol at a time — useful when several protocols are configured against different real services (e.g. one container per protocol) and you don't want to name each one, or fall back to comparing a built-in default several protocols share (`localhost:8000`). `--endpoint` is rejected together with `all` (exit 1): there is no single protocol to apply it to.
+
 Usage: uparser doctor [OPTIONS] <PROTOCOL>
 
 Arguments:
@@ -219,6 +221,21 @@ Options:
       --endpoint <ENDPOINT>  
   -h, --help                 Print help
 ```
+
+`uparser doctor all` output shape (each entry is the same object `doctor <protocol>` alone would print):
+
+```json
+{
+  "mode": "all",
+  "configured": ["mineru-vlm", "pipeline"],
+  "results": [
+    {"protocol": "mineru-vlm", "endpoint": "...", "reachable": true, "detail": "HTTP 405", "api_key": "unset"},
+    {"protocol": "pipeline", "endpoint": ".../health", "reachable": false, "detail": "...", "api_key": "not_applicable"}
+  ]
+}
+```
+
+`configured` only lists protocols with a *resolvable* endpoint right now (an explicit `[<protocol>]`/`[defaults]` entry in config.toml, or `UPARSER_ENDPOINT`) — not every HTTP-backed protocol's built-in default. Several protocols (`dots-ocr`, `navidc-ocr`, `generic-vlm`) share the same built-in default `http://localhost:8000/...`; `all` deliberately does not probe that shared default for a protocol nobody configured, since in a real multi-service deployment (e.g. one Docker container per protocol on its own port) that would just mean "probed the wrong port and drew a conclusion from it."
 
 ## `uparser protocols`
 
