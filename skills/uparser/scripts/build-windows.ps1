@@ -13,7 +13,7 @@
     .\build-windows.ps1 -Features native
     # full (adds page rasterization for the VLM/OCR protocols):
     .\build-windows.ps1 -Features "native,pdfium"
-    # if the workspace isn't auto-found:
+    # if the workspace isn't auto-found (or set $env:UPARSER_WORKSPACE instead):
     .\build-windows.ps1 -Workspace C:\path\to\uparserstudio\uparser
 
   NOTE: native Windows build is not yet CI-verified. `native`/`parse` should
@@ -27,7 +27,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# --- locate the uparser workspace (walk up from this script) ---
+# --- locate the uparser workspace: -Workspace > $env:UPARSER_WORKSPACE >
+#     walk up from this script (only useful when the skill is actually
+#     installed inside a checkout, not a global skills directory) ---
+if (-not $Workspace -and $env:UPARSER_WORKSPACE -and (Test-Path (Join-Path $env:UPARSER_WORKSPACE 'Cargo.toml'))) {
+  $Workspace = $env:UPARSER_WORKSPACE
+}
 if (-not $Workspace) {
   $d = $PSScriptRoot
   while ($d) {

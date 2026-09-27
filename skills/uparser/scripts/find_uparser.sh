@@ -35,16 +35,24 @@ find_workspace() {
   done
 }
 
-# Search from this script's own location, then from the caller's cwd.
+# Search $UPARSER_WORKSPACE (an explicit override, same escape-hatch pattern as
+# UPARSER_BIN), then this script's own location, then the caller's cwd.
 #
 # The cwd root matters because the script is normally *installed* to
 # ~/.claude/skills/uparser/scripts, where nothing above it is a checkout — so
 # searching only from the script's location fails for every user running the
 # skill from inside the repo, which is precisely the case where a locally built
-# binary does exist.
+# binary does exist. UPARSER_WORKSPACE matters for the remaining case: invoked
+# from a working directory that is neither the script's install location nor
+# inside the checkout (e.g. a scratch directory, with a globally-installed
+# skill copy) — neither of the other two roots can ever find anything there.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cwd="$PWD"
-ws="$(find_workspace "$here")"
+ws=""
+if [ -n "${UPARSER_WORKSPACE:-}" ] && [ -f "$UPARSER_WORKSPACE/Cargo.toml" ]; then
+  ws="$UPARSER_WORKSPACE"
+fi
+[ -n "$ws" ] || ws="$(find_workspace "$here")"
 [ -n "$ws" ] || ws="$(find_workspace "$cwd")"
 
 # --locate-only: report ONLY a local workspace build, so ensure_uparser.sh can
@@ -81,7 +89,7 @@ fi
 
 if [ -z "$ws" ]; then
   echo "could not locate the uparser workspace (no uparser/Cargo.toml found above $here or $cwd)" >&2
-  echo "set UPARSER_BIN=/path/to/uparser, or run this from inside the checkout" >&2
+  echo "set UPARSER_BIN=/path/to/uparser, UPARSER_WORKSPACE=/path/to/uparserstudio/uparser, or run this from inside the checkout" >&2
   exit 2
 fi
 

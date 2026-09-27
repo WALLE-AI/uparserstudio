@@ -25,7 +25,24 @@ carries an asset for *your* platform, and it never downgrades a newer binary you
 older one on `PATH` is superseded (the new copy goes to the cache; the file on `PATH` is left alone).
 Pin with `UPARSER_VERSION=0.3.0`; skip the check with `UPARSER_OFFLINE=1`. `$UPARSER_BIN` always wins
 and is never version-checked. `scripts/find_uparser.sh` still exists but only builds from source — it
-does no version check, so prefer `ensure_uparser.sh`.
+does no version check, so prefer `ensure_uparser.sh`. On Windows use `scripts/ensure_uparser.ps1`
+(same contract, same env vars) in place of `ensure_uparser.sh`.
+
+**Network access.** This resolves a prebuilt binary from GitHub Releases, so whichever agent
+framework loads this skill (Claude Code, Codex, or anything else — the skill is just scripts + this
+file, nothing framework-specific) needs egress to: `github.com`, `api.github.com`,
+`objects.githubusercontent.com` (the actual release-asset CDN github.com redirects to), and the
+mirrors used when those are blocked/unreliable: `ghfast.top`, `gh-proxy.com`, `ghproxy.net` (add your
+own via `UPARSER_MIRRORS`, comma-separated). If your framework's sandbox enforces a network
+allowlist, add those domains there — no amount of retry/mirror logic in the scripts substitutes for a
+sandbox that blocks all egress. If a proxy already makes `curl`/a browser reach github.com,
+`ensure_uparser.sh` picks it up automatically (`http_proxy`/`https_proxy`); on Windows,
+`ensure_uparser.ps1` needs `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set explicitly, since
+`Invoke-WebRequest` does not read them the way `curl` does. If the sandbox is genuinely offline with
+no way to allowlist anything, download `uparser` once on a machine that does have access and set
+`UPARSER_BIN=/path/to/uparser` (or `UPARSER_WORKSPACE=/path/to/uparserstudio/uparser` plus a local
+Rust toolchain, to build from source instead) — there is no download-free path around a fully
+air-gapped sandbox.
 
 Then pick one line — do not over-plan a document you already understand:
 
@@ -212,6 +229,7 @@ probing entirely.
 | Env | Effect |
 |---|---|
 | `UPARSER_BIN` | Use exactly this binary; wins over everything, never version-checked |
+| `UPARSER_WORKSPACE` | Path to `uparserstudio/uparser`, for from-source builds when neither the skill's install location nor cwd is inside the checkout |
 | `UPARSER_VERSION` | Pin the release to resolve; no network lookup |
 | `UPARSER_OFFLINE=1` | Never contact the GitHub API; serve cache/pin |
 | `UPARSER_VERSION_TTL` | Seconds between release checks (default 21600) |
@@ -220,6 +238,7 @@ probing entirely.
 | `UPARSER_QUALITY_ORDER` | Space-separated probe order override |
 | `UPARSER_PROBE_TTL` | Seconds to cache a successful probe (default 300) |
 | `GITHUB_TOKEN` | Lifts the anonymous 60 req/h API rate limit |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | Proxy for reaching github.com when it's blocked/unreliable directly. `ensure_uparser.sh` (curl) already honors these automatically; `ensure_uparser.ps1`/`latest_version.ps1` (Windows, `Invoke-WebRequest`) do NOT read them from a system/IE proxy config the way curl does, so they must be set as env vars for the download step to pick them up |
 
 Then `"$UP" parse f.pdf --protocol mineru-vlm` needs no endpoint flag at all. Full template with
 every protocol and key: `references/config.example.toml`. `UPARSER_OCR_LANG` overrides OCR language

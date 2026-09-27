@@ -33,9 +33,11 @@
   makes this safe.
   ---------------------------------------------------------------------------
 
-  Env: UPARSER_BIN, UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME,
-       UPARSER_SKILL_HOME, UPARSER_OFFLINE, UPARSER_PRERELEASE,
-       UPARSER_VERSION_TTL, UPARSER_PREFER_WORKSPACE, GITHUB_TOKEN.
+  Env: UPARSER_BIN, UPARSER_WORKSPACE, UPARSER_VERSION, UPARSER_REPO,
+       UPARSER_HOME, UPARSER_SKILL_HOME, UPARSER_OFFLINE, UPARSER_PRERELEASE,
+       UPARSER_VERSION_TTL, UPARSER_PREFER_WORKSPACE, UPARSER_MIRRORS,
+       GITHUB_TOKEN, plus HTTPS_PROXY/HTTP_PROXY/ALL_PROXY (read explicitly,
+       since Invoke-WebRequest does not honor them the way curl does).
 #>
 [CmdletBinding()] param([switch] $Refresh)
 $ErrorActionPreference = 'Stop'
@@ -137,18 +139,33 @@ function Complete-Up($p) { Set-UpMemo $p; return $p }
 # 2) a local cargo workspace build. This rung exists so a developer with a
 #    fresh local build does not silently get an older downloaded release —
 #    the exact hazard find_uparser.sh's own comment warns about.
+#
+# $env:UPARSER_WORKSPACE is an explicit override (same escape-hatch pattern as
+# UPARSER_BIN) for when neither this script's own location nor $PWD is inside
+# the checkout - e.g. invoked from an arbitrary working directory with a
+# globally-installed skill copy. Without it, this rung (and the from-source
+# fallback below, which reuses $ws) simply cannot locate anything to build.
 $ws = $null
-foreach ($root in @($here, $PWD.Path)) {
-  $d = $root
-  while ($d) {
-    if (Test-Path -LiteralPath (Join-Path $d 'uparser\Cargo.toml')) { $ws = Join-Path $d 'uparser'; break }
-    if ((Test-Path -LiteralPath (Join-Path $d 'Cargo.toml')) -and
-        (Test-Path -LiteralPath (Join-Path $d 'crates\uparser-core'))) { $ws = $d; break }
-    $parent = Split-Path -Parent $d
-    if ($parent -eq $d) { break }
-    $d = $parent
+if ($env:UPARSER_WORKSPACE) {
+  if (Test-Path -LiteralPath (Join-Path $env:UPARSER_WORKSPACE 'Cargo.toml')) {
+    $ws = $env:UPARSER_WORKSPACE
+  } else {
+    [Console]::Error.WriteLine("uparser: UPARSER_WORKSPACE=$($env:UPARSER_WORKSPACE) has no Cargo.toml - ignoring")
   }
-  if ($ws) { break }
+}
+if (-not $ws) {
+  foreach ($root in @($here, $PWD.Path)) {
+    $d = $root
+    while ($d) {
+      if (Test-Path -LiteralPath (Join-Path $d 'uparser\Cargo.toml')) { $ws = Join-Path $d 'uparser'; break }
+      if ((Test-Path -LiteralPath (Join-Path $d 'Cargo.toml')) -and
+          (Test-Path -LiteralPath (Join-Path $d 'crates\uparser-core'))) { $ws = $d; break }
+      $parent = Split-Path -Parent $d
+      if ($parent -eq $d) { break }
+      $d = $parent
+    }
+    if ($ws) { break }
+  }
 }
 if ($ws) {
   $wsBin = Join-Path $ws 'target\release\uparser.exe'
@@ -158,6 +175,14 @@ if ($ws) {
     if ($pick) { return (Complete-Up $pick) }
   }
 }
+
+# Reused below by every from-source fallback: build-windows.ps1's own
+# auto-detection walks up from $PSScriptRoot, which is useless when the skill
+# is installed somewhere with no relation to the repo (e.g. a global skills
+# directory like an app's AppData folder) - $ws above was already found from
+# $PWD, so hand it over explicitly instead of making build-windows.ps1 guess.
+$buildArgs = @{}
+if ($ws) { $buildArgs['Workspace'] = $ws }
 
 # 3) PATH
 $onPath = (Get-Command uparser.exe -ErrorAction SilentlyContinue).Source
@@ -172,12 +197,12 @@ if (Test-Path -LiteralPath $cachedBin -PathType Leaf) { return (Complete-Up $cac
 
 if (-not $target -or -not $asset) {
   Write-Warning 'uparser: no published binary nameable for this platform - building from source'
-  & (Join-Path $here 'build-windows.ps1'); return (Join-Path $HOME '.local/bin/uparser.exe')
+  & (Join-Path $here 'build-windows.ps1') @buildArgs; return (Join-Path $HOME '.local/bin/uparser.exe')
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
   Write-Warning 'no prebuilt for 32-bit Windows - building from source'
-  & (Join-Path $here 'build-windows.ps1'); return (Join-Path $HOME '.local/bin/uparser.exe')
+  & (Join-Path $here 'build-windows.ps1') @buildArgs; return (Join-Path $HOME '.local/bin/uparser.exe')
 }
 
 $repo = if ($env:UPARSER_REPO) { $env:UPARSER_REPO } else { 'WALLE-AI/uparserstudio' }
@@ -187,22 +212,65 @@ $tmp    = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRand
 $dllAsset = "uparser-v$target-$plat-pdfium.dll"
 $dllTmp = "$tmp.pdfium.dll"
 
-# Direct, then the ghfast.top mirror (needed on networks that cannot reach
-# github.com's download host). NOTE: ghfast.top mirrors release DOWNLOADS only
-# - it does NOT proxy api.github.com (verified: 403), which is why version
-# resolution in latest_version.ps1 has no mirror and degrades to a pin instead.
-function Get-UpFile($url, $dest) {
-  try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $dest -TimeoutSec 30; return $true }
-  catch {
-    try { Invoke-WebRequest -UseBasicParsing -Uri "https://ghfast.top/$url" -OutFile $dest -TimeoutSec 40; return $true }
-    catch { return $false }
+# Invoke-WebRequest/Invoke-RestMethod, unlike curl (what ensure_uparser.sh
+# uses), do NOT read HTTP_PROXY/HTTPS_PROXY/ALL_PROXY - they only honor the
+# system/IE proxy config, which most Windows proxy tools (Clash/v2rayN/etc,
+# common on networks where github.com's release CDN is throttled or blocked)
+# do not touch. Pass one through explicitly when set, so a proxy that already
+# makes `curl`/browsers work also makes this script work.
+function Get-UpProxyUri {
+  foreach ($n in 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY') {
+    $v = [Environment]::GetEnvironmentVariable($n)
+    if ($v) { return $v }
   }
+  return $null
+}
+$script:UpProxy = Get-UpProxyUri
+function Get-UpWebArgs {
+  if ($script:UpProxy) { return @{ Proxy = $script:UpProxy } }
+  return @{}
+}
+
+# Direct, then a chain of github-release mirrors (needed on networks - any
+# agent sandbox/harness, not just this one - that cannot reach github.com's
+# download host directly). ghfast.top/gh-proxy.com/ghproxy.net are independent
+# services and go up/down/get blocked independently of one another and of
+# github.com itself, so trying all of them meaningfully raises the odds that
+# at least one is reachable; each is checksum-verified against SHA256SUMS same
+# as a direct download, so an untrusted/compromised mirror cannot substitute a
+# bad binary undetected. $env:UPARSER_MIRRORS (comma-separated, each used as a
+# URL prefix in front of the real github.com URL) lets an operator add a
+# private/internal mirror without editing this script.
+# NOTE: none of these mirror api.github.com (verified: 403 on ghfast.top) -
+# which is why version resolution in latest_version.ps1 has no mirror and
+# degrades to a pin instead.
+$script:UpMirrors = @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/')
+if ($env:UPARSER_MIRRORS) {
+  $script:UpMirrors = @($env:UPARSER_MIRRORS -split ',' | Where-Object { $_ }) + $script:UpMirrors
+}
+function Get-UpFile($url, $dest) {
+  $webArgs = Get-UpWebArgs
+  $errs = @()
+  try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $dest -TimeoutSec 30 @webArgs; return $true }
+  catch { $errs += "direct ($url): $($_.Exception.Message)" }
+  foreach ($m in $script:UpMirrors) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri "$m$url" -OutFile $dest -TimeoutSec 40 @webArgs; return $true }
+    catch { $errs += "$($m): $($_.Exception.Message)" }
+  }
+  foreach ($e in $errs) { [Console]::Error.WriteLine("uparser: download attempt failed - $e") }
+  return $false
 }
 
 Write-Host "uparser: downloading $asset (v$target) ..." -ForegroundColor Cyan
 if (-not (Get-UpFile "$base/$asset" $tmp)) {
-  Write-Warning 'uparser: download failed (direct + mirror) - building from source'
-  & (Join-Path $here 'build-windows.ps1'); return (Join-Path $HOME '.local/bin/uparser.exe')
+  Write-Warning 'uparser: download failed (direct + all mirrors) - building from source'
+  if ($script:UpProxy) {
+    [Console]::Error.WriteLine("uparser: used proxy '$($script:UpProxy)' from HTTPS_PROXY/HTTP_PROXY/ALL_PROXY - check it can reach github.com and the mirrors above")
+  } else {
+    [Console]::Error.WriteLine('uparser: no HTTPS_PROXY/HTTP_PROXY/ALL_PROXY set - if this sandbox/network blocks github.com entirely, set one, or add its egress domains to your agent framework''s network allowlist (github.com, objects.githubusercontent.com, ghfast.top, gh-proxy.com, ghproxy.net), or set UPARSER_BIN/UPARSER_WORKSPACE to something usable offline')
+  }
+  [Console]::Error.WriteLine("uparser: you can also download manually on a machine with access and set UPARSER_BIN: $base/$asset")
+  & (Join-Path $here 'build-windows.ps1') @buildArgs; return (Join-Path $HOME '.local/bin/uparser.exe')
 }
 
 # checksum (best-effort; an absent SHA256SUMS is not fatal)

@@ -38,9 +38,10 @@
 # cache. Guard (a) is what makes this safe.
 # ---------------------------------------------------------------------------
 #
-# Env: UPARSER_BIN, UPARSER_VERSION, UPARSER_REPO, UPARSER_HOME,
-#      UPARSER_SKILL_HOME, UPARSER_OFFLINE, UPARSER_PRERELEASE,
-#      UPARSER_VERSION_TTL, UPARSER_PREFER_WORKSPACE, GITHUB_TOKEN.
+# Env: UPARSER_BIN, UPARSER_WORKSPACE, UPARSER_VERSION, UPARSER_REPO,
+#      UPARSER_HOME, UPARSER_SKILL_HOME, UPARSER_OFFLINE, UPARSER_PRERELEASE,
+#      UPARSER_VERSION_TTL, UPARSER_PREFER_WORKSPACE, UPARSER_MIRRORS,
+#      GITHUB_TOKEN, plus curl's own http_proxy/https_proxy/all_proxy.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -192,22 +193,50 @@ base="https://github.com/$REPO/releases/download/v$TARGET"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$CACHE"
 
-# fetch <url> <dest>: direct, then the ghfast.top mirror (needed on networks
-# that cannot reach github.com's download host). Both attempts abort quickly if
-# the transfer stalls so a dead direct host does not burn the whole budget.
-# NOTE: ghfast.top mirrors release DOWNLOADS only — it does NOT proxy
-# api.github.com (verified: 403), which is why version resolution has no mirror.
+# fetch <url> <dest>: direct, then a chain of github-release mirrors (needed
+# on networks — any agent sandbox/harness, not just this one — that cannot
+# reach github.com's download host directly). curl already honors
+# http_proxy/https_proxy/all_proxy on its own, unlike Invoke-WebRequest on the
+# Windows twin, so no extra proxy plumbing is needed here. Each mirror is an
+# independent service that goes up/down/gets blocked independently of the
+# others and of github.com itself, so trying all of them meaningfully raises
+# the odds that at least one is reachable; every download is still
+# checksum-verified against SHA256SUMS same as a direct one, so an untrusted
+# mirror cannot substitute a bad binary undetected. All attempts abort quickly
+# if the transfer stalls so a dead host does not burn the whole budget.
+# $UPARSER_MIRRORS (comma-separated URL prefixes) lets an operator add a
+# private/internal mirror without editing this script.
+# NOTE: none of these mirror api.github.com (verified: 403 on ghfast.top) —
+# which is why version resolution has no mirror.
+UPARSER_MIRROR_LIST="https://ghfast.top/,https://gh-proxy.com/,https://ghproxy.net/"
+if [ -n "${UPARSER_MIRRORS:-}" ]; then UPARSER_MIRROR_LIST="$UPARSER_MIRRORS,$UPARSER_MIRROR_LIST"; fi
 fetch() {
   local dl="--connect-timeout 8 --speed-limit 3000 --speed-time 8"
   # shellcheck disable=SC2086
-  curl -fsSL $dl --max-time 60  -o "$2" "$1" 2>/dev/null && return 0
-  # shellcheck disable=SC2086
-  curl -fsSL $dl --max-time 240 -o "$2" "https://ghfast.top/$1" 2>/dev/null
+  curl -fsSL $dl --max-time 60 -o "$2" "$1" 2>/dev/null && return 0
+  local old_ifs="$IFS" mirror
+  IFS=','
+  for mirror in $UPARSER_MIRROR_LIST; do
+    IFS="$old_ifs"
+    [ -n "$mirror" ] || continue
+    # shellcheck disable=SC2086
+    curl -fsSL $dl --max-time 240 -o "$2" "${mirror}${1}" 2>/dev/null && return 0
+  done
+  IFS="$old_ifs"
+  return 1
 }
 
 echo "uparser: downloading $ASSET (v$TARGET) ..." >&2
 if ! fetch "$base/$ASSET" "$tmp/uparser$SFX"; then
-  echo "uparser: download failed (direct + mirror) — building from source" >&2
+  echo "uparser: download failed (direct + all mirrors) — building from source" >&2
+  if [ -z "${http_proxy:-}${https_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}${all_proxy:-}${ALL_PROXY:-}" ]; then
+    echo "uparser: no proxy env var set — if this sandbox/network blocks github.com entirely," >&2
+    echo "        set https_proxy/http_proxy, or add its egress domains to your agent" >&2
+    echo "        framework's network allowlist (github.com, objects.githubusercontent.com," >&2
+    echo "        ghfast.top, gh-proxy.com, ghproxy.net), or set UPARSER_BIN/run from a" >&2
+    echo "        checkout with a working Rust toolchain" >&2
+  fi
+  echo "uparser: you can also download manually on a machine with access and set UPARSER_BIN: $base/$ASSET" >&2
   exec "$HERE/find_uparser.sh" --build
 fi
 

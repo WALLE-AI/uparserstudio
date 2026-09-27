@@ -182,11 +182,23 @@ if (-not $skipNet) {
   $tok = if ($env:UPARSER_GITHUB_TOKEN) { $env:UPARSER_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
   if ($tok) { $hdrs['Authorization'] = "Bearer $tok" }
 
+  # Invoke-RestMethod, unlike curl (ensure_uparser.sh's transport), does not
+  # read HTTP_PROXY/HTTPS_PROXY/ALL_PROXY on its own - pass one through
+  # explicitly when set, so a system proxy that already makes github.com
+  # reachable in a browser/curl also works here. ghfast.top does not proxy
+  # api.github.com (403, see module doc), so there is no mirror to fall back to
+  # - an explicit proxy is the only way to reach the API on such a network.
+  $webArgs = @{}
+  foreach ($n in 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY') {
+    $v = [Environment]::GetEnvironmentVariable($n)
+    if ($v) { $webArgs['Proxy'] = $v; break }
+  }
+
   $releases = $null
   try {
     # per_page=100, not 30: once the repo has >30 releases, a platform whose
     # newest asset is older than #30 would silently resolve to nothing.
-    $releases = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers $hdrs `
+    $releases = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers $hdrs @webArgs `
                   -Uri "$($script:UpApiBase)/repos/$($script:UpRepo)/releases?per_page=100"
   } catch { $releases = $null }
 
