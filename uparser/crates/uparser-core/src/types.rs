@@ -272,16 +272,12 @@ pub enum ContentMix {
 /// call) is conditional and only used for low-confidence auto routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProfileLevel {
+    #[default]
     L1,
     L2,
     L3,
-}
-
-impl Default for ProfileLevel {
-    fn default() -> Self {
-        Self::L1
-    }
 }
 
 /// L3-only semantic subtype — always `None` at L1/L2.

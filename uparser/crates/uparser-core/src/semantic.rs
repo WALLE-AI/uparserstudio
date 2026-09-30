@@ -176,6 +176,8 @@ mod tests {
             },
             artifacts: AnalysisArtifacts::None,
             document_options: Default::default(),
+            timing: Default::default(),
+            started_at: std::time::Instant::now(),
         }
     }
 

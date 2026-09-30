@@ -65,6 +65,7 @@ pub(crate) fn parse(
         header_rows,
         grid,
         caption: None,
+        source_html: None,
     };
     let mut document = CanonicalDocument::new(format);
     document.metadata.variant = Some(if delimiter == b'\t' { "tsv" } else { "csv" }.to_owned());

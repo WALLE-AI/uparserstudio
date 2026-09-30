@@ -546,6 +546,7 @@ fn table_block(rows: Vec<Vec<String>>) -> Block {
             header_rows: 0,
             grid,
             caption: None::<Vec<Inline>>,
+            source_html: None,
         },
     }
 }

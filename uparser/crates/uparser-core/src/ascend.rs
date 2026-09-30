@@ -632,6 +632,10 @@ fn parse_html_table(html: &str) -> Option<Table> {
         header_rows: header_rows.min(grid.len()),
         grid,
         caption: None,
+        // A.1: keep the protocol's own markup alongside the parsed grid, so
+        // the renderer can choose to pass it through rather than re-emit a
+        // pipe table that cannot express what the HTML did.
+        source_html: Some(html.to_owned()),
     })
 }
 

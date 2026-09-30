@@ -86,6 +86,30 @@ pub enum OrderSource {
     GeometricFallback,
 }
 
+/// How much real-world evidence stands behind a protocol adapter (B.2).
+///
+/// Six of the eleven adapters have never spoken to a real service, and
+/// `uparser protocols` gave an agent no way to tell which — every entry
+/// looked equally finished. The distinction is *evidence*, not code quality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationTier {
+    /// Run end-to-end against a real service (or, for `native`, real
+    /// documents) **and** scored on a full public benchmark set. See
+    /// `UPARSER_LEADERBOARD.md`.
+    VerifiedLive,
+    /// The wire contract is confirmed (vendored reference source, or a
+    /// standard API), but no full-benchmark score exists for it here — output
+    /// quality is unverified even if an ad-hoc run succeeds.
+    OfflineOnly,
+    /// The wire contract is this project's own reasonable guess, never
+    /// confirmed against a real deployment. Prefer another protocol unless you
+    /// have a service you know matches it.
+    SpeculativeContract,
+    /// Not a real protocol — a test double.
+    TestDouble,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ProtocolSpec {
     pub name: &'static str,
@@ -112,6 +136,12 @@ pub struct ProtocolSpec {
     pub default_timeout_secs: u64,
     pub default_max_retries: u32,
     pub requires_pdf_native_feature: bool,
+    /// What evidence exists that this adapter works against something real.
+    pub validation: ValidationTier,
+    /// Free-text provenance for `validation`: date + dataset + headline score,
+    /// so the claim is checkable rather than a bare label. `None` for anything
+    /// that has never been measured — deliberately not a placeholder date.
+    pub last_verified: Option<&'static str>,
 }
 
 pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
@@ -130,6 +160,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 0,
         default_max_retries: 0,
         requires_pdf_native_feature: true,
+        validation: ValidationTier::VerifiedLive,
+        last_verified: Some("2026-09-14 opendataloader-bench-200: Overall 0.8766"),
     },
     ProtocolSpec {
         name: "tesseract",
@@ -147,6 +179,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 0,
         default_max_retries: 0,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::OfflineOnly,
+        last_verified: None,
     },
     ProtocolSpec {
         name: "mineru-vlm",
@@ -165,6 +199,10 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 60,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::VerifiedLive,
+        last_verified: Some(
+            "2026-09-14 opendataloader-bench-200 Overall 0.9252; OmniDocBench-1651 text-edit 0.0837",
+        ),
     },
     ProtocolSpec {
         name: "dots-ocr",
@@ -180,6 +218,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 120,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::OfflineOnly,
+        last_verified: None,
     },
     ProtocolSpec {
         name: "generic-vlm",
@@ -195,6 +235,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 120,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::OfflineOnly,
+        last_verified: None,
     },
     ProtocolSpec {
         name: "monkeyocr-v2",
@@ -210,6 +252,10 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 120,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::VerifiedLive,
+        last_verified: Some(
+            "2026-09-21 opendataloader-bench-200 Overall 0.8824; OmniDocBench-1651 text-edit 0.0499",
+        ),
     },
     ProtocolSpec {
         name: "navidc-ocr",
@@ -225,6 +271,10 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 120,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::VerifiedLive,
+        last_verified: Some(
+            "2026-09-14 opendataloader-bench-200 Overall 0.9053; OmniDocBench-1651 text-edit 0.0593",
+        ),
     },
     ProtocolSpec {
         name: "paddleocr",
@@ -244,6 +294,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 60,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::SpeculativeContract,
+        last_verified: None,
     },
     ProtocolSpec {
         name: "paddlex-structure",
@@ -259,6 +311,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 120,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::SpeculativeContract,
+        last_verified: None,
     },
     ProtocolSpec {
         name: "pipeline",
@@ -280,6 +334,10 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 180,
         default_max_retries: 2,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::VerifiedLive,
+        last_verified: Some(
+            "2026-09-14 opendataloader-bench-200 Overall 0.9086; OmniDocBench-1651 text-edit 0.0706",
+        ),
     },
     ProtocolSpec {
         name: "mock",
@@ -295,6 +353,8 @@ pub const PROTOCOL_SPECS: &[ProtocolSpec] = &[
         default_timeout_secs: 0,
         default_max_retries: 0,
         requires_pdf_native_feature: false,
+        validation: ValidationTier::TestDouble,
+        last_verified: None,
     },
 ];
 
@@ -336,6 +396,27 @@ impl ProtocolSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `VerifiedLive` claim without provenance is exactly the kind of
+    /// unfalsifiable status this field exists to replace, so the pairing is
+    /// enforced here rather than left to review discipline (B.2).
+    #[test]
+    fn verified_live_protocols_must_cite_their_evidence_and_others_must_not_invent_it() {
+        for spec in PROTOCOL_SPECS {
+            match spec.validation {
+                ValidationTier::VerifiedLive => assert!(
+                    spec.last_verified.is_some(),
+                    "{} claims verified-live with no dataset/date cited",
+                    spec.name
+                ),
+                _ => assert!(
+                    spec.last_verified.is_none(),
+                    "{} cites a verification it is not claiming",
+                    spec.name
+                ),
+            }
+        }
+    }
 
     #[test]
     fn names_are_unique_and_cover_registered_adapters() {

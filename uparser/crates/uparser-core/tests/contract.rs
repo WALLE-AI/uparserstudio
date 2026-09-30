@@ -129,6 +129,7 @@ async fn mineru_vlm_and_monkeyocrv2_agree_on_markdown_for_equivalent_text_block(
                 engine_markdown: None,
                 document: None,
                 source_format: uparser_document_engine::DocumentFormat::Pdf,
+                table_policy: None,
             },
             render::MarkdownSource::Canonical,
         )

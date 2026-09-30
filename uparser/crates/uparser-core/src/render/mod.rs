@@ -31,6 +31,35 @@ pub struct RenderInput<'a> {
     pub document: Option<&'a uparser_document_engine::CanonicalDocument>,
     /// Format to record on a document ascended from `result`.
     pub source_format: uparser_document_engine::DocumentFormat,
+    /// How tables reach Markdown (A.2). `None` means [`auto_table_policy`];
+    /// the CLI's `--table-format` overrides it so an A/B is a flag, not a
+    /// code fork.
+    pub table_policy: Option<uparser_document_engine::render::TablePolicy>,
+}
+
+/// Which table policy `--table-format auto` resolves to.
+///
+/// **Today this is the pre-A.2 behaviour for every protocol** (re-emit the
+/// parsed grid), because a protocol's rendered tables are what its published
+/// leaderboard score was measured on — see `UPARSER_LEADERBOARD.md` — and
+/// flipping a default that moves those numbers without re-measuring is exactly
+/// the kind of silent change this project has been paying down.
+///
+/// The arm being evaluated is `--table-format source-html`: for a protocol
+/// whose native table output already *is* HTML (mineru-vlm / monkeyocr-v2 /
+/// navidc-ocr / pipeline: OTSL→HTML or literal passthrough), handing that
+/// markup through instead of re-emitting the grid recovered a measured
+/// −0.29 Table Edit on OmniDocBench for monkeyocr-v2. Whether it helps or
+/// hurts the other three, and on which harness, is A.3's measurement; both
+/// arms are one flag apart on one binary, so that comparison needs no fork.
+///
+/// Two protocols where passthrough would be wrong *in principle*, whatever the
+/// measurement says: `generic-vlm` and `paddlex-structure` answer with a
+/// Markdown pipe table that `markdown_ir` reconstructs HTML from, so passing
+/// that reconstruction through would replace what the model actually wrote
+/// with generated markup.
+pub fn auto_table_policy() -> uparser_document_engine::render::TablePolicy {
+    uparser_document_engine::render::TablePolicy::Grid
 }
 
 #[derive(Debug)]
@@ -75,19 +104,25 @@ pub fn render_markdown(input: &RenderInput<'_>, source: MarkdownSource) -> Strin
     // adds one of its own when writing the line. Trim so the emitted file
     // does not gain a trailing blank line just because of which renderer
     // produced it.
+    let options = uparser_document_engine::render::RenderOptions {
+        table: input.table_policy.unwrap_or_else(auto_table_policy),
+    };
     let rendered = match input.document {
         // A structured source already *is* a canonical document; ascending
         // its own lowered blocks would only lose what it already has.
-        Some(document) => uparser_document_engine::render::markdown(document),
+        Some(document) => uparser_document_engine::render::markdown_with(
+            document,
+            uparser_document_engine::render::RenderOptions::default(),
+        ),
         // Everything else — every model protocol, and `pipeline` — is lifted
         // into the canonical model and rendered by the one renderer. This is
         // the merge: the `Page`/`Block` Markdown writer that used to serve
         // these protocols is gone, so escaping, list indentation and table
         // degradation are decided in exactly one place.
-        None => uparser_document_engine::render::markdown(&crate::ascend::to_canonical_document(
-            input.result,
-            input.source_format,
-        )),
+        None => uparser_document_engine::render::markdown_with(
+            &crate::ascend::to_canonical_document(input.result, input.source_format),
+            options,
+        ),
     };
     rendered.trim_end().to_owned()
 }
@@ -124,6 +159,7 @@ mod tests {
                 engine_markdown: None,
                 document: None,
                 source_format: uparser_document_engine::DocumentFormat::Pdf,
+                table_policy: None,
             },
             MarkdownSource::Canonical,
         )
@@ -358,6 +394,77 @@ mod tests {
 
         r.pages[0].blocks = vec![formula("equation", "x^2")];
         assert_eq!(markdown(&r), "$$\nx^2\n$$");
+    }
+
+    /// A.2: `--table-format source-html` hands a protocol's own table markup
+    /// through, `auto`/`gfm` re-emit the parsed grid. Both arms are asserted on
+    /// the same input so the flag is demonstrably an A/B switch, not a no-op.
+    #[test]
+    fn source_html_passes_model_markup_through_while_auto_still_re_emits_the_grid() {
+        let html = "<table><tr><td rowspan=\"2\">a</td><td>b</td></tr><tr><td>c</td></tr></table>";
+        let mut result = sample_result();
+        result.protocol = "mineru-vlm".into();
+        result.pages[0].blocks = vec![Block {
+            geom: Geometry::Rect([0.0, 0.0, 10.0, 10.0]),
+            geom_frame: CoordFrame::Page,
+            bbox_px: Some([0, 0, 10, 10]),
+            category_raw: "table".into(),
+            category: Some("table".into()),
+            reading_order: None,
+            text: None,
+            html: Some(html.into()),
+            latex: None,
+            spans: vec![],
+            merge_hint: None,
+            confidence: None,
+            source: BlockSource::LayoutThenRecognize,
+            error: None,
+            asset_bytes: None,
+            asset_path: None,
+            asset_caption: None,
+        }];
+
+        let render = |policy: Option<uparser_document_engine::render::TablePolicy>| {
+            render_markdown(
+                &RenderInput {
+                    result: &result,
+                    engine_markdown: None,
+                    document: None,
+                    source_format: uparser_document_engine::DocumentFormat::Pdf,
+                    table_policy: policy,
+                },
+                MarkdownSource::Canonical,
+            )
+        };
+
+        let passthrough = render(Some(
+            uparser_document_engine::render::TablePolicy::PreferSourceHtml,
+        ));
+        assert!(
+            passthrough.contains(html),
+            "source-html should pass the model's own markup through: {passthrough}"
+        );
+
+        // `auto` is still the grid arm (see `auto_table_policy`), so the two
+        // must differ — if a later change flips the default, this fails here
+        // rather than silently in a benchmark.
+        let auto = render(None);
+        assert_ne!(auto, passthrough);
+        // The grid path still reaches a merged-cell-capable form (its own HTML
+        // table), just re-emitted rather than the model's own bytes.
+        assert!(auto.contains("rowspan"), "{auto}");
+        assert_ne!(auto.trim(), html);
+    }
+
+    /// `auto` must keep the measured behaviour until A.3 re-measures the
+    /// alternative, so flipping it is a deliberate, visible act rather than a
+    /// one-word edit.
+    #[test]
+    fn auto_table_policy_is_still_the_measured_grid_behaviour() {
+        assert_eq!(
+            auto_table_policy(),
+            uparser_document_engine::render::TablePolicy::Grid
+        );
     }
 
     /// D6: `merge_hint::TitleLevel(n)` drives heading depth for

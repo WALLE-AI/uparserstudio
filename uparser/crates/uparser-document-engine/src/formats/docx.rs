@@ -252,6 +252,10 @@ struct DocxContext<'a> {
     related_blocks: &'a HashMap<String, Vec<Block>>,
 }
 
+/// Parser for one related part (chart XML, SmartArt diagram data): the shape
+/// every `parse_*_xml` in this module shares.
+type PartParser = fn(&[u8], &str, &ParseOptions) -> Result<Vec<Block>, DocumentError>;
+
 fn load_related_blocks(
     package: &mut Package<'_>,
     document_part: &str,
@@ -264,14 +268,13 @@ fn load_related_blocks(
         if relationship.external {
             continue;
         }
-        let parser: Option<fn(&[u8], &str, &ParseOptions) -> Result<Vec<Block>, DocumentError>> =
-            if relationship.kind.ends_with("/chart") {
-                Some(parse_chart_xml)
-            } else if relationship.kind.ends_with("/diagramData") {
-                Some(parse_diagram_xml)
-            } else {
-                None
-            };
+        let parser: Option<PartParser> = if relationship.kind.ends_with("/chart") {
+            Some(parse_chart_xml)
+        } else if relationship.kind.ends_with("/diagramData") {
+            Some(parse_diagram_xml)
+        } else {
+            None
+        };
         let Some(parser) = parser else { continue };
         let Some(part) = resolve_internal_target(document_part, &relationship.target) else {
             warnings.push(ParseWarning {
@@ -440,6 +443,7 @@ fn parse_chart_xml(
                 header_rows: 1,
                 grid,
                 caption: None,
+                source_html: None,
             },
         });
     }
@@ -1317,6 +1321,7 @@ fn build_table(table: TableBuilder, warnings: &mut Vec<ParseWarning>) -> Block {
             header_rows,
             grid,
             caption: None,
+            source_html: None,
         },
     }
 }

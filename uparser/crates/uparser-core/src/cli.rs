@@ -240,6 +240,29 @@ pub enum Command {
         /// MiB budget.
         #[arg(long)]
         max_input_mib: Option<u64>,
+        /// Print one per-phase timing line to stderr
+        /// (`timing: analyze=…ms model=…ms render=…ms total=…ms`). The same
+        /// phases (minus `render`, which is measured after the JSON is built)
+        /// are always present in `--format json`'s `timing` object; this flag
+        /// is how a `--format markdown` run sees them.
+        #[arg(long)]
+        stats: bool,
+        /// How a table is written to Markdown. `auto` (default) is today the
+        /// same as `gfm` — re-emit the parsed grid — because that is what every
+        /// protocol's published leaderboard score was measured on.
+        /// `source-html` is the arm under evaluation (A.3): for a protocol
+        /// whose native table output already is HTML, it hands that markup
+        /// through instead, which recovered a measured −0.29 Table Edit on
+        /// OmniDocBench for monkeyocr-v2. Kept as a flag so both arms are
+        /// comparable on one binary.
+        #[arg(long, value_enum, default_value_t = TableFormat::Auto)]
+        table_format: TableFormat,
+        /// Exit with code 3 (partial) when more than this many pages came back
+        /// with no text content at all. A blank page is always reported as a
+        /// warning; this turns it into a batch-visible failure. `0` means any
+        /// blank page fails the run.
+        #[arg(long)]
+        fail_on_blank_pages: Option<usize>,
     },
     /// Run the Profiler only (no protocol adapter, no full parse) and
     /// print the resulting DocumentProfile as JSON. Per ARCHITECTURE.md
@@ -311,6 +334,19 @@ pub enum MarkdownSource {
     EngineLegacy,
 }
 
+/// `--table-format`: how a table reaches Markdown (A.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TableFormat {
+    /// The measured default (today: identical to `gfm`). See
+    /// `render::auto_table_policy` for why it is not yet the per-protocol
+    /// recommendation.
+    Auto,
+    /// Always re-emit the grid (GFM pipe, or HTML when cells are merged).
+    Gfm,
+    /// Always pass the source's own table HTML through when it exists.
+    SourceHtml,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ParseMode {
     Auto,
@@ -366,6 +402,9 @@ pub fn run(cli: Cli) -> i32 {
             no_notes,
             headers_footers,
             max_input_mib,
+            table_format,
+            stats,
+            fail_on_blank_pages,
         } => {
             let protocol = match resolve_mode(mode, protocol.as_deref()) {
                 Ok(protocol) => protocol,
@@ -497,6 +536,9 @@ pub fn run(cli: Cli) -> i32 {
                 no_notes,
                 headers_footers,
                 max_input_mib,
+                table_format,
+                stats,
+                fail_on_blank_pages,
             )
         }
         Command::Classify { path } => run_classify(path),
@@ -581,6 +623,9 @@ fn run_parse(
     no_notes: bool,
     headers_footers: bool,
     max_input_mib: Option<u64>,
+    table_format: TableFormat,
+    stats: bool,
+    fail_on_blank_pages: Option<usize>,
 ) -> i32 {
     if stream && output_path.is_some() {
         return emit_error(
@@ -878,6 +923,11 @@ fn run_parse(
     }
 
     let has_errors = !outcome.result.page_errors.is_empty();
+    // B.1: the runner's phases plus this process's own render cost. Taken
+    // before rendering so `--format json` still serializes only the runner's
+    // phases (a `render_ms` inside the JSON could never include its own cost).
+    let mut run_timing = crate::timing::PhaseTimings::from_map(&outcome.result.timing);
+    let render_started = std::time::Instant::now();
     if !stream || effective_protocol == "native" {
         // Asset materialization has to happen before rendering, because the
         // canonical renderer points `![](…)` at the path the asset was
@@ -896,6 +946,13 @@ fn run_parse(
             engine_markdown: outcome.engine_markdown.as_deref(),
             document: outcome.document.as_ref(),
             source_format: detected_format,
+            table_policy: match table_format {
+                TableFormat::Auto => None,
+                TableFormat::Gfm => Some(uparser_document_engine::render::TablePolicy::Grid),
+                TableFormat::SourceHtml => {
+                    Some(uparser_document_engine::render::TablePolicy::PreferSourceHtml)
+                }
+            },
         };
         let output = match format {
             OutputFormat::Json => render::to_json(&outcome.result),
@@ -933,8 +990,38 @@ fn run_parse(
         }
     }
 
+    run_timing.record(crate::timing::RENDER, render_started.elapsed());
+    if stats {
+        eprintln!("timing: {}", run_timing.summary_line());
+    }
+
+    // D.3: a page that produced nothing is reported even without the flag —
+    // silence here is exactly how 60 blank pipeline pages went unnoticed until
+    // an aggregate benchmark score revealed them days later.
+    let blank_pages = crate::runner::blank_page_numbers(&outcome.result);
+    if !blank_pages.is_empty() {
+        eprintln!(
+            "warning: {} of {} page(s) produced no content: {}",
+            blank_pages.len(),
+            outcome.result.pages.len(),
+            blank_pages
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
+    let blank_budget_exceeded = fail_on_blank_pages.is_some_and(|limit| blank_pages.len() > limit);
+
     if has_errors {
         emit_page_error_diagnostics(&outcome.result.page_errors);
+        EXIT_PARTIAL
+    } else if blank_budget_exceeded {
+        eprintln!(
+            "error: blank page budget exceeded ({} blank > --fail-on-blank-pages {})",
+            blank_pages.len(),
+            fail_on_blank_pages.unwrap_or_default()
+        );
         EXIT_PARTIAL
     } else {
         EXIT_SUCCESS
@@ -1415,6 +1502,10 @@ fn run_protocols() -> i32 {
                 "shape": spec.shape,
                 "transport": spec.transport,
                 "default_endpoint": spec.default_endpoint,
+                // B.2: how much real evidence stands behind this adapter, so an
+                // agent can avoid picking an unvalidated protocol by accident.
+                "validation": spec.validation,
+                "last_verified": spec.last_verified,
                 "coordinate_system": format!("{:?}", adapter.coordinate_system()),
                 "provides_reading_order": adapter.provides_reading_order(),
                 "category_vocab": adapter.category_vocab(),

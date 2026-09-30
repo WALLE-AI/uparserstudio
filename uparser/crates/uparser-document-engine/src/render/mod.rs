@@ -46,7 +46,33 @@ impl<'a> AssetLinks<'a> {
     }
 }
 
+/// How a table reaches Markdown (A.2 in `ARCHITECTURE_V2_REMEDIATION_PLAN.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TablePolicy {
+    /// Re-emit the parsed grid: a GFM pipe table, or an HTML table when the
+    /// grid has merged cells (a pipe table cannot express those). The only
+    /// behaviour before A.2, and still the right one for a structured source,
+    /// whose grid *is* the authoritative form.
+    #[default]
+    Grid,
+    /// Hand `Table::source_html` through verbatim when the source supplied it,
+    /// falling back to [`TablePolicy::Grid`] when it did not. For a protocol
+    /// whose native output is already HTML, re-emitting the grid loses what
+    /// the markup expressed (measured at −0.29 Table Edit for monkeyocr-v2).
+    PreferSourceHtml,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderOptions {
+    pub table: TablePolicy,
+}
+
 pub fn markdown(document: &CanonicalDocument) -> String {
+    markdown_with(document, RenderOptions::default())
+}
+
+/// [`markdown`], with the caller choosing how tables are emitted.
+pub fn markdown_with(document: &CanonicalDocument, options: RenderOptions) -> String {
     let links = AssetLinks::new(document);
     let mut output = String::new();
     for (unit_index, unit) in document.units.iter().enumerate() {
@@ -64,14 +90,14 @@ pub fn markdown(document: &CanonicalDocument) -> String {
             output.push_str(&escape_inline_text(&label, false));
             output.push_str("\n\n");
         }
-        render_blocks(&unit.blocks, &mut output, &links);
+        render_blocks(&unit.blocks, &mut output, &links, options);
     }
     for note in &document.notes {
         output.push_str("[^");
         output.push_str(&note.id);
         output.push_str("]: ");
         let mut note_text = String::new();
-        render_blocks(&note.blocks, &mut note_text, &links);
+        render_blocks(&note.blocks, &mut note_text, &links, options);
         output.push_str(note_text.trim());
         if note.kind == NoteKind::Comment {
             output.push_str(" (comment)");
@@ -90,7 +116,12 @@ pub fn markdown(document: &CanonicalDocument) -> String {
 pub fn block_markdown(document: &CanonicalDocument, block: &Block) -> String {
     let links = AssetLinks::new(document);
     let mut output = String::new();
-    render_blocks(std::slice::from_ref(block), &mut output, &links);
+    render_blocks(
+        std::slice::from_ref(block),
+        &mut output,
+        &links,
+        RenderOptions::default(),
+    );
     output.trim().to_owned()
 }
 
@@ -126,7 +157,12 @@ fn unit_label_heading(document: &CanonicalDocument, unit_index: usize) -> Option
     Some(label.clone())
 }
 
-fn render_blocks(blocks: &[Block], output: &mut String, links: &AssetLinks<'_>) {
+fn render_blocks(
+    blocks: &[Block],
+    output: &mut String,
+    links: &AssetLinks<'_>,
+    options: RenderOptions,
+) {
     for block in blocks {
         match block {
             Block::Heading { level, content } => {
@@ -150,12 +186,11 @@ fn render_blocks(blocks: &[Block], output: &mut String, links: &AssetLinks<'_>) 
                     output.push_str("\n\n");
                 }
             }
-            Block::List { list } => render_list(list, output, links),
-            Block::Table { table } if table.has_spans() => render_html_table(table, output, links),
-            Block::Table { table } => render_markdown_table(table, output, links),
+            Block::List { list } => render_list(list, output, links, options),
+            Block::Table { table } => render_table(table, output, links, options),
             Block::BlockQuote { blocks } => {
                 let mut nested = String::new();
-                render_blocks(blocks, &mut nested, links);
+                render_blocks(blocks, &mut nested, links, options);
                 for line in nested.trim_end().lines() {
                     output.push_str("> ");
                     output.push_str(line);
@@ -409,10 +444,10 @@ fn style_markers(style: &Style) -> (String, String) {
 // Lists
 // ---------------------------------------------------------------------------
 
-fn render_list(list: &List, output: &mut String, links: &AssetLinks<'_>) {
+fn render_list(list: &List, output: &mut String, links: &AssetLinks<'_>, options: RenderOptions) {
     for (index, item) in list.items.iter().enumerate() {
         let marker = item_marker(list, index);
-        render_list_item(item, &marker, output, links);
+        render_list_item(item, &marker, output, links, options);
     }
     output.push('\n');
 }
@@ -435,9 +470,15 @@ fn item_marker(list: &List, index: usize) -> String {
 
 /// Indent an item's whole body under its marker so nested lists, paragraphs
 /// and tables stay inside the item instead of terminating it.
-fn render_list_item(item: &ListItem, marker: &str, output: &mut String, links: &AssetLinks<'_>) {
+fn render_list_item(
+    item: &ListItem,
+    marker: &str,
+    output: &mut String,
+    links: &AssetLinks<'_>,
+    options: RenderOptions,
+) {
     let mut body = String::new();
-    render_blocks(&item.blocks, &mut body, links);
+    render_blocks(&item.blocks, &mut body, links, options);
     let body = body.trim_end();
     let padding = " ".repeat(marker.chars().count());
 
@@ -506,6 +547,34 @@ fn roman_label(ordinal: u64, upper: bool) -> String {
 // ---------------------------------------------------------------------------
 // Tables
 // ---------------------------------------------------------------------------
+
+/// Choose a table's Markdown form (A.2).
+///
+/// `PreferSourceHtml` returns the source's own markup untouched. Falling back
+/// to the grid when there is none keeps the policy safe for a mixed document
+/// (a model protocol whose page also carries a structured-source table).
+fn render_table(
+    table: &Table,
+    output: &mut String,
+    links: &AssetLinks<'_>,
+    options: RenderOptions,
+) {
+    if options.table == TablePolicy::PreferSourceHtml
+        && let Some(html) = table.source_html.as_deref()
+    {
+        let html = html.trim();
+        if !html.is_empty() {
+            output.push_str(html);
+            output.push_str("\n\n");
+            return;
+        }
+    }
+    if table.has_spans() {
+        render_html_table(table, output, links);
+    } else {
+        render_markdown_table(table, output, links);
+    }
+}
 
 fn render_markdown_table(table: &Table, output: &mut String, links: &AssetLinks<'_>) {
     if table.columns == 0 {
@@ -594,7 +663,7 @@ fn plain_cell_text(cell: &Cell, links: &AssetLinks<'_>) -> String {
         return escape_inline_text(text.trim(), false).into_owned();
     }
     let mut output = String::new();
-    render_blocks(&cell.blocks, &mut output, links);
+    render_blocks(&cell.blocks, &mut output, links, RenderOptions::default());
     output
         .trim()
         .lines()
@@ -933,12 +1002,87 @@ mod tests {
                     CellValueKind::Text,
                 ))]],
                 caption: None,
+                source_html: None,
             },
         });
         document.units.push(unit);
         let value = markdown(&document);
         assert!(value.contains("a\\|b"));
         assert!(value.contains("| --- |"));
+    }
+
+    /// A.2: the policy decides whether a model's own table markup survives.
+    /// The grid here is deliberately *lossier* than the HTML (the HTML carries
+    /// a `<br>` and a merged cell the grid flattened), which is exactly the
+    /// case that cost accuracy when the grid was the only option.
+    #[test]
+    fn table_policy_chooses_between_the_parsed_grid_and_the_sources_own_html() {
+        let html = "<table><tr><td colspan=\"2\">a<br>b</td></tr></table>";
+        let document = flow(vec![Block::Table {
+            table: Table {
+                kind: TableKind::Data,
+                rows: 1,
+                columns: 1,
+                header_rows: 0,
+                grid: vec![vec![CellSlot::Origin(Cell::text(
+                    "a b",
+                    CellValueKind::Text,
+                ))]],
+                caption: None,
+                source_html: Some(html.to_owned()),
+            },
+        }]);
+
+        let grid = markdown_with(
+            &document,
+            RenderOptions {
+                table: TablePolicy::Grid,
+            },
+        );
+        assert!(grid.contains("| --- |"), "{grid}");
+        assert!(!grid.contains("colspan"), "{grid}");
+
+        let passthrough = markdown_with(
+            &document,
+            RenderOptions {
+                table: TablePolicy::PreferSourceHtml,
+            },
+        );
+        assert!(passthrough.contains(html), "{passthrough}");
+        assert!(!passthrough.contains("| --- |"), "{passthrough}");
+
+        // `markdown()` keeps the pre-A.2 behaviour, so every existing caller
+        // (structured formats, `block_markdown`) is unaffected.
+        assert_eq!(markdown(&document), grid);
+    }
+
+    /// The policy must not invent markup: with nothing to pass through it has
+    /// to fall back, or a structured table inside a model-protocol document
+    /// would render as nothing at all.
+    #[test]
+    fn prefer_source_html_falls_back_to_the_grid_when_there_is_no_source_html() {
+        let document = flow(vec![Block::Table {
+            table: Table {
+                kind: TableKind::Data,
+                rows: 1,
+                columns: 1,
+                header_rows: 0,
+                grid: vec![vec![CellSlot::Origin(Cell::text(
+                    "only",
+                    CellValueKind::Text,
+                ))]],
+                caption: None,
+                source_html: None,
+            },
+        }]);
+        let rendered = markdown_with(
+            &document,
+            RenderOptions {
+                table: TablePolicy::PreferSourceHtml,
+            },
+        );
+        assert!(rendered.contains("only"), "{rendered}");
+        assert!(rendered.contains("| --- |"), "{rendered}");
     }
 
     #[test]
@@ -954,6 +1098,7 @@ mod tests {
                     CellValueKind::Text,
                 ))]],
                 caption: None,
+                source_html: None,
             },
         }]);
         let value = markdown(&document);

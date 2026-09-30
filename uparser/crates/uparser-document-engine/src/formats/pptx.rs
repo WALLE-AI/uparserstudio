@@ -517,6 +517,7 @@ fn build_table(table: RawTable, part: &str, warnings: &mut Vec<ParseWarning>) ->
             header_rows: 0,
             grid,
             caption: None,
+            source_html: None,
         },
     }
 }

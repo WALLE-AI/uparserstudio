@@ -306,6 +306,7 @@ mod tests {
                 engine_markdown: None,
                 document: None,
                 source_format: uparser_document_engine::DocumentFormat::Pdf,
+                table_policy: None,
             },
             crate::render::MarkdownSource::Canonical,
         );

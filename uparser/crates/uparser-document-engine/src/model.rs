@@ -252,6 +252,25 @@ pub struct Table {
     #[serde(default)]
     pub grid: Vec<Vec<CellSlot>>,
     pub caption: Option<Vec<Inline>>,
+    /// The table exactly as the source expressed it in HTML, when it did
+    /// (A.1 in `ARCHITECTURE_V2_REMEDIATION_PLAN.md`). Only the protocols whose
+    /// native output *is* HTML set this, via `uparser_core::ascend`; every
+    /// structured format (docx/xlsx/odf/…) leaves it `None` because its grid is
+    /// the authoritative form.
+    ///
+    /// It exists so `render::markdown` can hand a model's own markup through
+    /// untouched instead of re-emitting the grid it parsed out — re-emitting
+    /// costs real accuracy (measured at −0.29 Table Edit on OmniDocBench for
+    /// monkeyocr-v2) because a GFM pipe table cannot express what the HTML did.
+    ///
+    /// `#[serde(skip)]`: this is a render-time passthrough, not part of the
+    /// canonical contract, and `document_json` would otherwise carry every
+    /// table twice. Safe to skip across the cache because the only producers
+    /// (model protocols) are never cached *as* a `CanonicalDocument` — they are
+    /// cached as `ParseResult` and re-ascended on every render, so the HTML is
+    /// reconstructed from `Block.html` each time.
+    #[serde(skip)]
+    pub source_html: Option<String>,
 }
 
 impl Table {

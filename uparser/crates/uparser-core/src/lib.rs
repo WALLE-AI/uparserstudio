@@ -7,8 +7,9 @@
 //!
 //! * `api` — the surface both binding crates call.
 //! * `cli` — the `uparser` binary's entry point.
-//! * `types` / `frontend` / `runner` / `router` / `protocol_spec` — the IR
-//!   and orchestration contract those two surfaces expose in their signatures.
+//! * `types` / `frontend` / `runner` / `router` / `protocol_spec` / `timing` —
+//!   the IR and orchestration contract those two surfaces expose in their
+//!   signatures.
 //! * `adapters` / `ingest` / `imaging` / `render` / `testing` — reached by the
 //!   integration tests in `tests/`, which are separate crates and therefore
 //!   can only see `pub` items.
@@ -76,6 +77,7 @@ pub mod tensor_wire;
 #[cfg(not(feature = "internals"))]
 pub(crate) mod tensor_wire;
 pub mod testing;
+pub mod timing;
 #[cfg(feature = "internals")]
 pub mod transport;
 #[cfg(not(feature = "internals"))]

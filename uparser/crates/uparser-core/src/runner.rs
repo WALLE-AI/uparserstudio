@@ -38,6 +38,11 @@ const RASTER_DPI_OCR: f32 = 300.0;
 #[cfg(feature = "pdfium")]
 const RASTER_DPI_ASSET_CROP: f32 = 150.0;
 
+/// The `Pdf` variant is genuinely much larger than the others (it holds the
+/// whole engine artifact). Boxing it would add an allocation and a deref to
+/// every native run to shrink a value that exists once per document and is
+/// moved twice, so the size difference is accepted rather than hidden.
+#[allow(clippy::large_enum_variant)]
 pub enum AnalysisArtifacts {
     None,
     Structured(uparser_document_engine::CanonicalDocument),
@@ -54,6 +59,16 @@ pub struct AnalysisReport {
     /// `--no-notes`/`--headers-footers`/`--max-input-mib` silently parsed
     /// the whole document a second time.
     pub document_options: uparser_document_engine::ParseOptions,
+    /// Phase timings accumulated so far (B.1). `analyze` fills its own entry;
+    /// `prepare` adds `plan`; `execute` merges this in and finishes the map
+    /// that lands in `ParseResult.timing`.
+    pub timing: crate::timing::PhaseTimings,
+    /// When `analyze` began, so `execute` can report a `total` that actually
+    /// covers the phases it inherits. Measuring `total` from `execute`'s own
+    /// start made it *smaller* than `analyze_ms` on any real PDF (109ms of
+    /// analysis inside a "7ms total") — caught by running the binary, not by
+    /// the mock-backed tests where analysis is ~0ms.
+    pub started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,7 +275,12 @@ pub async fn analyze_with_options(
     if cancellation.is_cancelled() {
         return Err(PrepareError::Cancelled);
     }
-    let report = analyze_inner(source, document_options)?;
+    let started = std::time::Instant::now();
+    let mut report = analyze_inner(source, document_options)?;
+    report.started_at = started;
+    report
+        .timing
+        .record(crate::timing::ANALYZE, started.elapsed());
     if cancellation.is_cancelled() {
         return Err(PrepareError::Cancelled);
     }
@@ -290,6 +310,8 @@ fn analyze_inner(
                 profile,
                 artifacts: AnalysisArtifacts::Pdf(artifact),
                 document_options: document_options.clone(),
+                timing: crate::timing::PhaseTimings::new(),
+                started_at: std::time::Instant::now(),
             });
         }
         #[cfg(not(feature = "native"))]
@@ -298,6 +320,8 @@ fn analyze_inner(
                 profile: crate::profiler::profile_l1(format),
                 artifacts: AnalysisArtifacts::None,
                 document_options: document_options.clone(),
+                timing: crate::timing::PhaseTimings::new(),
+                started_at: std::time::Instant::now(),
             });
         }
     }
@@ -313,12 +337,16 @@ fn analyze_inner(
             profile,
             artifacts: AnalysisArtifacts::Structured(document),
             document_options: document_options.clone(),
+            timing: crate::timing::PhaseTimings::new(),
+            started_at: std::time::Instant::now(),
         });
     }
     Ok(AnalysisReport {
         profile: crate::profiler::profile_l1(format),
         artifacts: AnalysisArtifacts::None,
         document_options: document_options.clone(),
+        timing: crate::timing::PhaseTimings::new(),
+        started_at: std::time::Instant::now(),
     })
 }
 
@@ -370,6 +398,7 @@ pub async fn prepare_with_options(
     document_options: &uparser_document_engine::ParseOptions,
 ) -> Result<PreparedRun, PrepareError> {
     let mut analysis = analyze_with_options(&source, &cancellation, document_options).await?;
+    let planning_started = std::time::Instant::now();
     if requested_protocol.is_none() || requested_protocol == Some("auto") {
         crate::semantic::enrich_from_environment_with_cancellation(
             &mut analysis,
@@ -390,6 +419,9 @@ pub async fn prepare_with_options(
         ),
     };
     let preprocess = preprocess_plan(source.format(), &analysis.profile, &route.protocol)?;
+    analysis
+        .timing
+        .record(crate::timing::PLAN, planning_started.elapsed());
     Ok(PreparedRun {
         source,
         analysis,
@@ -411,9 +443,15 @@ pub async fn execute_with_hooks(
 ) -> Result<ParseOutcome, ExecutionError> {
     let PreparedRun {
         source,
-        analysis,
+        mut analysis,
         plan,
     } = prepared;
+    // From when `analyze` began, not from here: `total` has to cover the
+    // `analyze`/`plan` entries it inherits (see `AnalysisReport::started_at`).
+    let started = analysis.started_at;
+    // Carries `analyze`/`plan` forward; every phase below appends to it and it
+    // becomes `ParseResult.timing` on the way out (B.1).
+    let mut timing = std::mem::take(&mut analysis.timing);
     let source_path = source.filename_hint().unwrap_or("<memory>").to_owned();
     let protocol = plan.route.protocol.clone();
     let routed_by = match plan.route.origin {
@@ -431,15 +469,24 @@ pub async fn execute_with_hooks(
     let cache_dir = cache::default_cache_dir();
     // O3.2: the cache is consulted before dispatch for *every* mode. `native`
     // used to return above this point, so it re-parsed on every invocation.
-    if !options.no_cache
-        && let Some(cached) = cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL)
-    {
+    let lookup_started = std::time::Instant::now();
+    let cached = (!options.no_cache)
+        .then(|| cache::get(&cache_dir, &cache_key, DEFAULT_CACHE_TTL))
+        .flatten();
+    timing.record(crate::timing::CACHE_LOOKUP, lookup_started.elapsed());
+    if let Some(cached) = cached {
         let cache::CachedOutcome {
             mut result,
             engine_markdown,
             document,
         } = cached;
         attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+        note_validation_tier(&mut result, &protocol);
+        timing.record(crate::timing::TOTAL, started.elapsed());
+        // This run's timings replace whatever the stored entry was produced
+        // with: a replay never called the model, so reporting the original
+        // `model_ms` would describe work that did not happen.
+        result.timing = timing.to_map();
         return Ok(ParseOutcome {
             result,
             document,
@@ -449,9 +496,20 @@ pub async fn execute_with_hooks(
     }
 
     if protocol == "native" {
-        let mut outcome =
-            execute_native(source, analysis, plan, options, source_path, routed_by).await?;
+        let mut outcome = execute_native(
+            source,
+            analysis,
+            plan,
+            options,
+            source_path,
+            routed_by,
+            &mut timing,
+        )
+        .await?;
+        note_validation_tier(&mut outcome.result, &protocol);
+        annotate_blank_pages(&mut outcome.result);
         if !options.no_cache {
+            let write_started = std::time::Instant::now();
             cache::put(
                 &cache_dir,
                 &cache_key,
@@ -462,8 +520,13 @@ pub async fn execute_with_hooks(
                 },
             )
             .map_err(|error| ExecutionError::Cache(error.to_string()))?;
+            timing.record(crate::timing::CACHE_WRITE, write_started.elapsed());
         }
         outcome.cache_hit = false;
+        // After `cache::put`, so the stored copy carries no timings for a
+        // later replay to mistake for its own.
+        timing.record(crate::timing::TOTAL, started.elapsed());
+        outcome.result.timing = timing.to_map();
         return Ok(outcome);
     }
 
@@ -484,6 +547,7 @@ pub async fn execute_with_hooks(
     if options.cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
+    let ingest_started = std::time::Instant::now();
     let mut page_source = materialize_page_source(
         &source,
         options
@@ -494,6 +558,7 @@ pub async fn execute_with_hooks(
         options.cancellation.clone(),
     )
     .await?;
+    timing.record(crate::timing::INGEST, ingest_started.elapsed());
     if options.cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
@@ -517,6 +582,7 @@ pub async fn execute_with_hooks(
             .clone()
             .unwrap_or_else(|| assets::default_assets_dir(&source_path))
     });
+    let model_started = std::time::Instant::now();
     let (pages, page_errors, warnings) = scheduler
         .run_source(
             adapter,
@@ -549,7 +615,10 @@ pub async fn execute_with_hooks(
                 ExecutionError::Ingest(message)
             }
         })?;
+    timing.record(crate::timing::MODEL, model_started.elapsed());
+    let postprocess_started = std::time::Instant::now();
     let pages = postprocess_pages(pages, options.no_postprocess, &protocol);
+    timing.record(crate::timing::POSTPROCESS, postprocess_started.elapsed());
     let mut result = ParseResult {
         source_path: source_path.clone(),
         source_sha256: source.digest().to_owned(),
@@ -566,8 +635,14 @@ pub async fn execute_with_hooks(
         warnings,
         timing: Default::default(),
     };
+    let executed_protocol = result.protocol.clone();
+    note_validation_tier(&mut result, &executed_protocol);
+    annotate_blank_pages(&mut result);
+    let assets_started = std::time::Instant::now();
     write_result_assets(&mut result, &source_path, options)?;
+    timing.record(crate::timing::ASSETS, assets_started.elapsed());
     if !options.no_cache {
+        let write_started = std::time::Instant::now();
         cache::put(
             &cache_dir,
             &cache_key,
@@ -578,7 +653,12 @@ pub async fn execute_with_hooks(
             },
         )
         .map_err(|error| ExecutionError::Cache(error.to_string()))?;
+        timing.record(crate::timing::CACHE_WRITE, write_started.elapsed());
     }
+    // After the cache write, so a replay reports its own timings rather than
+    // inheriting this run's.
+    timing.record(crate::timing::TOTAL, started.elapsed());
+    result.timing = timing.to_map();
     Ok(ParseOutcome {
         result,
         document: None,
@@ -636,6 +716,89 @@ fn execution_fingerprint(options: &ExecutionOptions, plan: &RunPlan) -> String {
     .expect("execution fingerprint consists only of serializable values")
 }
 
+/// Record a protocol whose wire contract or accuracy has never been confirmed
+/// against anything real (B.2), so the caller learns it from the result rather
+/// than from reading `UPARSER_LEADERBOARD.md`.
+///
+/// Idempotent: the cache-hit path re-attaches metadata to a stored result that
+/// may already carry this note.
+fn note_validation_tier(result: &mut ParseResult, protocol: &str) {
+    use crate::protocol_spec::ValidationTier;
+    let Some(spec) = crate::protocol_spec::get(protocol) else {
+        return;
+    };
+    let caveat = match spec.validation {
+        ValidationTier::VerifiedLive | ValidationTier::TestDouble => return,
+        ValidationTier::OfflineOnly => {
+            "wire contract is confirmed but output quality is unmeasured here — no full-benchmark score exists for it"
+        }
+        ValidationTier::SpeculativeContract => {
+            "wire contract is unconfirmed against any real deployment — verify the response shape before trusting output"
+        }
+    };
+    let note = format!(
+        "protocol_validation: {protocol} is {:?} — {caveat}",
+        spec.validation
+    );
+    if !result
+        .capability_notes
+        .iter()
+        .any(|existing| existing.starts_with("protocol_validation:"))
+    {
+        result.capability_notes.push(note);
+    }
+}
+
+/// Pages that came back with no content at all (D.3).
+///
+/// "Produced no content" means every block on the page is empty in all four
+/// content fields — a page whose blocks carry only an `error` counts as blank
+/// too, because the consumer gets nothing either way; the accompanying
+/// `page_errors` entry explains why. A `markdown_only` run has no page IR at
+/// all and therefore reports nothing here rather than "every page is blank".
+///
+/// This exists because the Pipeline V2 same-model ablation produced **60**
+/// blank pages against the reference implementation's 2, and nothing in the
+/// output said so: every page "succeeded", the exit code was 0, and the loss
+/// was only visible in an aggregate benchmark score days later.
+pub fn blank_page_numbers(result: &ParseResult) -> Vec<u32> {
+    result
+        .pages
+        .iter()
+        .filter(|page| {
+            page.blocks.iter().all(|block| {
+                let empty = |value: &Option<String>| {
+                    value.as_deref().is_none_or(|text| text.trim().is_empty())
+                };
+                empty(&block.text)
+                    && empty(&block.html)
+                    && empty(&block.latex)
+                    && empty(&block.asset_path)
+            })
+        })
+        .map(|page| page.page_num)
+        .collect()
+}
+
+/// Record blank pages as warnings so they are visible in `ParseResult`,
+/// `--format json`, and the CLI's stderr — not only in a benchmark score.
+fn annotate_blank_pages(result: &mut ParseResult) {
+    let blank = blank_page_numbers(result);
+    if blank.is_empty() {
+        return;
+    }
+    let total = result.pages.len();
+    let listed = blank
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    result.warnings.push(format!(
+        "blank_pages: {}/{total} page(s) produced no content (pages {listed})",
+        blank.len()
+    ));
+}
+
 fn postprocess_pages(
     pages: Vec<crate::types::Page>,
     no_postprocess: bool,
@@ -660,6 +823,7 @@ fn postprocess_pages(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_native(
     source: PreflightSource,
     analysis: AnalysisReport,
@@ -667,7 +831,9 @@ async fn execute_native(
     options: &ExecutionOptions,
     source_path: String,
     routed_by: RoutedBy,
+    timing: &mut crate::timing::PhaseTimings,
 ) -> Result<ParseOutcome, ExecutionError> {
+    let model_started = std::time::Instant::now();
     match analysis.artifacts {
         AnalysisArtifacts::Structured(document) => {
             let mut document = if document_options_require_reparse(
@@ -691,6 +857,7 @@ async fn execute_native(
             if options.markdown_only {
                 let mut result = markdown_only_result(&source_path, source.bytes());
                 attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+                timing.record(crate::timing::MODEL, model_started.elapsed());
                 return Ok(ParseOutcome {
                     result,
                     document: Some(document),
@@ -700,10 +867,15 @@ async fn execute_native(
             }
             let mut result =
                 crate::structured::to_parse_result(&document, &source_path, source.bytes());
+            timing.record(crate::timing::MODEL, model_started.elapsed());
+            let postprocess_started = std::time::Instant::now();
             result.pages =
                 postprocess_pages(result.pages, options.no_postprocess, &result.protocol);
+            timing.record(crate::timing::POSTPROCESS, postprocess_started.elapsed());
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+            let assets_started = std::time::Instant::now();
             write_result_assets(&mut result, &source_path, options)?;
+            timing.record(crate::timing::ASSETS, assets_started.elapsed());
             Ok(ParseOutcome {
                 result,
                 document: Some(document),
@@ -717,28 +889,23 @@ async fn execute_native(
             let ocr_request = hybrid_ocr_request(&artifact, options.pages.as_deref());
             #[cfg(not(feature = "pdfium"))]
             let ocr_request: Option<()> = None;
-            if options.markdown_only && ocr_request.is_none() {
-                if let Some(markdown) = artifact
+            if options.markdown_only
+                && ocr_request.is_none()
+                && let Some(markdown) = artifact
                     .markdown
                     .as_deref()
                     .filter(|markdown| !markdown.trim().is_empty())
-                {
-                    let markdown = markdown.to_owned();
-                    let mut result = markdown_only_result(&source_path, source.bytes());
-                    attach_execution_metadata(
-                        &mut result,
-                        analysis.profile,
-                        plan,
-                        routed_by,
-                        options,
-                    );
-                    return Ok(ParseOutcome {
-                        result,
-                        document: None,
-                        engine_markdown: Some(markdown),
-                        cache_hit: false,
-                    });
-                }
+            {
+                let markdown = markdown.to_owned();
+                let mut result = markdown_only_result(&source_path, source.bytes());
+                attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+                timing.record(crate::timing::MODEL, model_started.elapsed());
+                return Ok(ParseOutcome {
+                    result,
+                    document: None,
+                    engine_markdown: Some(markdown),
+                    cache_hit: false,
+                });
             }
             #[cfg_attr(not(feature = "pdfium"), allow(unused_mut))]
             let (mut result, mut engine_markdown) =
@@ -753,12 +920,16 @@ async fn execute_native(
                 // CLI render the merged page IR instead when OCR replaced a page.
                 engine_markdown = None;
             }
+            timing.record(crate::timing::MODEL, model_started.elapsed());
             // O3.3: the same paragraph-merge + CJK punctuation normalization
             // every other mode has had since P1. Only reachable when the IR is
             // actually built — a `markdown_only` run returned above.
+            let postprocess_started = std::time::Instant::now();
             result.pages =
                 postprocess_pages(result.pages, options.no_postprocess, &result.protocol);
+            timing.record(crate::timing::POSTPROCESS, postprocess_started.elapsed());
             attach_execution_metadata(&mut result, analysis.profile, plan, routed_by, options);
+            let assets_started = std::time::Instant::now();
             #[cfg(feature = "pdfium")]
             materialize_native_image_assets(
                 source.bytes(),
@@ -769,6 +940,7 @@ async fn execute_native(
             #[cfg(not(feature = "pdfium"))]
             annotate_unavailable_native_image_assets(&mut result, options.no_assets);
             write_result_assets(&mut result, &source_path, options)?;
+            timing.record(crate::timing::ASSETS, assets_started.elapsed());
             Ok(ParseOutcome {
                 result,
                 document: None,
@@ -1794,6 +1966,99 @@ mod tests {
         assert_eq!(categories[4], Some("mandatory_clause"));
         assert_eq!(categories[5], Some("annex_heading"));
         assert!(result.capability_notes[0].contains("mandatory=2 [4.0.1,5.0.3]"));
+    }
+
+    fn result_with_pages(pages: Vec<crate::types::Page>) -> ParseResult {
+        ParseResult {
+            source_path: "doc.pdf".into(),
+            source_sha256: "sha".into(),
+            protocol: "mock".into(),
+            routed_by: RoutedBy::Explicit,
+            document_profile: None,
+            route_decision: None,
+            preprocess_plan: None,
+            model_endpoint: None,
+            model_name: None,
+            pages,
+            page_errors: vec![],
+            capability_notes: vec![],
+            warnings: vec![],
+            timing: Default::default(),
+        }
+    }
+
+    fn page_with(page_num: u32, blocks: Vec<crate::types::Block>) -> crate::types::Page {
+        crate::types::Page {
+            page_num,
+            width_px: 100,
+            height_px: 100,
+            blocks,
+        }
+    }
+
+    /// D.3: the exact shape that went unnoticed for 60 pipeline pages — a page
+    /// that "succeeded" with blocks present but no content in any of them.
+    #[test]
+    fn a_page_whose_blocks_carry_no_content_counts_as_blank_and_is_warned_about() {
+        let mut empty = text_block("   ");
+        empty.error = Some("stage failed".into());
+        let mut result = result_with_pages(vec![
+            page_with(1, vec![text_block("real content")]),
+            page_with(2, vec![empty]),
+            // No blocks at all is blank too.
+            page_with(3, vec![]),
+        ]);
+
+        assert_eq!(blank_page_numbers(&result), vec![2, 3]);
+        annotate_blank_pages(&mut result);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(
+            result.warnings[0].starts_with("blank_pages: 2/3")
+                && result.warnings[0].contains("2,3"),
+            "{:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn a_document_with_content_on_every_page_gets_no_blank_page_warning() {
+        let mut result = result_with_pages(vec![page_with(1, vec![text_block("content")])]);
+        annotate_blank_pages(&mut result);
+        assert!(result.warnings.is_empty());
+    }
+
+    /// A block carrying only a table or a formula is content, even with no
+    /// `text` — the check must not equate "no text field" with "blank".
+    #[test]
+    fn a_table_only_or_formula_only_page_is_not_blank() {
+        let mut table = text_block("");
+        table.text = None;
+        table.html = Some("<table><tr><td>1</td></tr></table>".into());
+        let mut formula = text_block("");
+        formula.text = None;
+        formula.latex = Some("x^2".into());
+        let result =
+            result_with_pages(vec![page_with(1, vec![table]), page_with(2, vec![formula])]);
+        assert!(blank_page_numbers(&result).is_empty());
+    }
+
+    /// B.2: an unvalidated protocol says so in the result, and re-attaching
+    /// metadata (which the cache-hit path does) must not duplicate the note.
+    #[test]
+    fn an_unvalidated_protocol_is_noted_once_and_a_verified_one_is_not_noted() {
+        let mut result = result_with_pages(vec![]);
+        note_validation_tier(&mut result, "paddleocr");
+        note_validation_tier(&mut result, "paddleocr");
+        assert_eq!(result.capability_notes.len(), 1);
+        assert!(result.capability_notes[0].contains("SpeculativeContract"));
+
+        let mut verified = result_with_pages(vec![]);
+        note_validation_tier(&mut verified, "mineru-vlm");
+        assert!(verified.capability_notes.is_empty());
+
+        let mut offline = result_with_pages(vec![]);
+        note_validation_tier(&mut offline, "dots-ocr");
+        assert!(offline.capability_notes[0].contains("OfflineOnly"));
     }
 
     #[test]

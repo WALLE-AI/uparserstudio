@@ -1232,6 +1232,110 @@ fn protocols_lists_every_builtin_adapter() {
     }
 }
 
+/// B.2: every protocol reports what evidence stands behind it, and the
+/// verified ones cite it — an agent can read this instead of guessing which
+/// adapter has ever talked to a real service.
+#[test]
+fn protocols_reports_a_validation_tier_and_cites_evidence_for_verified_ones() {
+    let output = Command::cargo_bin("uparser")
+        .unwrap()
+        .args(["protocols"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    for protocol in parsed.as_array().unwrap() {
+        let name = protocol["name"].as_str().unwrap();
+        let tier = protocol["validation"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name} has no validation tier"));
+        assert!(
+            [
+                "verified_live",
+                "offline_only",
+                "speculative_contract",
+                "test_double"
+            ]
+            .contains(&tier),
+            "{name} has an unexpected tier {tier}"
+        );
+        if tier == "verified_live" {
+            assert!(
+                protocol["last_verified"].is_string(),
+                "{name} claims verified_live without citing a dataset"
+            );
+        }
+    }
+    let by_name = |wanted: &str| {
+        parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == wanted)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(by_name("mineru-vlm")["validation"], "verified_live");
+    assert_eq!(by_name("paddleocr")["validation"], "speculative_contract");
+    assert_eq!(by_name("dots-ocr")["validation"], "offline_only");
+}
+
+/// B.1: the phases are really measured and really reach the consumer. The
+/// invariants asserted here are the ones the module promises: `total` is
+/// measured (so it is at least the sum of phases), `model` is present on a
+/// real run, and `--stats` reports rendering, which the JSON structurally
+/// cannot.
+#[test]
+fn json_output_carries_measured_phase_timings_and_stats_adds_render() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    let cache_dir = isolated_cache_dir();
+
+    let assert = Command::cargo_bin("uparser")
+        .unwrap()
+        .env("UPARSER_CACHE_DIR", cache_dir.path())
+        .args([
+            "parse",
+            file.path().to_str().unwrap(),
+            "--protocol",
+            "mock",
+            "--format",
+            "json",
+            "--stats",
+        ])
+        .assert()
+        .success();
+    let output = assert.get_output();
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let timing = parsed["timing"].as_object().unwrap();
+    for phase in ["analyze_ms", "plan_ms", "model_ms", "total_ms"] {
+        assert!(timing.contains_key(phase), "missing {phase} in {timing:?}");
+    }
+    // Rendering is measured after the JSON is built, so it can only appear on
+    // the `--stats` line — asserting its absence here keeps that honest.
+    assert!(!timing.contains_key("render_ms"));
+    let phase_sum: f64 = timing
+        .iter()
+        .filter(|(key, _)| key.as_str() != "total_ms")
+        .map(|(_, value)| value.as_f64().unwrap())
+        .sum();
+    let total = timing["total_ms"].as_f64().unwrap();
+    assert!(
+        total + 0.5 >= phase_sum,
+        "total {total} should cover the phases {phase_sum}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("timing:"))
+        .unwrap_or_else(|| panic!("no --stats timing line in stderr: {stderr}"));
+    assert!(line.contains("render="), "{line}");
+    assert!(line.contains("total="), "{line}");
+}
+
 /// T-9.3: `doctor navidc-ocr` uses the protocol's own declared default
 /// endpoint, not some other protocol's.
 #[test]
@@ -1547,6 +1651,169 @@ async fn unrecognized_category_warning_surfaces_in_parse_result_warnings() {
             .any(|w| w.as_str().unwrap().contains("sidebar_note")),
         "expected a category-fallback warning mentioning sidebar_note, got {warnings:?}"
     );
+}
+
+/// A.2 through the real binary: `--table-format source-html` hands a
+/// protocol's own table markup through, while the default still re-emits the
+/// parsed grid. The HTML here carries a `colspan` and a `<br>`; the grid
+/// round-trip keeps the former and loses the latter, which is the concrete
+/// accuracy cost A.3 is measuring.
+#[tokio::test]
+async fn source_html_table_arm_differs_from_the_default_grid_arm() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let table_html = "<table><tr><td colspan=\"2\">a<br>b</td></tr></table>";
+    let cells = format!(
+        r#"[{{"bbox": [0, 0, 8, 8], "category": "Table", "text": "{}"}}]"#,
+        table_html.replace('"', "\\\"")
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content": cells}, "finish_reason": "stop"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    let cache_dir = isolated_cache_dir();
+    let path = file.path().to_str().unwrap().to_string();
+    let endpoint = format!("{}/v1/chat/completions", server.uri());
+
+    let run = |extra: Vec<String>| {
+        let (path, endpoint, cache_dir) = (
+            path.clone(),
+            endpoint.clone(),
+            cache_dir.path().to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || {
+            let mut command = Command::cargo_bin("uparser").unwrap();
+            command
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args([
+                    "parse",
+                    &path,
+                    "--protocol",
+                    "dots-ocr",
+                    "--endpoint",
+                    &endpoint,
+                    "--format",
+                    "markdown",
+                    "--no-cache",
+                ]);
+            command.args(extra);
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        })
+    };
+
+    let passthrough = run(vec!["--table-format".into(), "source-html".into()])
+        .await
+        .unwrap();
+    assert!(
+        passthrough.contains(table_html),
+        "source-html should pass the model's own table HTML through: {passthrough}"
+    );
+
+    // Default (`auto`) is still the grid arm.
+    let gfm = run(vec![]).await.unwrap();
+    assert_ne!(gfm, passthrough);
+    // `--table-format gfm` re-emits the parsed grid. The merged cell survives
+    // (the grid path escalates to its own HTML table when spans exist), but the
+    // in-cell `<br>` does not: `a<br>b` comes back as `ab`. That is the
+    // concrete, reproducible loss the default policy avoids — asserted here
+    // rather than described, because the first version of this test guessed
+    // `colspan` would be dropped and the real output proved otherwise.
+    assert!(!gfm.contains("<br>"), "{gfm}");
+    assert!(gfm.contains("ab"), "{gfm}");
+    assert!(!gfm.contains(table_html), "{gfm}");
+}
+
+/// D.3: a page the model returned *nothing* for used to exit 0 in silence.
+/// Now it is a stderr warning and a `warnings` entry always, and a failure
+/// when the caller sets a budget — through the real binary, against a real
+/// (wiremock) endpoint that answers with an empty layout.
+#[tokio::test]
+async fn a_blank_page_is_warned_about_and_can_be_made_to_fail_the_run() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content": ""}, "finish_reason": "stop"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&fixture_png()).unwrap();
+    let cache_dir = isolated_cache_dir();
+    let path = file.path().to_str().unwrap().to_string();
+    let endpoint = format!("{}/v1/chat/completions", server.uri());
+
+    let run = |extra: Vec<String>| {
+        let (path, endpoint, cache_dir) = (
+            path.clone(),
+            endpoint.clone(),
+            cache_dir.path().to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || {
+            let mut command = Command::cargo_bin("uparser").unwrap();
+            command
+                .env("UPARSER_CACHE_DIR", &cache_dir)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args([
+                    "parse",
+                    &path,
+                    "--protocol",
+                    "mineru-vlm",
+                    "--endpoint",
+                    &endpoint,
+                    "--format",
+                    "json",
+                    "--no-cache",
+                ]);
+            command.args(extra);
+            let output = command.output().unwrap();
+            (
+                output.status.code().unwrap(),
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )
+        })
+    };
+
+    // No budget: the run still succeeds, but it says so.
+    let (code, stdout, stderr) = run(vec![]).await.unwrap();
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let warnings = parsed["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().starts_with("blank_pages: 1/1")),
+        "expected a blank-page warning, got {warnings:?}"
+    );
+    assert!(stderr.contains("produced no content"), "stderr: {stderr}");
+
+    // With a zero budget the same document is a partial failure.
+    let (code, _, stderr) = run(vec!["--fail-on-blank-pages".into(), "0".into()])
+        .await
+        .unwrap();
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(stderr.contains("blank page budget exceeded"), "{stderr}");
 }
 
 /// Proves the image-asset pipeline (`image_link_gap_report.md`) end to

@@ -40,13 +40,11 @@ fn pdf() -> Vec<u8> {
         "0 -18 Td (Native extraction must preserve these words without rasterization.) Tj ",
         "0 -18 Td (Name Value alpha forty-two beta seven.) Tj ET"
     );
-    let objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+    let objects = ["<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_owned(),
         format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
-    ];
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned()];
     let mut output = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
     for (index, object) in objects.iter().enumerate() {

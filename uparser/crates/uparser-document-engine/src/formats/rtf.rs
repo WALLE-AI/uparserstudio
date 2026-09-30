@@ -634,6 +634,7 @@ impl Parser<'_> {
                 header_rows: 0,
                 grid,
                 caption: None,
+                source_html: None,
             },
         });
     }

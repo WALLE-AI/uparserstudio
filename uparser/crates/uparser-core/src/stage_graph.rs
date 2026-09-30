@@ -157,16 +157,15 @@ impl StageGraph {
             {
                 return Err(StageGraphError::MissingExternalOcr(node.name.to_owned()));
             }
-            if node.on_failure == FailurePolicy::ContinueWithoutStage {
-                if let Some(dependent) = enabled
+            if node.on_failure == FailurePolicy::ContinueWithoutStage
+                && let Some(dependent) = enabled
                     .values()
                     .find(|dependent| dependent.depends_on.contains(&node.name))
-                {
-                    return Err(StageGraphError::SkippableDependency {
-                        stage: node.name.to_owned(),
-                        dependent: dependent.name.to_owned(),
-                    });
-                }
+            {
+                return Err(StageGraphError::SkippableDependency {
+                    stage: node.name.to_owned(),
+                    dependent: dependent.name.to_owned(),
+                });
             }
         }
         if !enabled.values().any(|node| node.produces == self.terminal) {
@@ -204,7 +203,7 @@ fn visit<'a>(
     }
     let node = by_name[name];
     for dependency in node.depends_on {
-        visit(*dependency, by_name, visiting, visited, ordered)?;
+        visit(dependency, by_name, visiting, visited, ordered)?;
     }
     visiting.remove(name);
     visited.insert(name);

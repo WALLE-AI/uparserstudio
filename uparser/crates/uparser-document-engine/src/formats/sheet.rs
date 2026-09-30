@@ -162,6 +162,7 @@ fn build_table(
         header_rows: infer_header_rows(range),
         grid,
         caption: None,
+        source_html: None,
     }
 }
 

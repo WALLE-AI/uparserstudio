@@ -88,7 +88,7 @@ pub fn profile_structured_document(
     document: &uparser_document_engine::CanonicalDocument,
 ) -> DocumentProfile {
     let format = document.metadata.format;
-    let markdown = uparser_document_engine::render::markdown(&document);
+    let markdown = uparser_document_engine::render::markdown(document);
     let mut stats = StructuredStats::default();
     for unit in &document.units {
         for block in &unit.blocks {

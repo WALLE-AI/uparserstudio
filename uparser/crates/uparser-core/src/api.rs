@@ -177,7 +177,7 @@ pub async fn parse_canonical_document(
                 .to_owned(),
         ));
     }
-    uparser_document_engine::parse_document(&bytes, format, options)
+    uparser_document_engine::parse_document(bytes, format, options)
         .map_err(|error| ApiError::NativeParseFailed(error.to_string()))
 }
 
@@ -580,7 +580,18 @@ mod tests {
         let second = parse(file.path().to_str().unwrap(), &options)
             .await
             .unwrap();
-        assert_eq!(first, second);
+        // Everything a consumer reads as *content* must be identical; the
+        // timings are this run's own and are expected to differ (B.1).
+        let content_only = |mut result: ParseResult| {
+            result.timing.clear();
+            result
+        };
+        assert_eq!(content_only(first.clone()), content_only(second.clone()));
+        // The replay genuinely did not call the model, and the timing map says
+        // so instead of reporting the first run's cost as if it recurred.
+        assert!(first.timing.contains_key(crate::timing::MODEL));
+        assert!(!second.timing.contains_key(crate::timing::MODEL));
+        assert!(second.timing.contains_key(crate::timing::TOTAL));
 
         unsafe {
             std::env::remove_var("UPARSER_CACHE_DIR");

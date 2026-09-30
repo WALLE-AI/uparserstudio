@@ -24,10 +24,34 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+      # `uparser-core`/`uparser-document-engine` must be warning-free. The
+      # vendored `uparser-native-engine` carries an enumerated `#![allow(...)]`
+      # list at the top of its `lib.rs` (see its comment and `ATTRIBUTION.md`)
+      # so it can be held to the same `-D warnings` bar without rewriting
+      # upstream code — anything *not* on that list still fails here.
+      #
+      # The binding crates pull `uparser-core`'s `native` feature in, so the
+      # plain workspace run already covers the native-gated code; the second
+      # run adds the `pdfium`-gated paths, which nothing enables by default.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features uparser-core/pdfium -- -D warnings
 
+  # T-E1: the feature matrix. `native`/`pdfium` change real semantics (PDF
+  # analysis depth, `document-json` availability, rasterization), so a
+  # default-only run tests a configuration nobody ships.
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: native
+            features: "uparser-core/native"
+          - name: native+pdfium
+            features: "uparser-core/native,uparser-core/pdfium"
+    name: build-and-test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -36,6 +60,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-      - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace
+            ~/.cache/pdfium-rs
+          key: ${{ runner.os }}-cargo-test-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: build
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo build --workspace --all-targets --features "${{ matrix.features }}"
+          else
+            cargo build --workspace --all-targets
+          fi
+      # The local wiremock/stub servers several tests start are on loopback;
+      # without this a configured HTTP proxy intercepts them and the failures
+      # look like protocol bugs.
+      - name: test
+        env:
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo test --workspace --features "${{ matrix.features }}"
+          else
+            cargo test --workspace
+          fi

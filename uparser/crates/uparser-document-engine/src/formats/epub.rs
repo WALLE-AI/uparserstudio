@@ -1086,6 +1086,7 @@ fn build_html_table(
             })
             .collect(),
         caption: None,
+        source_html: None,
     })
 }
 

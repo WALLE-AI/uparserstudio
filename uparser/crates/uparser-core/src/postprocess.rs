@@ -110,29 +110,6 @@ fn merge_into(last: &mut Block, next: &Block, a: Option<[i32; 4]>, b: Option<[i3
     }
 }
 
-/// Join two consecutive wrapped lines of the same paragraph with the
-/// separator their content actually needs, instead of always inserting
-/// an ASCII space (D8's "language-related spacing/hyphenation" item —
-/// see `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`). Two real defects
-/// this was previously silent about, both mechanical enough to fix
-/// without needing real benchmark data to tune a heuristic threshold:
-///
-/// 1. **CJK line wrap never uses a space.** Chinese/Japanese/Korean
-///    prose doesn't put spaces between words — joining two wrapped CJK
-///    lines with `format!("{a} {b}")` inserts a visible, incorrect gap
-///    (e.g. "…第一条" + "为了…" previously became "…第一条 为了…", not
-///    "…第一条为了…"). Detected by checking whether the join point itself
-///    (last char of `existing`, first char of `next`) is a Han
-///    ideograph, so this doesn't misfire on an English word ending or
-///    starting a wrapped line inside an otherwise CJK-dominant document.
-/// 2. **End-of-line hyphenation is never undone.** A word broken across
-///    a line wrap (`"infor-"` + `"mation"`) previously stayed broken
-///    with a space in the middle (`"infor- mation"`) instead of
-///    rejoining into `"information"`. Triggers only when the hyphen
-///    immediately follows an ASCII letter and the next line starts with
-///    a lowercase ASCII letter — deliberately narrow so it doesn't
-///    misfire on a genuine trailing "-" (e.g. a bullet marker or a
-///    number range) or on an acronym/proper-noun continuation.
 /// Concatenate two blocks' spans and reconcile them with the joined text.
 ///
 /// The join can insert a space or drop a hyphen, so the spans are only kept
@@ -171,6 +148,29 @@ fn merge_spans(last: &mut Block, next: &Block, joined: &str) {
     last.spans = if rebuilt == joined { spans } else { Vec::new() };
 }
 
+/// Join two consecutive wrapped lines of the same paragraph with the
+/// separator their content actually needs, instead of always inserting
+/// an ASCII space (D8's "language-related spacing/hyphenation" item —
+/// see `PIPELINE_V2_TABLE_OCR_DEFECT_ANALYSIS.md`). Two real defects
+/// this was previously silent about, both mechanical enough to fix
+/// without needing real benchmark data to tune a heuristic threshold:
+///
+/// 1. **CJK line wrap never uses a space.** Chinese/Japanese/Korean
+///    prose doesn't put spaces between words — joining two wrapped CJK
+///    lines with `format!("{a} {b}")` inserts a visible, incorrect gap
+///    (e.g. "…第一条" + "为了…" previously became "…第一条 为了…", not
+///    "…第一条为了…"). Detected by checking whether the join point itself
+///    (last char of `existing`, first char of `next`) is a Han
+///    ideograph, so this doesn't misfire on an English word ending or
+///    starting a wrapped line inside an otherwise CJK-dominant document.
+/// 2. **End-of-line hyphenation is never undone.** A word broken across
+///    a line wrap (`"infor-"` + `"mation"`) previously stayed broken
+///    with a space in the middle (`"infor- mation"`) instead of
+///    rejoining into `"information"`. Triggers only when the hyphen
+///    immediately follows an ASCII letter and the next line starts with
+///    a lowercase ASCII letter — deliberately narrow so it doesn't
+///    misfire on a genuine trailing "-" (e.g. a bullet marker or a
+///    number range) or on an acronym/proper-noun continuation.
 fn join_wrapped_lines(existing: &str, next: &str) -> String {
     // A line's own text usually carries the trailing space that separated it
     // from the next glyph run; joining without trimming leaves a double space

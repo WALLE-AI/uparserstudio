@@ -518,9 +518,9 @@ fn post_process(
 fn order_ranks(order_logits: &[f32], queries: usize) -> Vec<usize> {
     let score = |row: usize, column: usize| sigmoid(order_logits[row * queries + column]);
     let mut votes = vec![0.0f32; queries];
-    for column in 0..queries {
-        votes[column] += (0..column).map(|row| score(row, column)).sum::<f32>();
-        votes[column] += ((column + 1)..queries)
+    for (column, vote) in votes.iter_mut().enumerate() {
+        *vote += (0..column).map(|row| score(row, column)).sum::<f32>();
+        *vote += ((column + 1)..queries)
             .map(|row| 1.0 - score(column, row))
             .sum::<f32>();
     }

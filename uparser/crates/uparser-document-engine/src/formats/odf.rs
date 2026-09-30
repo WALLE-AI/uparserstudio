@@ -1124,6 +1124,7 @@ fn build_table(
         header_rows,
         grid,
         caption: None,
+        source_html: None,
     })
 }
 

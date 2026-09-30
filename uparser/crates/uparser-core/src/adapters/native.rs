@@ -48,10 +48,11 @@ impl NativeAdapter {
                 .iter()
                 .any(|reason| reason == uparser_native_engine::OCR_REASON_SCANNED);
             let page_has_items = positioned_items.iter().any(|item| item.page == entry.page);
-            if is_scanned && !page_has_items {
-                if let Some(size) = artifact.page_sizes.get(&entry.page) {
-                    positioned_items.push(scanned_page_image_item(entry.page, *size));
-                }
+            if is_scanned
+                && !page_has_items
+                && let Some(size) = artifact.page_sizes.get(&entry.page)
+            {
+                positioned_items.push(scanned_page_image_item(entry.page, *size));
             }
         }
         for (&page, regions) in &artifact.chart_regions {
@@ -1193,11 +1194,15 @@ fn heading_level(line: &[TextItem], struct_roles: Option<&HashMap<i64, StructRol
         })
 }
 
-fn line_semantic_category<'a>(
+/// One entry of `line_semantic_category`'s priority table: a predicate over a
+/// tagged-PDF structure role, plus the raw and normalized category it maps to.
+type RolePriority = (fn(&StructRole) -> bool, &'static str, &'static str);
+
+fn line_semantic_category(
     line: &[TextItem],
-    struct_roles: Option<&'a HashMap<i64, StructRole>>,
+    struct_roles: Option<&HashMap<i64, StructRole>>,
 ) -> Option<(&'static str, &'static str)> {
-    const PRIORITIES: &[(fn(&StructRole) -> bool, &str, &str)] = &[
+    const PRIORITIES: &[RolePriority] = &[
         (
             |role| matches!(role, StructRole::Formula),
             "Formula",
@@ -1550,7 +1555,6 @@ mod tests {
                 line(1, "left bottom", 500.0, 60.0),
                 line(2, "right below table", 560.0, 320.0),
             ],
-            ..Default::default()
         };
         let items = vec![
             text_item("left top", 60.0, 700.0, 100.0, 1, ItemType::Text),

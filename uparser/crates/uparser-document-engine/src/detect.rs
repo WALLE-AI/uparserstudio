@@ -186,7 +186,7 @@ fn decode_delimited_text(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
 }
 
 fn sniff_csv_delimiter(bytes: &[u8]) -> Option<u8> {
-    [b',', b';', b'|']
+    (*b",;|")
         .into_iter()
         .map(|delimiter| (delimiter_consistency(bytes, delimiter), delimiter))
         .filter(|((rows, width), _)| *rows > 0 && *width > 0)

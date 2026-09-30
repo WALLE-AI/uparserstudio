@@ -118,8 +118,9 @@ fn lower_list(
     // in some alphabet; the compatibility IR only distinguishes ordered from
     // bulleted, and the Markdown renderer normalizes ordered to `N.`.
     let ordered = !matches!(list.marker, ListMarker::Bullet | ListMarker::None);
-    let mut number = list.start.unwrap_or(1);
-    for item in &list.items {
+    let start = list.start.unwrap_or(1);
+    for (offset, item) in list.items.iter().enumerate() {
+        let number = start.saturating_add(offset as u64);
         // An item's own text is its leading blocks; a nested list inside it
         // recurses one level deeper instead of being flattened into the
         // parent's text.
@@ -150,7 +151,6 @@ fn lower_list(
             }),
             ..empty_structured_block()
         });
-        number += 1;
         for list in nested {
             lower_list(document, list, level.saturating_add(1), out);
         }
@@ -338,6 +338,7 @@ mod tests {
                 CellValueKind::Text,
             ))]],
             caption: None,
+            source_html: None,
         };
         let list = List {
             marker: ListMarker::Bullet,

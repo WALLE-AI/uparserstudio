@@ -3,6 +3,41 @@
 // name, then check `in_text_block && !op.operands.is_empty()`). Collapsing
 // these into match guards would hurt readability. Allow crate-wide.
 #![allow(clippy::collapsible_match)]
+// Lint policy for vendored code (T-E2 in `ARCHITECTURE_V2_REMEDIATION_PLAN.md`).
+//
+// This crate is vendored from firecrawl/pdf-inspector (see `ATTRIBUTION.md`)
+// and is kept close to upstream so a re-vendor stays a small diff. The
+// suppressions below are therefore enumerated rather than a blanket
+// `clippy::all`, so anything *new* still surfaces:
+//
+// * `never_loop` — `tounicode.rs`'s bcmap reader uses upstream's
+//   `for i in 0..subitems { …; break }` + inner `for _ in i+1..subitems`
+//   shape, with an explicit `unreachable!()` documenting that the outer body
+//   runs once. Rewriting it as an `if` would be behaviour-preserving but is a
+//   gratuitous divergence in a parser we do not otherwise maintain.
+//   (Deny-by-default, so without this the whole crate fails to check.)
+// * `useless_vec` / `vec_init_then_push` / `unnecessary_to_owned` /
+//   `byte_char_slices` / `needless_range_loop` / `explicit_counter_loop` /
+//   `items_after_test_module` — style findings in upstream code.
+// * `dead_code` — we dropped upstream's `[[bin]]` and pyo3 targets, so helpers
+//   reachable only from those entry points now look unused.
+// * `unused_variables` — a few upstream test bodies bind values they only
+//   document, not assert on.
+//
+// First-party crates (`uparser-core`, `uparser-document-engine`) carry no such
+// list and are checked with `-D warnings`.
+#![allow(
+    clippy::never_loop,
+    clippy::useless_vec,
+    clippy::vec_init_then_push,
+    clippy::unnecessary_to_owned,
+    clippy::byte_char_slices,
+    clippy::needless_range_loop,
+    clippy::explicit_counter_loop,
+    clippy::items_after_test_module,
+    dead_code,
+    unused_variables
+)]
 
 //! Smart PDF detection and text extraction using lopdf
 //!
